@@ -350,6 +350,8 @@ def _init_kernel() -> Kernel:
 # ──────────────────────────────────────────
 
 if __name__ == "__main__":
+    from dotenv import load_dotenv
+    load_dotenv() 
     import asyncio
 
     # 목업 데이터 (CosmosDB get_top_photos 반환값 형태)
