@@ -6,7 +6,7 @@ from semantic_kernel.contents import ChatHistory
 from agents.web_search import web_search_agent
 from agents.photo_select import photo_select_agent
 from agents.post_writer import post_writer_agent
-from agents.rag_tool import rag_tool
+from agents.rag_tool import search_rag_context
 
 MODEL_TIER = {
     "mini": os.getenv("AZURE_OPENAI_DEPLOYMENT_MINI", os.getenv("AZURE_OPENAI_DEPLOYMENT")),
@@ -137,7 +137,7 @@ async def run_pipeline(
     # STEP 4
     print(f"[orchestrator] STEP 4 RAG 시작")
 
-    rag_context = await rag_tool(
+    rag_context = await search_rag_context(
         shop_id=shop_id,
         trend_data=trend_data,
         selected_photos=selected_photos,
@@ -151,8 +151,7 @@ async def run_pipeline(
         selected_photos=selected_photos,
         brand_settings=brand_settings,
         recent_posts=recent_posts,
-        rag_context=rag_context,
-        tier=tier  
+        rag_context=rag_context
     )
 
     caption_score = await _evaluate_caption(kernel, post_draft, brand_settings)
@@ -172,8 +171,7 @@ async def run_pipeline(
             recent_posts=recent_posts,
             rag_context=rag_context,
             previous_draft=post_draft,
-            feedback=f"브랜드 톤 점수 {caption_score:.2f} 미달. 금칙어 제거 및 톤 재조정 필요.",
-            tier=tier  
+            feedback=f"브랜드 톤 점수 {caption_score:.2f} 미달. 금칙어 제거 및 톤 재조정 필요."
         )
         caption_score = await _evaluate_caption(kernel, post_draft, brand_settings)
         print(f"[orchestrator] 재작성 후 캡션 점수: {caption_score:.2f}")
@@ -191,8 +189,7 @@ async def run_pipeline(
                 recent_posts=recent_posts,
                 rag_context=rag_context,
                 previous_draft=post_draft,
-                feedback="최고 품질로 재작성 필요. 브랜드 톤 완벽 준수.",
-                tier=tier  
+                feedback="최고 품질로 재작성 필요. 브랜드 톤 완벽 준수."
             )
             caption_score = await _evaluate_caption(kernel, post_draft, brand_settings)
             print(f"[orchestrator] GPT-4.1 승격 후 캡션 점수: {caption_score:.2f}")
