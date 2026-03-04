@@ -2,8 +2,11 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import os
-
+from dotenv import load_dotenv
 from routers import auth, onboarding, agent, schedule, instagram
+
+
+load_dotenv()
 
 
 # ── 앱 시작/종료 시 실행할 로직 (DB 연결 등)
