@@ -330,34 +330,52 @@ def _init_kernel(tier: str = "mini") -> Kernel:
 # TODO: 아래 함수들은 지연님 함수로 교체
 
 async def _get_brand_settings(shop_id: str) -> dict:
-    # TODO: from services.cosmos_db import get_brand_settings
+    from services.cosmos_db import get_onboarding
+    data = get_onboarding(shop_id)
+    if not data:
+        return {
+            "brand_tone": "친근하고 편안한 말투",
+            "forbidden_words": ["저렴", "할인"],
+            "cta": "DM으로 예약 문의주세요",
+            "photo_range": {"min": 1, "max": 5}
+        }
+    survey = data.get("survey_answers", {})
     return {
-        "brand_tone": "친근하고 편안한 말투",
-        "forbidden_words": ["저렴", "할인"],
-        "cta": "DM으로 예약 문의주세요",
-        "photo_range": {"min": 1, "max": 5}
+        "brand_tone": survey.get("brand_tone", "친근하고 편안한 말투"),
+        "forbidden_words": survey.get("forbidden_words", []),
+        "cta": survey.get("cta", "DM으로 예약 문의주세요"),
+        "photo_range": survey.get("photo_range", {"min": 1, "max": 5}),
+        "feed_style": survey.get("feed_style", {})
     }
 
 
 async def _get_photo_candidates(shop_id: str, extend_days: int = 0) -> list:
-    # TODO: from services.cosmos_db import get_top_photos
-    # extend_days: 0이면 기본 범위, 30이면 날짜 범위 30일 확장
-    return []
+    from services.cosmos_db import get_top_photos
+    limit = 20 if extend_days == 0 else 40
+    return get_top_photos(shop_id, limit=limit)
 
 
 async def _get_recent_posts(shop_id: str) -> list:
-    # TODO: from services.cosmos_db import get_recent_posts
-    return []
+    from services.cosmos_db import get_recent_posts
+    return get_recent_posts(shop_id, limit=3)
 
 
 async def _get_photos_by_ids(shop_id: str, photo_ids: list) -> list:
-    # TODO: from services.cosmos_db import get_photos_by_ids
-    return []
+    from services.cosmos_db import get_all_photos_by_shop
+    all_photos = get_all_photos_by_shop(shop_id)
+    return [p for p in all_photos if p.get("id") in photo_ids]
 
 
 async def _save_draft(shop_id: str, post_id: str, post_draft: dict, selected_photos: list):
-    # TODO: from services.cosmos_db import save_draft
-    pass
+    from services.cosmos_db import save_draft
+    save_draft(
+        shop_id=shop_id,
+        post_id=post_id,
+        caption=post_draft.get("caption", ""),
+        hashtags=post_draft.get("hashtags", []),
+        photo_ids=[p.get("id", p.get("photo_id")) for p in selected_photos],
+        cta=post_draft.get("cta", "")
+    )
 
 
 async def _send_push_notification(shop_id: str, post_draft: dict):
