@@ -313,7 +313,7 @@ def get_post_by_shop(shop_id: str) -> list:
         list: 마케팅 게시물 리스트
     """
     container = get_cosmos_container("MarketingPost")
-    query = "SELECT * FROM c WHERE c.shopId = @shopId ORDER BY c._ts DESC"
+    query = "SELECT * FROM c WHERE c.shopId = @shopId AND c.status = 'success' ORDER BY c._ts DESC"
     parameters = [{"name": "@shopId", "value": shop_id}]
     
     items = container.query_items(query=query, parameters=parameters, enable_cross_partition_query=False)
@@ -349,8 +349,8 @@ def save_post_data(post_data: dict) -> bool:
     """
     container = get_cosmos_container("MarketingPost")
     try:
+        post_data['status'] = 'success'
         container.upsert_item(body=post_data)
-        return True
     except Exception as e:
         logging.error(f"마케팅 데이터 저장 실패: {str(e)}")
         return False
@@ -394,12 +394,17 @@ def get_recent_posts(shop_id: str, limit: int = 3) -> list:
     container = get_cosmos_container("MarketingPost")
     query = """
         SELECT TOP @limit * FROM c 
-        WHERE c.shopId = @shopId AND c.upload_status = 'success' 
+        WHERE c.shopId = @shopId AND c.status = 'success' 
         ORDER BY c._ts DESC
     """
-    parameters = [{"name": "@shopId", "value": shop_id}, {"name": "@limit", "value": limit}]
+    parameters = [{"name": "@shopId", "value": shop_id}, 
+                  {"name": "@limit", "value": limit}]
     try:
-        items = container.query_items(query=query, parameters=parameters, enable_cross_partition_query=True)
+        items = container.query_items(
+                    query=query, 
+                    parameters=parameters, 
+                    enable_cross_partition_query=False
+                )
         return list(items)
     except Exception as e:
         logging.error(f"recent_posts 조회 실패: {str(e)}")
@@ -423,7 +428,7 @@ def save_draft(shop_id: str, post_id: str, caption: str, hashtags: list, photo_i
     container = get_cosmos_container("MarketingPost")
     draft_data = {
         "id": post_id,
-        "shop_id": shop_id,
+        "shopId": shop_id,
         "caption": caption,
         "hashtags": hashtags,
         "photo_ids": photo_ids,
