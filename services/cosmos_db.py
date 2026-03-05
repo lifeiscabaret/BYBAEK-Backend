@@ -102,11 +102,14 @@ def save_web_search_cache(shop_id: str, date_str: str, result: dict) -> bool:
     """
     container = get_cosmos_container("Cache")
     cache_id = f"{shop_id}_{date_str}"
+    ttl_seconds = 86400
+    
     cache_data = {
         "id": cache_id,
         "shop_id": shop_id,
         "date": date_str,
         "result": result,
+        "ttl": ttl_seconds,
         "expire_at": (datetime.now() + timedelta(days=1)).timestamp()
     }
     
