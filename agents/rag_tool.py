@@ -1,10 +1,3 @@
-"""
-[지연님 연동 포인트]
-  # TODO: from services.vector_db import save_embedding
-  # TODO: from services.vector_db import search_similar_captions
-  # TODO: from services.cosmos_db import get_recent_posts
-"""
-
 import os
 import json
 from datetime import datetime, timezone, timedelta
@@ -58,15 +51,8 @@ async def index_post(
     embedding = await get_embedding(index_text)
 
     # STEP 3: Vector DB에 저장
-    # TODO: from services.vector_db import save_embedding
-    # await save_embedding(
-    #     shop_id=shop_id,
-    #     post_id=post_id,
-    #     caption=caption,
-    #     embedding=embedding
-    # )
-
-    # 목업
+    from services.vector_db import save_embedding
+    save_embedding(shop_id=shop_id, post_id=post_id, caption=caption, embedding=embedding)
     print(f"[rag_tool] 인덱싱 완료 → shop_id={shop_id}, post_id={post_id}")
     return {
         "status": "indexed",
@@ -125,16 +111,14 @@ async def search_rag_context(
     # STEP 2: 쿼리 → 벡터 변환
     query_vector = await get_embedding(query_text)
 
-    # STEP 3: Vector DB 검색 시도
-    # TODO: from services.vector_db import search_similar_captions
-    # raw_results = await search_similar_captions(
-    #     shop_id=shop_id,
-    #     query_vector=query_vector,
-    #     top_k=TOP_K
-    # )
-
-    # 목업: 지연님 함수 없이 단독 실행 가능 (빈 리스트 = Fallback으로 분기)
-    raw_results = []
+    from services.vector_db import search_similar_captions
+    raw_results = search_similar_captions(
+        shop_id=shop_id,
+        query_vector=query_vector,
+        top_k=TOP_K
+    )
+    if not raw_results:
+        raw_results = []
 
     # STEP 4: 결과 있으면 후처리, 없으면 Fallback
     if raw_results:
