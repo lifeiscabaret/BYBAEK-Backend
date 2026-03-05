@@ -109,6 +109,8 @@ def _build_prompt(
 2. 여성 헤어, 펌, 염색 관련 내용 절대 금지
 3. 과장되거나 거짓된 표현 금지 (예: "최고", "완벽한")
 4. 반드시 JSON으로만 응답
+5. 캡션 첫 줄에 반드시 스타일명 키워드 포함 (예: "페이드컷으로 봄을 맞이해요 🌿")
+6. CTA는 문의/예약 행동을 직접적으로 유도하는 문구로 작성 (예: "이 스타일 궁금하면 DM 주세요 👇")
 
 [응답 형식]
 {{
@@ -120,7 +122,7 @@ def _build_prompt(
     # ── 유저 프롬프트 ──
     parts = []
 
-    # 1. 오늘 트렌드
+     # 1. 오늘 트렌드
     trend_summary = trend_data.get("trend", "")
     weather       = trend_data.get("weather", "")
     promo         = trend_data.get("promo", "")
@@ -130,6 +132,11 @@ def _build_prompt(
         parts.append(f"[날씨/시즌]\n{weather}")
     if promo:
         parts.append(f"[바버샵 홍보 포인트]\n{promo}")
+
+    # ↓ 여기에 추가 (트렌드 블록 바로 다음)
+    brand_diff = brand_settings.get("brand_differentiation", "")
+    if brand_diff:
+        parts.append(f"[우리 샵 차별점 - 반드시 언급]\n{brand_diff}")
 
     # 2. 선택된 사진 스타일
     if selected_photos:
