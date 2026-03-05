@@ -157,8 +157,6 @@ def save_photo(shop_id: str, photo_data: dict) -> bool:
     item = {
         "id": photo_data['photo_id'],
         "shop_id": shop_id,
-        "album_id": photo_data.get('album_id', 'default'), 
-        "album_name": photo_data.get('album_name', 'Promotion'),
         "blob_url": photo_data['blob_url'], 
         "original_name": photo_data['name'],
         "used_yn": False,
@@ -248,9 +246,9 @@ def get_photos_by_album(shop_id: str, album_id: str) -> list:
     except Exception as e:
         return []
 
-def save_photos_by_album(shop_id: str, album_id: str, photo_list: list, album_name: str = "미분류 앨범") -> bool:
+def save_album(shop_id: str, album_id: str, photo_list: list, album_name: str = "미분류 앨범") -> bool:
     """
-    사진들을 Photo 컨테이너에 저장하고, 해당 사진들을 특정 Album에 매핑합니다.
+    사진들을 Album 컨테이너에 저장합니다.
 
     Args:
         shop_id (str): 상점 고유 식별자 (Partition Key)
@@ -261,33 +259,12 @@ def save_photos_by_album(shop_id: str, album_id: str, photo_list: list, album_na
     Returns:
         bool: 저장 성공 여부
     """
-    photo_container = get_cosmos_container("Photo")
     album_container = get_cosmos_container("Album")
     
     try:
         current_time = datetime.utcnow().isoformat()
         saved_photo_ids = []
 
-        # 1. 각 사진을 Photo 컨테이너에 저장 (Upsert)
-        for photo_data in photo_list:
-            p_id = photo_data.get("id") or photo_data.get("photoId")
-            
-            photo_item = {
-                "id": p_id,
-                "shop_id": shop_id,  # Partition Key
-                "blob_url": photo_data.get("blob_url"),
-                "original_name": photo_data.get("original_name"),
-                "fade_cut_score": photo_data.get("fade_cut_score", 0),
-                "style_tags": photo_data.get("style_tags", []),
-                "is_usable": photo_data.get("is_usable", True),
-                "used_yn": photo_data.get("used_yn", "N"),
-                "created_at": photo_data.get("created_at", current_time),
-                "updated_at": current_time
-            }
-            photo_container.upsert_item(body=photo_item)
-            saved_photo_ids.append(p_id)
-
-        # 2. Album 컨테이너 업데이트 (사진 ID 리스트 매핑)
         try:
             # 기존 앨범 정보 조회
             album_item = album_container.read_item(item=album_id, partition_key=shop_id)
