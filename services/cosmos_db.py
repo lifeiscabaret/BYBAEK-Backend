@@ -159,8 +159,9 @@ def save_photo(shop_id: str, photo_data: dict) -> bool:
         "shopId": shop_id,
         "album_id": photo_data.get('album_id', 'default'), 
         "album_name": photo_data.get('album_name', 'Promotion'),
-        "blob_url": photo_data['blob_url'],
+        "blob_url": photo_data['blob_url'], 
         "original_name": photo_data['name'],
+        "used_yn": False,
         "created_at": photo_data['last_modified']
     }
     
@@ -208,45 +209,45 @@ def get_onboarding(shop_id: str) -> dict:
         logging.error(f"온보딩 데이터 필터링 조회 실패 (shopId: {shop_id}): {str(e)}")
         return None
 
-def get_all_photos_by_shop(shop_id: str) -> list:
-    """
-    특정 상점에 등록된 모든 사진 데이터를 조회합니다.
+# def get_all_photos_by_shop(shop_id: str) -> list:
+#     """
+#     특정 상점에 등록된 모든 사진 데이터를 조회합니다.
 
-    Args:
-        shop_id (str): 상점 고유 식별자
+#     Args:
+#         shop_id (str): 상점 고유 식별자
 
-    Returns:
-        list: 조회된 사진 객체 리스트
-    """
-    container = get_cosmos_container("PhotoAlbum")
-    query = f"SELECT * FROM c WHERE c.shopId = '{shop_id}'"
+#     Returns:
+#         list: 조회된 사진 객체 리스트
+#     """
+#     container = get_cosmos_container("PhotoAlbum")
+#     query = f"SELECT * FROM c WHERE c.shopId = '{shop_id}'"
     
-    try:
-        photos = list(container.query_items(query=query, enable_cross_partition_query=True))
-        return photos
-    except Exception as e:
-        logging.error(f"PhotoAlbum 조회 중 오류 발생: {str(e)}")
-        return []
+#     try:
+#         photos = list(container.query_items(query=query, enable_cross_partition_query=True))
+#         return photos
+#     except Exception as e:
+#         logging.error(f"PhotoAlbum 조회 중 오류 발생: {str(e)}")
+#         return []
     
-def get_photos_by_album(shop_id: str, album_id: str) -> list:
-    """
-    특정 앨범 식별자에 속한 사진 데이터만 필터링하여 조회합니다.
+# def get_photos_by_album(shop_id: str, album_id: str) -> list:
+#     """
+#     특정 앨범 식별자에 속한 사진 데이터만 필터링하여 조회합니다.
 
-    Args:
-        shop_id (str): 상점 고유 식별자
-        album_id (str): 앨범 고유 식별자
+#     Args:
+#         shop_id (str): 상점 고유 식별자
+#         album_id (str): 앨범 고유 식별자
 
-    Returns:
-        list: 앨범에 속한 사진 객체 리스트
-    """
-    container = get_cosmos_container("PhotoAlbum")
-    query = f"SELECT * FROM c WHERE c.shopId = '{shop_id}' AND c.album_id = '{album_id}'"
+#     Returns:
+#         list: 앨범에 속한 사진 객체 리스트
+#     """
+#     container = get_cosmos_container("PhotoAlbum")
+#     query = f"SELECT * FROM c WHERE c.shopId = '{shop_id}' AND c.album_id = '{album_id}'"
     
-    try:
-        photos = list(container.query_items(query=query, enable_cross_partition_query=True))
-        return photos
-    except Exception as e:
-        return []
+#     try:
+#         photos = list(container.query_items(query=query, enable_cross_partition_query=True))
+#         return photos
+#     except Exception as e:
+#         return []
 
 def save_onboarding(shop_id: str, data: dict) -> bool:
     """
@@ -458,7 +459,7 @@ def save_photo_meta(shop_id: str, doc: dict) -> bool:
     container = get_cosmos_container("PhotoAlbum")
     
     try:
-        photo_id = doc.get('id') or doc.get('photo_id')
+        photo_id = doc.get('id')
         existing_item = container.read_item(item=photo_id, partition_key=shop_id)
         existing_item.update({
             "fade_cut_score": doc.get("fade_cut_score", 0),
@@ -516,4 +517,16 @@ def get_rag_reference(shop_id: str, limit: int = 5) -> list:
     
     query = "SELECT TOP @limit * FROM c WHERE c.shopId = @shopId ORDER BY c._ts DESC"
     parameters = [
-        {"name": "@shopId", "value": shop_id},
+        {"name": "@shopId", "value": shop_id},{"name": "@limit", "value": limit}
+    ]
+    
+    try:
+        items = list(container.query_items(
+            query=query, 
+            parameters=parameters, 
+            enable_cross_partition_query=True
+        ))
+        return items
+    except Exception as e:
+        logging.error(f"RAG 참조 데이터 조회 실패: {str(e)}")
+        return []
