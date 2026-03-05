@@ -10,7 +10,7 @@ DATE        AUTHOR          NOTE
 2026.02.24  jiyeon back     최초 생성 및 기본 CRUD 구현
 """
 
-from cosmos_client import get_cosmos_container
+from services.cosmos_client import get_cosmos_container
 import logging
 from datetime import datetime, timedelta
 
