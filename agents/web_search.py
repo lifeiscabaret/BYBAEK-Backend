@@ -119,22 +119,20 @@ def _init_tavily() -> TavilyClient:
     return TavilyClient(api_key=os.getenv("TAVILY_API_KEY"))
 
 
-# [목업] Cosmos DB 함수 연동 전 임시 함수
 async def _get_shop_info_mock(shop_id: str) -> dict:
-    # TODO: from services.cosmos_db import get_shop_location
-    # ⚠️ 현재 "서울" 고정 → get_shop_location(shop_id) 연동 시 사장님 실제 위치로 교체
-    # 반환 예시: {"city": "부산", "locale": "KR", "timezone_offset": 9}
-    return {"city": "서울", "locale": "KR", "timezone_offset": 9}
-
+    from services.cosmos_db import get_shop_location
+    return get_shop_location(shop_id)
 
 async def _get_cache_mock(shop_id: str, date_str: str) -> dict | None:
-    # TODO: from services.cosmos_db import get_today_web_search_cache
-    return None
+    from services.cosmos_db import get_today_web_search_cache
+    return get_today_web_search_cache(shop_id, date_str)
 
 
 async def _save_cache_mock(shop_id: str, result: dict) -> None:
-    # TODO: from services.cosmos_db import save_web_search_cache
-    pass
+    from services.cosmos_db import save_web_search_cache
+    from datetime import datetime, timezone, timedelta
+    now = datetime.now(timezone(timedelta(hours=9)))
+    save_web_search_cache(shop_id, now.strftime("%Y-%m-%d"), result)
 
 
 async def web_search_agent(shop_id: str, force_refresh: bool = False) -> dict:

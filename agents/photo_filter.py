@@ -339,17 +339,15 @@ async def _save_pass_result(shop_id: str, photo: dict, result: dict):
         "resolution":    photo.get("metadata", {}).get("resolution")
     }
 
-    # TODO: from services.cosmos_db import save_photo_meta
-    # await save_photo_meta(doc)
-    print(f"[photo_filter] CosmosDB 저장 → {photo['image_id']} (목업)")
+    from services.cosmos_db import save_photo_meta
+    save_photo_meta(shop_id, doc)
+    print(f"[photo_filter] CosmosDB 저장 → {photo['image_id']}")
 
 
 async def _handle_fail_result(shop_id: str, photo: dict, result: dict):
     """
     FAIL 사진 처리: Blob 삭제 + CosmosDB 상태 업데이트
     """
-    # TODO: from services.blob_storage import delete_blob
-    # await delete_blob(photo["blob_url"])
     print(f"[photo_filter] Blob 삭제 → {photo['image_id']} (목업)")
 
     # TODO: from services.cosmos_db import update_photo_stage2
