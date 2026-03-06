@@ -13,6 +13,8 @@ DATE        AUTHOR          NOTE
 from services.cosmos_client import get_cosmos_container
 import logging
 from datetime import datetime, timedelta
+from azure.cosmos.errors import CosmosResourceNotFoundError
+from services.blob_storage import delete_blob
 
 def update_shop_instagram_info(shop_id: str, insta_data: dict) -> bool:
     """
@@ -243,16 +245,45 @@ def get_photos_by_album(shop_id: str, album_id: str) -> list:
     Returns:
         list: 앨범에 속한 사진 객체 리스트
     """
-    container = get_cosmos_container("Album")
-    query = f"SELECT * FROM c WHERE c.shop_id = '{shop_id}' AND c.album_id = '{album_id}'"
+    album_container = get_cosmos_container("Album")
+    photo_container = get_cosmos_container("Photo")
     
     try:
-        photos = list(container.query_items(query=query, enable_cross_partition_query=True))
-        return photos
+        # 1. 먼저 Album 컨테이너에서 해당 앨범 정보를 가져옵니다.
+        # id가 album_id이고 partition_key가 shop_id인 아이템 조회
+        album = album_container.read_item(item=album_id, partition_key=shop_id)
+        photo_ids = album.get("photo_ids", [])
+        
+        if not photo_ids:
+            return []
+
+        # 2. photo_ids에 담긴 ID들로 Photo 컨테이너에서 상세 정보(blob_url 등) 조회
+        # 성능을 위해 쿼리문을 사용하여 한 번에 가져오거나 반복문으로 조회합니다.
+        photo_details = []
+        for pid in photo_ids:
+            try:
+                # 앨범에 저장된 pid가 객체 형태일 수도 있으니 처리 (예: {"photo_id": "..."})
+                actual_id = pid["photo_id"] if isinstance(pid, dict) else pid
+                
+                # Photo 컨테이너에서 사진 상세 정보 조회
+                photo_item = photo_container.read_item(item=actual_id, partition_key=shop_id)
+                photo_details.append({
+                    "id": photo_item.get("id"),
+                    "blob_url": photo_item.get("blob_url"),
+                    "original_name": photo_item.get("original_name"),
+                    "created_at": photo_item.get("created_at")
+                })
+            except Exception:
+                # 특정 사진을 찾을 수 없는 경우(삭제 등) 건너뜁니다.
+                continue
+                
+        return photo_details
+
     except Exception as e:
+        logging.error(f"앨범 내 사진 상세 조회 실패 (album_id: {album_id}): {str(e)}")
         return []
 
-def save_album(shop_id: str, album_id: str, photo_list: list, album_name: str = "미분류 앨범") -> bool:
+def save_album(shop_id: str, album_id: str, photo_list: list, album_name: str = "미분류 앨범", description: str = "") -> bool:
     """
     사진들을 Album 컨테이너에 저장합니다.
 
@@ -261,6 +292,7 @@ def save_album(shop_id: str, album_id: str, photo_list: list, album_name: str = 
         album_id (str): 앨범 고유 식별자
         photo_list (list): 저장할 사진 객체 리스트 (각 객체는 photoId, blob_url 등을 포함)
         album_name (str): 앨범 이름 (신규 생성 시 사용)
+        description (str) : 앨범 설명
 
     Returns:
         bool: 저장 성공 여부
@@ -286,6 +318,8 @@ def save_album(shop_id: str, album_id: str, photo_list: list, album_name: str = 
             existing_ids = set(album_item.get("photo_ids", []))
             existing_ids.update(new_photo_ids)
             album_item["photo_ids"] = list(existing_ids)
+            album_item["album_name"] = album_name  # 이름 수정 반영
+            album_item["description"] = description
             album_item["updated_at"] = current_time_iso
         except Exception:
             # 앨범이 없으면 신규 생성
@@ -293,6 +327,7 @@ def save_album(shop_id: str, album_id: str, photo_list: list, album_name: str = 
                 "id": album_id,
                 "shop_id": shop_id,
                 "album_name": album_name,
+                "description": description,
                 "photo_ids": new_photo_ids,
                 "created_at": current_time_iso,
                 "updated_at": current_time_iso
@@ -315,22 +350,37 @@ def get_album_list(shop_id: str) -> list:
     Returns:
         list: 앨범 객체 리스트 (각 앨범의 photo_ids 개수 포함)
     """
-    container = get_cosmos_container("Album")
+    album_container = get_cosmos_container("Album")
+    photo_container = get_cosmos_container("Photo")
     
     # 파티션 키(/shop_id)를 사용하여 해당 상점의 모든 앨범 조회
     query = "SELECT * FROM c WHERE c.shop_id = @shop_id ORDER BY c.created_at DESC"
     parameters = [{"name": "@shop_id", "value": shop_id}]
     
     try:
-        albums = list(container.query_items(
+        albums = list(album_container.query_items(
             query=query,
             parameters=parameters,
             enable_cross_partition_query=False  # 파티션 키를 지정하므로 False 권장
         ))
         
-        # UI에서 보여주기 편하도록 사진 개수(count) 등 추가 정보 가공
         for album in albums:
-            album["photo_count"] = len(album.get("photo_ids", []))
+            photo_ids = album.get("photo_ids", [])
+            album["description"] = album.get("description", "")
+            album["photo_count"] = len(photo_ids)
+            album["thumbnail_url"] = None  # 기본값은 없음
+            
+            # 1. 앨범에 사진이 최소 한 장이라도 있다면
+            if photo_ids:
+                first_photo_id = photo_ids[0]
+                try:
+                    # 2. 첫 번째 사진의 정보를 Photo 컨테이너에서 조회
+                    # (id가 item ID이고 shop_id가 파티션 키인 경우)
+                    photo_item = photo_container.read_item(item=first_photo_id, partition_key=shop_id)
+                    album["thumbnail_url"] = photo_item.get("blob_url")
+                except Exception:
+                    # 사진을 못 찾으면 그냥 썸네일 없이 진행
+                    album["thumbnail_url"] = None
             
         return albums
     except Exception as e:
@@ -724,3 +774,84 @@ def update_insta_notice_time(shop_id: str, notice_time: str) -> bool:
     Shop 컨테이너에서 인스타 업로드 알림 시간을 업데이트합니다.
     """
     return _update_shop_field(shop_id, {"insta_notice_time": notice_time})
+
+
+def delete_album_data(shop_id: str, album_id: str) -> bool:
+    """
+    Cosmos DB에서 특정 앨범 데이터를 삭제합니다.
+    """
+    container = get_cosmos_container("Album")
+    try:
+        # partition_key(shop_id)를 지정하여 삭제
+        container.delete_item(item=album_id, partition_key=shop_id)
+        return True
+    except CosmosResourceNotFoundError:
+        logging.warning(f"삭제하려는 앨범이 존재하지 않음 (album_id: {album_id})")
+        return True # 이미 없으면 성공으로 간주
+    except Exception as e:
+        logging.error(f"앨범 삭제 실패 (album_id: {album_id}): {str(e)}")
+        return False
+
+def delete_photo_data(shop_id: str, photo_id: str) -> bool:
+    """
+    Cosmos DB에서 사진 데이터를 삭제하고, 연결된 Blob Storage 파일도 삭제합니다.
+    """
+    photo_container = get_cosmos_container("Photo")
+    
+    try:
+        # 1. DB에서 사진 정보 먼저 조회 (Blob URL을 알아내기 위해)
+        photo_item = photo_container.read_item(item=photo_id, partition_key=shop_id)
+        blob_url = photo_item.get("blob_url")
+
+        # 2. Azure Blob Storage에서 실제 파일 삭제 (기존에 만든 서비스 함수 활용)
+        if blob_url:
+            # URL에서 파일명만 추출하여 삭제 로직 수행
+            file_name = blob_url.split("/")[-1]
+            delete_blob(file_name) 
+
+        # 3. Cosmos DB에서 사진 데이터 삭제
+        photo_container.delete_item(item=photo_id, partition_key=shop_id)
+        
+        # 4. (추가 로직) 모든 앨범을 돌며 해당 photo_id가 들어있다면 리스트에서 제거
+        remove_photo_from_all_albums(shop_id, photo_id)
+        
+        return True
+    except CosmosResourceNotFoundError:
+        return True
+    except Exception as e:
+        logging.error(f"사진 삭제 실패 (photo_id: {photo_id}): {str(e)}")
+        return False
+    
+def remove_photo_from_all_albums(shop_id: str, photo_id: str):
+    """
+    특정 상점의 모든 앨범을 순회하며 삭제된 사진 ID를 제거합니다.
+    """
+    album_container = get_cosmos_container("Album")
+    
+    try:
+        # 1. 해당 shop_id의 모든 앨범 가져오기
+        query = "SELECT * FROM c WHERE c.shop_id = @shop_id"
+        parameters = [{"name": "@shop_id", "value": shop_id}]
+        
+        albums = list(album_container.query_items(
+            query=query, 
+            parameters=parameters, 
+            enable_cross_partition_query=False
+        ))
+
+        for album in albums:
+            existing_ids = album.get("photo_ids", [])
+            
+            # 2. 삭제할 photo_id가 포함되어 있는지 확인
+            if photo_id in existing_ids:
+                # 리스트에서 해당 ID 제거
+                updated_ids = [pid for pid in existing_ids if pid != photo_id]
+                album["photo_ids"] = updated_ids
+                album["updated_at"] = datetime.utcnow().isoformat()
+                
+                # 3. 변경된 앨범 정보 업데이트
+                album_container.upsert_item(body=album)
+                logging.info(f"앨범 '{album.get('id')}'에서 사진 '{photo_id}' 제거 완료")
+
+    except Exception as e:
+        logging.error(f"앨범 내 사진 참조 제거 중 오류 발생: {str(e)}")
