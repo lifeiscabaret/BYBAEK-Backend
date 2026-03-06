@@ -32,6 +32,7 @@ def update_shop_instagram_info(shop_id: str, insta_data: dict) -> bool:
         shop_item['insta_user_id'] = insta_data.get('user_id')
         shop_item['insta_access_token'] = insta_data.get('access_token')
         shop_item['insta_expires_in'] = insta_data.get('expires_in')
+        shop_item['updated_at'] = datetime.utcnow().isoformat()
         
         container.upsert_item(body=shop_item)
         return True
@@ -138,6 +139,7 @@ def update_shop_onedrive_info(shop_id: str, token_info: dict) -> bool:
         shop_item['one_refresh_token'] = token_info.get('refresh_token')
         shop_item['one_expires_in'] = token_info.get('expires_in')
         shop_item['one_delta_link'] = token_info.get('delta_link')
+        shop_item['updated_at'] = datetime.utcnow().isoformat()
         
         container.upsert_item(body=shop_item)
         return True
@@ -197,7 +199,8 @@ def get_onboarding(shop_id: str) -> dict:
             "brand_tone", "preferred_styles", "exclude_conditions", 
             "hashtag_style", "cta", "shop_intro", 
             "forbidden_words", "locale", "city", "language",
-            "is_kakao_connected", "is_insta_connected", "is_gmail_connected"
+            "is_kakao_connected", "is_insta_connected", "is_gmail_connected",
+            "rag_reference"
         ]
 
         filtered_shop_info = {k: shop_item.get(k) for k in allowed_keys if k in shop_item}
@@ -263,35 +266,43 @@ def save_album(shop_id: str, album_id: str, photo_list: list, album_name: str = 
         bool: 저장 성공 여부
     """
     album_container = get_cosmos_container("Album")
-    
+
     try:
-        current_time = datetime.utcnow().isoformat()
-        saved_photo_ids = []
+        current_time = datetime.utcnow()
+        current_time_iso = current_time.isoformat()
+        
+        # 1. ID 자동 생성: album_{shop_id}_{날짜_시간}
+        if not album_id:
+            # 예: album_shop123_20260224_153045
+            timestamp = current_time.strftime("%Y%m%d_%H%M%S")
+            album_id = f"album_{shop_id}_{timestamp}"
+
+        # 저장할 사진 ID 추출
+        new_photo_ids = [p.get('photo_id') for p in photo_list if p.get('photo_id')]
 
         try:
             # 기존 앨범 정보 조회
             album_item = album_container.read_item(item=album_id, partition_key=shop_id)
-            # 기존 사진 ID 리스트에 중복 없이 추가
             existing_ids = set(album_item.get("photo_ids", []))
-            existing_ids.update(saved_photo_ids)
+            existing_ids.update(new_photo_ids)
             album_item["photo_ids"] = list(existing_ids)
-            album_item["updated_at"] = current_time
+            album_item["updated_at"] = current_time_iso
         except Exception:
             # 앨범이 없으면 신규 생성
             album_item = {
                 "id": album_id,
                 "shop_id": shop_id,
                 "album_name": album_name,
-                "photo_ids": saved_photo_ids,
-                "created_at": current_time,
-                "updated_at": current_time
+                "photo_ids": new_photo_ids,
+                "created_at": current_time_iso,
+                "updated_at": current_time_iso
             }
 
         album_container.upsert_item(body=album_item)
         return True
 
     except Exception as e:
-        logging.error(f"앨범별 사진 저장 실패 (shop_id: {shop_id}, albumId: {album_id}): {str(e)}")
+        logging.error(f"앨범별 사진 저장 실패 (shop_id: {shop_id}): {str(e)}")
         return False
 
 def get_album_list(shop_id: str) -> list:
@@ -339,6 +350,7 @@ def save_onboarding(shop_id: str, data: dict) -> bool:
         bool: 저장 성공 여부
     """
     shop_container = get_cosmos_container("Shop")
+    now_iso = datetime.utcnow().isoformat() # 현재 시간 (UTC)
 
     allowed_shop_keys = [
         "system_prompt", "insta_auto_upload_yn", "insta_upload_notice_yn", 
@@ -347,7 +359,8 @@ def save_onboarding(shop_id: str, data: dict) -> bool:
         "brand_tone", "preferred_styles", "exclude_conditions", 
         "hashtag_style", "cta", "shop_intro", 
         "forbidden_words", "locale", "city", "language",
-        "is_kakao_connected", "is_insta_connected", "is_gmail_connected"
+        "is_kakao_connected", "is_insta_connected", "is_gmail_connected",
+        "rag_reference"
     ]
 
     try:
@@ -357,13 +370,13 @@ def save_onboarding(shop_id: str, data: dict) -> bool:
             shop_item = shop_container.read_item(item=shop_id, partition_key=shop_id)
         except Exception:
             # 기존 데이터가 없는 경우 신규 생성
-            shop_item = {"id": shop_id, "shop_id": shop_id}
+            shop_item = {"id": shop_id, "shop_id": shop_id, "created_at": now_iso}
             
         # 허용된 필드만 골라서 업데이트
         for key in allowed_shop_keys:
             if key in data:
                 shop_item[key] = data[key]
-        
+        shop_item["updated_at"] = now_iso
         shop_container.upsert_item(body=shop_item)
         
         return True
@@ -407,7 +420,7 @@ def get_post_detail_data(post_id: str, shop_id: str) -> dict:
         logging.error(f"게시물 상세 조회 실패: {str(e)}")
         return None
 
-def save_post_data(post_data: dict) -> bool:
+def save_post_data(shop_id: str, post_data: dict) -> bool:
     """
     AI가 생성한 마케팅 게시물 데이터를 Post 컨테이너에 저장합니다.
 
@@ -419,10 +432,33 @@ def save_post_data(post_data: dict) -> bool:
     """
     container = get_cosmos_container("Post")
     try:
+        current_time = datetime.utcnow()
+        current_time_iso = current_time.isoformat()
+        
+        # 1. ID 자동 생성: post_{shop_id}_{날짜_시간}
+        # 이미 id가 있으면(수정 건) 그대로 쓰고, 없으면 새로 생성합니다.
+        post_id = post_data.get('id')
+        if not post_id:
+            timestamp = current_time.strftime("%Y%m%d_%H%M%S")
+            post_id = f"post_{shop_id}_{timestamp}"
+            post_data['id'] = post_id
+            post_data['created_at'] = current_time_iso
+        else:
+            try:
+                existing_item = container.read_item(item=post_id, partition_key=shop_id)
+                post_data['created_at'] = existing_item.get('created_at', current_time_iso)
+            except Exception:
+                post_data['created_at'] = current_time_iso
+
+        # 2. 공통 정보 설정
+        post_data['shop_id'] = shop_id
         post_data['status'] = 'success'
+        post_data['updated_at'] = current_time_iso
+        
         container.upsert_item(body=post_data)
+        return True
     except Exception as e:
-        logging.error(f"마케팅 데이터 저장 실패: {str(e)}")
+        logging.error(f"마케팅 데이터 저장 실패 (shop_id: {shop_id}): {str(e)}")
         return False
 
 def get_top_photos(shop_id: str, limit: int = 20) -> list:
@@ -496,22 +532,34 @@ def save_draft(shop_id: str, post_id: str, caption: str, hashtags: list, photo_i
         bool: 저장 성공 여부
     """
     container = get_cosmos_container("Post")
-    draft_data = {
-        "id": post_id,
-        "shop_id": shop_id,
-        "caption": caption,
-        "hashtags": hashtags,
-        "photo_ids": photo_ids,
-        "cta": cta,
-        "status": "pending",
-        "created_at": datetime.utcnow().isoformat()
-    }
+
+    now_iso = datetime.utcnow().isoformat()
     
+    # 초안(Draft)은 보통 새로 생성되는 경우가 많지만, 
+    # 기존 초안을 덮어쓸 때를 대비해 로직을 구성합니다.
     try:
+        try:
+            existing_item = container.read_item(item=post_id, partition_key=shop_id)
+            created_at = existing_item.get('created_at', now_iso)
+        except Exception:
+            created_at = now_iso
+
+        draft_data = {
+            "id": post_id,
+            "shop_id": shop_id,
+            "caption": caption,
+            "hashtags": hashtags,
+            "photo_ids": photo_ids,
+            "cta": cta,
+            "status": "pending",
+            "created_at": created_at,  # 생성 시간 유지
+            "updated_at": now_iso       # 수정 시간 갱신
+        }
+        
         container.upsert_item(body=draft_data)
         return True
     except Exception as e:
-        logging.error(f"초안 저장 실패: {str(e)}")
+        logging.error(f"초안 저장 실패 (post_id: {post_id}): {str(e)}")
         return False
 
 def save_photo_meta(shop_id: str, doc: dict) -> bool:
@@ -542,57 +590,137 @@ def save_photo_meta(shop_id: str, doc: dict) -> bool:
         logging.error(f"사진 메타데이터 업데이트 실패: {str(e)}")
         return False
 
-def save_rag_reference(shop_id: str, input_content: str) -> bool:
+def _update_shop_field(shop_id: str, update_data: dict) -> bool:
     """
-    사용자가 입력한 과거 성공 사례(URL 또는 텍스트)를 RAG 참조용으로 Shop 컨테이너에 저장합니다.
-
-    Args:
-        shop_id (str): 상점 고유 식별자 (Partition Key)
-        input_content (str): 사용자가 입력한 게시물 URL 또는 특징 내용
-
-    Returns:
-        bool: 저장 성공 여부
+    [내부 함수] Shop 컨테이너의 특정 필드들을 공통으로 업데이트합니다.
     """
     container = get_cosmos_container("Shop")
-    
+    now_iso = datetime.utcnow().isoformat()
     try:
-        # 1. 기존 상점 데이터 가져오기 (기존 필드 유지 목적)
+        # 1. 기존 데이터 읽기
         try:
-            shop_item = container.read_item(item=shop_id, partition_key=shop_id)
+            item = container.read_item(item=shop_id, partition_key=shop_id)
         except Exception:
-            # 상점 데이터가 아예 없는 경우 초기화
-            shop_item = {"id": shop_id, "shop_id": shop_id}
-
-        # 2. RAG 필드 업데이트 (단일 객체로 저장)
-        shop_item["rag_data"] = {
-            "content_raw": input_content,
-            "reference_type": "user_input",
-            "updated_at": datetime.utcnow().isoformat()
-        }
+            item = {"id": shop_id, "shop_id": shop_id,
+                "created_at": now_iso}
         
-        container.upsert_item(body=shop_item)
+        # 2. 데이터 병합
+        item.update(update_data)
+        
+        # 3. 저장
+        item["updated_at"] = now_iso
+        container.upsert_item(body=item)
         return True
     except Exception as e:
-        logging.error(f"RAG 데이터 업데이트 실패 (shop_id: {shop_id}): {str(e)}")
+        logging.error(f"Shop 필드 업데이트 실패 ({list(update_data.keys())}): {str(e)}")
         return False
 
+# --- 개별 업데이트 함수들 ---
 
-def get_rag_reference(shop_id: str) -> dict:
+def update_brand_tone(shop_id: str, brand_tone: str) -> bool:
     """
-    특정 상점의 RAG 참조 데이터를 조회합니다.
-
-    Args:
-        shop_id (str): 상점 고유 식별자
-
-    Returns:
-        dict: 조회된 RAG 참조 객체 리스트
+    Shop 컨테이너에서 브랜드 톤 정보를 업데이트합니다.
+    Args: shop_id (str), brand_tone (str): "남성적/클래식" 등 브랜드 느낌
     """
-    container = get_cosmos_container("Shop")
-    
-    try:
-        shop_item = container.read_item(item=shop_id, partition_key=shop_id)
-        
-        return shop_item.get("rag_data")
-    except Exception as e:
-        logging.error(f"RAG 데이터 조회 실패 (shop_id: {shop_id}): {str(e)}")
-        return None
+    return _update_shop_field(shop_id, {"brand_tone": brand_tone})
+
+def update_preferred_styles(shop_id: str, preferred_styles: str) -> bool:
+    """
+    Shop 컨테이너에서 선호하는 시술 스타일 정보를 업데이트합니다.
+    Args: shop_id (str), preferred_styles (str): 강조하고 싶은 시술
+    """
+    return _update_shop_field(shop_id, {"preferred_styles": preferred_styles})
+
+def update_exclude_conditions(shop_id: str, exclude_conditions: str) -> bool:
+    """
+    Shop 컨테이너에서 제외할 사진 유형 조건을 업데이트합니다.
+    Args: shop_id (str), exclude_conditions (str): 올리기 싫은 사진 유형
+    """
+    return _update_shop_field(shop_id, {"exclude_conditions": exclude_conditions})
+
+def update_hashtag_style(shop_id: str, hashtag_style: str) -> bool:
+    """
+    Shop 컨테이너에서 해시태그 스타일 방향을 업데이트합니다.
+    """
+    return _update_shop_field(shop_id, {"hashtag_style": hashtag_style})
+
+def update_cta(shop_id: str, cta: str) -> bool:
+    """
+    Shop 컨테이너에서 게시물 하단 고정 문구(CTA)를 업데이트합니다.
+    """
+    return _update_shop_field(shop_id, {"cta": cta})
+
+def update_shop_intro(shop_id: str, shop_intro: str) -> bool:
+    """
+    Shop 컨테이너에서 가게 소개 문구를 업데이트합니다.
+    """
+    return _update_shop_field(shop_id, {"shop_intro": shop_intro})
+
+def update_forbidden_words(shop_id: str, forbidden_words: str) -> bool:
+    """
+    Shop 컨테이너에서 금지어 리스트를 업데이트합니다.
+    """
+    return _update_shop_field(shop_id, {"forbidden_words": forbidden_words})
+
+def update_rag_reference(shop_id: str, rag_reference: str) -> bool:
+    """
+    Shop 컨테이너에서 RAG 참조용 URL 또는 텍스트 정보를 업데이트합니다.
+    """
+    # 정의서의 rag_reference 필드 구조에 맞춰 업데이트
+    return _update_shop_field(shop_id, {"rag_reference": rag_reference})
+
+def update_insta_upload_time_slot(shop_id: str, time_slot: str) -> bool:
+    """
+    Shop 컨테이너에서 인스타 업로드 시간대(오전/오후/저녁/심야)를 업데이트합니다.
+    """
+    return _update_shop_field(shop_id, {"insta_upload_time_slot": time_slot})
+
+def update_city(shop_id: str, city: str) -> bool:
+    """
+    Shop 컨테이너에서 상점 위치 도시 정보를 업데이트합니다.
+    """
+    return _update_shop_field(shop_id, {"city": city})
+
+def update_sns_connect(shop_id: str, sns_type: str, is_connected: bool) -> bool:
+    """
+    Shop 컨테이너에서 SNS 연결 상태(kakao, insta, gmail)를 업데이트합니다.
+    Args: sns_type (str): "kakao", "insta", "gmail" 중 하나
+    """
+    key = f"is_{sns_type}_connected"
+    return _update_shop_field(shop_id, {key: is_connected})
+
+def update_language(shop_id: str, language: str) -> bool:
+    """
+    Shop 컨테이너에서 사용 언어 설정(kor, eng)을 업데이트합니다.
+    """
+    return _update_shop_field(shop_id, {"language": language})
+
+def update_insta_auto_upload_yn(shop_id: str, yn: bool) -> bool:
+    """
+    Shop 컨테이너에서 인스타 자동 업로드 여부를 업데이트합니다.
+    """
+    return _update_shop_field(shop_id, {"insta_auto_upload_yn": yn})
+
+def update_insta_review_bfr_upload_yn(shop_id: str, yn: bool) -> bool:
+    """
+    Shop 컨테이너에서 업로드 전 검토 여부를 업데이트합니다.
+    """
+    return _update_shop_field(shop_id, {"insta_review_bfr_upload_yn": yn})
+
+def update_insta_upload_notice_yn(shop_id: str, yn: bool) -> bool:
+    """
+    Shop 컨테이너에서 알림 설정 여부(앱푸시)를 업데이트합니다.
+    """
+    return _update_shop_field(shop_id, {"insta_upload_notice_yn": yn})
+
+def update_insta_upload_time(shop_id: str, upload_time: str) -> bool:
+    """
+    Shop 컨테이너에서 구체적인 인스타 업로드 시간을 업데이트합니다.
+    """
+    return _update_shop_field(shop_id, {"insta_upload_time": upload_time})
+
+def update_insta_notice_time(shop_id: str, notice_time: str) -> bool:
+    """
+    Shop 컨테이너에서 인스타 업로드 알림 시간을 업데이트합니다.
+    """
+    return _update_shop_field(shop_id, {"insta_notice_time": notice_time})
