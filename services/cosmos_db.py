@@ -197,7 +197,8 @@ def get_onboarding(shop_id: str) -> dict:
             "brand_tone", "preferred_styles", "exclude_conditions", 
             "hashtag_style", "cta", "shop_intro", 
             "forbidden_words", "locale", "city", "language",
-            "is_kakao_connected", "is_insta_connected", "is_gmail_connected"
+            "is_kakao_connected", "is_insta_connected", "is_gmail_connected",
+            "rag_reference"
         ]
 
         filtered_shop_info = {k: shop_item.get(k) for k in allowed_keys if k in shop_item}
@@ -347,7 +348,8 @@ def save_onboarding(shop_id: str, data: dict) -> bool:
         "brand_tone", "preferred_styles", "exclude_conditions", 
         "hashtag_style", "cta", "shop_intro", 
         "forbidden_words", "locale", "city", "language",
-        "is_kakao_connected", "is_insta_connected", "is_gmail_connected"
+        "is_kakao_connected", "is_insta_connected", "is_gmail_connected",
+        "rag_reference"
     ]
 
     try:
@@ -541,58 +543,3 @@ def save_photo_meta(shop_id: str, doc: dict) -> bool:
     except Exception as e:
         logging.error(f"사진 메타데이터 업데이트 실패: {str(e)}")
         return False
-
-def save_rag_reference(shop_id: str, input_content: str) -> bool:
-    """
-    사용자가 입력한 과거 성공 사례(URL 또는 텍스트)를 RAG 참조용으로 Shop 컨테이너에 저장합니다.
-
-    Args:
-        shop_id (str): 상점 고유 식별자 (Partition Key)
-        input_content (str): 사용자가 입력한 게시물 URL 또는 특징 내용
-
-    Returns:
-        bool: 저장 성공 여부
-    """
-    container = get_cosmos_container("Shop")
-    
-    try:
-        # 1. 기존 상점 데이터 가져오기 (기존 필드 유지 목적)
-        try:
-            shop_item = container.read_item(item=shop_id, partition_key=shop_id)
-        except Exception:
-            # 상점 데이터가 아예 없는 경우 초기화
-            shop_item = {"id": shop_id, "shop_id": shop_id}
-
-        # 2. RAG 필드 업데이트 (단일 객체로 저장)
-        shop_item["rag_data"] = {
-            "content_raw": input_content,
-            "reference_type": "user_input",
-            "updated_at": datetime.utcnow().isoformat()
-        }
-        
-        container.upsert_item(body=shop_item)
-        return True
-    except Exception as e:
-        logging.error(f"RAG 데이터 업데이트 실패 (shop_id: {shop_id}): {str(e)}")
-        return False
-
-
-def get_rag_reference(shop_id: str) -> dict:
-    """
-    특정 상점의 RAG 참조 데이터를 조회합니다.
-
-    Args:
-        shop_id (str): 상점 고유 식별자
-
-    Returns:
-        dict: 조회된 RAG 참조 객체 리스트
-    """
-    container = get_cosmos_container("Shop")
-    
-    try:
-        shop_item = container.read_item(item=shop_id, partition_key=shop_id)
-        
-        return shop_item.get("rag_data")
-    except Exception as e:
-        logging.error(f"RAG 데이터 조회 실패 (shop_id: {shop_id}): {str(e)}")
-        return None
