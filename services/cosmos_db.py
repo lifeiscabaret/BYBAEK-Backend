@@ -266,35 +266,43 @@ def save_album(shop_id: str, album_id: str, photo_list: list, album_name: str = 
         bool: 저장 성공 여부
     """
     album_container = get_cosmos_container("Album")
-    
+
     try:
-        current_time = datetime.utcnow().isoformat()
-        saved_photo_ids = []
+        current_time = datetime.utcnow()
+        current_time_iso = current_time.isoformat()
+        
+        # 1. ID 자동 생성: album_{shop_id}_{날짜_시간}
+        if not album_id:
+            # 예: album_shop123_20260224_153045
+            timestamp = current_time.strftime("%Y%m%d_%H%M%S")
+            album_id = f"album_{shop_id}_{timestamp}"
+
+        # 저장할 사진 ID 추출
+        new_photo_ids = [p.get('photo_id') for p in photo_list if p.get('photo_id')]
 
         try:
             # 기존 앨범 정보 조회
             album_item = album_container.read_item(item=album_id, partition_key=shop_id)
-            # 기존 사진 ID 리스트에 중복 없이 추가
             existing_ids = set(album_item.get("photo_ids", []))
-            existing_ids.update(saved_photo_ids)
+            existing_ids.update(new_photo_ids)
             album_item["photo_ids"] = list(existing_ids)
-            album_item["updated_at"] = current_time
+            album_item["updated_at"] = current_time_iso
         except Exception:
             # 앨범이 없으면 신규 생성
             album_item = {
                 "id": album_id,
                 "shop_id": shop_id,
                 "album_name": album_name,
-                "photo_ids": saved_photo_ids,
-                "created_at": current_time,
-                "updated_at": current_time
+                "photo_ids": new_photo_ids,
+                "created_at": current_time_iso,
+                "updated_at": current_time_iso
             }
 
         album_container.upsert_item(body=album_item)
         return True
 
     except Exception as e:
-        logging.error(f"앨범별 사진 저장 실패 (shop_id: {shop_id}, albumId: {album_id}): {str(e)}")
+        logging.error(f"앨범별 사진 저장 실패 (shop_id: {shop_id}): {str(e)}")
         return False
 
 def get_album_list(shop_id: str) -> list:
@@ -423,28 +431,34 @@ def save_post_data(shop_id: str, post_data: dict) -> bool:
         bool: 저장 성공 여부
     """
     container = get_cosmos_container("Post")
-    now_iso = datetime.utcnow().isoformat()
-
     try:
-        # 1. 기존 데이터가 있는지 확인 (업데이트 시 created_at 보존을 위해)
-        post_id = post_data.get('id')
-        shop_id = post_data.get('shop_id')
+        current_time = datetime.utcnow()
+        current_time_iso = current_time.isoformat()
         
-        try:
-            existing_item = container.read_item(item=post_id, partition_key=shop_id)
-            post_data['created_at'] = existing_item.get('created_at', now_iso)
-        except Exception:
-            # 기존 데이터가 없으면 현재 시간을 생성 시간으로 설정
-            post_data['created_at'] = now_iso
+        # 1. ID 자동 생성: post_{shop_id}_{날짜_시간}
+        # 이미 id가 있으면(수정 건) 그대로 쓰고, 없으면 새로 생성합니다.
+        post_id = post_data.get('id')
+        if not post_id:
+            timestamp = current_time.strftime("%Y%m%d_%H%M%S")
+            post_id = f"post_{shop_id}_{timestamp}"
+            post_data['id'] = post_id
+            post_data['created_at'] = current_time_iso
+        else:
+            try:
+                existing_item = container.read_item(item=post_id, partition_key=shop_id)
+                post_data['created_at'] = existing_item.get('created_at', current_time_iso)
+            except Exception:
+                post_data['created_at'] = current_time_iso
 
-        # 2. 상태 및 수정 시간 업데이트
+        # 2. 공통 정보 설정
+        post_data['shop_id'] = shop_id
         post_data['status'] = 'success'
-        post_data['updated_at'] = now_iso
+        post_data['updated_at'] = current_time_iso
         
         container.upsert_item(body=post_data)
         return True
     except Exception as e:
-        logging.error(f"마케팅 데이터 저장 실패 (post_id: {post_data.get('id')}): {str(e)}")
+        logging.error(f"마케팅 데이터 저장 실패 (shop_id: {shop_id}): {str(e)}")
         return False
 
 def get_top_photos(shop_id: str, limit: int = 20) -> list:
