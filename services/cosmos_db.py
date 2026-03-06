@@ -445,12 +445,30 @@ def get_post_by_shop(shop_id: str) -> list:
     Returns:
         list: 마케팅 게시물 리스트
     """
-    container = get_cosmos_container("Post")
+    post_container = get_cosmos_container("Post")
+    photo_container = get_cosmos_container("Photo")
+    # 1. 상점의 성공한 게시물 목록 조회
     query = "SELECT * FROM c WHERE c.shop_id = @shop_id AND c.status = 'success' ORDER BY c._ts DESC"
     parameters = [{"name": "@shop_id", "value": shop_id}]
-    
-    items = container.query_items(query=query, parameters=parameters, enable_cross_partition_query=False)
-    return list(items)
+    posts = list(post_container.query_items(query=query, parameters=parameters, enable_cross_partition_query=False))
+
+    # 2. 각 게시물에 대표 이미지 URL 추가
+    for post in posts:
+        photo_ids = post.get("photo_ids", [])
+        post["thumbnail_url"] = None  # 기본값 설정
+
+        if photo_ids:
+            first_photo_id = photo_ids[0]
+            try:
+                # Photo 컨테이너에서 해당 ID의 문서 조회
+                # partition key가 id와 같다면 read_item이 효율적입니다.
+                photo_item = photo_container.read_item(item=first_photo_id, partition_key=shop_id)
+                post["thumbnail_url"] = photo_item.get("blob_url")
+            except Exception:
+                # 사진 정보를 찾지 못할 경우 처리 (로그 출력 등)
+                post["thumbnail_url"] = "https://via.placeholder.com/150" # 대체 이미지
+
+    return posts
 
 def get_post_detail_data(post_id: str, shop_id: str) -> dict:
     """
@@ -463,11 +481,37 @@ def get_post_detail_data(post_id: str, shop_id: str) -> dict:
     Returns:
         dict: 게시물 상세 데이터 (실패 시 None)
     """
-    container = get_cosmos_container("Post")
+    post_container = get_cosmos_container("Post")
+    photo_container = get_cosmos_container("Photo")
+
     try:
-        return container.read_item(item=post_id, partition_key=shop_id)
+        # 1. 기본 게시물 정보 조회
+        post = post_container.read_item(item=post_id, partition_key=shop_id)
+        photo_ids = post.get("photo_ids", [])
+        
+        # 2. photo_ids에 해당하는 실제 blob_url 정보들을 수집
+        photo_details = []
+        for pid in photo_ids:
+            try:
+                # 각 사진 ID로 Photo 컨테이너 조회
+                photo_item = photo_container.read_item(item=pid, partition_key=shop_id)
+                photo_details.append({
+                    "id": pid,
+                    "blob_url": photo_item.get("blob_url")
+                })
+            except Exception:
+                # 사진이 삭제되었거나 없는 경우 건너뜀
+                continue
+        
+        # 3. 게시물 데이터에 상세 사진 정보 포함 (기존 photo_ids는 유지하거나 대체)
+        post["photo_details"] = photo_details
+        # 프론트 편의를 위해 URL만 모은 리스트도 넣어주면 좋음
+        post["photo_urls"] = [p["blob_url"] for p in photo_details]
+        
+        return post
+        
     except Exception as e:
-        logging.error(f"게시물 상세 조회 실패: {str(e)}")
+        logging.error(f"게시물 상세 조회 실패 (post_id: {post_id}): {str(e)}")
         return None
 
 def save_post_data(shop_id: str, post_data: dict) -> bool:
