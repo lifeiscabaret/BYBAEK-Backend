@@ -32,6 +32,7 @@ def update_shop_instagram_info(shop_id: str, insta_data: dict) -> bool:
         shop_item['insta_user_id'] = insta_data.get('user_id')
         shop_item['insta_access_token'] = insta_data.get('access_token')
         shop_item['insta_expires_in'] = insta_data.get('expires_in')
+        shop_item['updated_at'] = datetime.utcnow().isoformat()
         
         container.upsert_item(body=shop_item)
         return True
@@ -138,6 +139,7 @@ def update_shop_onedrive_info(shop_id: str, token_info: dict) -> bool:
         shop_item['one_refresh_token'] = token_info.get('refresh_token')
         shop_item['one_expires_in'] = token_info.get('expires_in')
         shop_item['one_delta_link'] = token_info.get('delta_link')
+        shop_item['updated_at'] = datetime.utcnow().isoformat()
         
         container.upsert_item(body=shop_item)
         return True
@@ -340,6 +342,7 @@ def save_onboarding(shop_id: str, data: dict) -> bool:
         bool: 저장 성공 여부
     """
     shop_container = get_cosmos_container("Shop")
+    now_iso = datetime.utcnow().isoformat() # 현재 시간 (UTC)
 
     allowed_shop_keys = [
         "system_prompt", "insta_auto_upload_yn", "insta_upload_notice_yn", 
@@ -359,13 +362,13 @@ def save_onboarding(shop_id: str, data: dict) -> bool:
             shop_item = shop_container.read_item(item=shop_id, partition_key=shop_id)
         except Exception:
             # 기존 데이터가 없는 경우 신규 생성
-            shop_item = {"id": shop_id, "shop_id": shop_id}
+            shop_item = {"id": shop_id, "shop_id": shop_id, "created_at": now_iso}
             
         # 허용된 필드만 골라서 업데이트
         for key in allowed_shop_keys:
             if key in data:
                 shop_item[key] = data[key]
-        
+        shop_item["updated_at"] = now_iso
         shop_container.upsert_item(body=shop_item)
         
         return True
@@ -409,7 +412,7 @@ def get_post_detail_data(post_id: str, shop_id: str) -> dict:
         logging.error(f"게시물 상세 조회 실패: {str(e)}")
         return None
 
-def save_post_data(post_data: dict) -> bool:
+def save_post_data(shop_id: str, post_data: dict) -> bool:
     """
     AI가 생성한 마케팅 게시물 데이터를 Post 컨테이너에 저장합니다.
 
@@ -420,11 +423,28 @@ def save_post_data(post_data: dict) -> bool:
         bool: 저장 성공 여부
     """
     container = get_cosmos_container("Post")
+    now_iso = datetime.utcnow().isoformat()
+
     try:
+        # 1. 기존 데이터가 있는지 확인 (업데이트 시 created_at 보존을 위해)
+        post_id = post_data.get('id')
+        shop_id = post_data.get('shop_id')
+        
+        try:
+            existing_item = container.read_item(item=post_id, partition_key=shop_id)
+            post_data['created_at'] = existing_item.get('created_at', now_iso)
+        except Exception:
+            # 기존 데이터가 없으면 현재 시간을 생성 시간으로 설정
+            post_data['created_at'] = now_iso
+
+        # 2. 상태 및 수정 시간 업데이트
         post_data['status'] = 'success'
+        post_data['updated_at'] = now_iso
+        
         container.upsert_item(body=post_data)
+        return True
     except Exception as e:
-        logging.error(f"마케팅 데이터 저장 실패: {str(e)}")
+        logging.error(f"마케팅 데이터 저장 실패 (post_id: {post_data.get('id')}): {str(e)}")
         return False
 
 def get_top_photos(shop_id: str, limit: int = 20) -> list:
@@ -498,22 +518,34 @@ def save_draft(shop_id: str, post_id: str, caption: str, hashtags: list, photo_i
         bool: 저장 성공 여부
     """
     container = get_cosmos_container("Post")
-    draft_data = {
-        "id": post_id,
-        "shop_id": shop_id,
-        "caption": caption,
-        "hashtags": hashtags,
-        "photo_ids": photo_ids,
-        "cta": cta,
-        "status": "pending",
-        "created_at": datetime.utcnow().isoformat()
-    }
+
+    now_iso = datetime.utcnow().isoformat()
     
+    # 초안(Draft)은 보통 새로 생성되는 경우가 많지만, 
+    # 기존 초안을 덮어쓸 때를 대비해 로직을 구성합니다.
     try:
+        try:
+            existing_item = container.read_item(item=post_id, partition_key=shop_id)
+            created_at = existing_item.get('created_at', now_iso)
+        except Exception:
+            created_at = now_iso
+
+        draft_data = {
+            "id": post_id,
+            "shop_id": shop_id,
+            "caption": caption,
+            "hashtags": hashtags,
+            "photo_ids": photo_ids,
+            "cta": cta,
+            "status": "pending",
+            "created_at": created_at,  # 생성 시간 유지
+            "updated_at": now_iso       # 수정 시간 갱신
+        }
+        
         container.upsert_item(body=draft_data)
         return True
     except Exception as e:
-        logging.error(f"초안 저장 실패: {str(e)}")
+        logging.error(f"초안 저장 실패 (post_id: {post_id}): {str(e)}")
         return False
 
 def save_photo_meta(shop_id: str, doc: dict) -> bool:
@@ -549,17 +581,20 @@ def _update_shop_field(shop_id: str, update_data: dict) -> bool:
     [내부 함수] Shop 컨테이너의 특정 필드들을 공통으로 업데이트합니다.
     """
     container = get_cosmos_container("Shop")
+    now_iso = datetime.utcnow().isoformat()
     try:
         # 1. 기존 데이터 읽기
         try:
             item = container.read_item(item=shop_id, partition_key=shop_id)
         except Exception:
-            item = {"id": shop_id, "shop_id": shop_id}
+            item = {"id": shop_id, "shop_id": shop_id,
+                "created_at": now_iso}
         
         # 2. 데이터 병합
         item.update(update_data)
         
         # 3. 저장
+        item["updated_at"] = now_iso
         container.upsert_item(body=item)
         return True
     except Exception as e:
