@@ -543,3 +543,135 @@ def save_photo_meta(shop_id: str, doc: dict) -> bool:
     except Exception as e:
         logging.error(f"사진 메타데이터 업데이트 실패: {str(e)}")
         return False
+
+def _update_shop_field(shop_id: str, update_data: dict) -> bool:
+    """
+    [내부 함수] Shop 컨테이너의 특정 필드들을 공통으로 업데이트합니다.
+    """
+    container = get_cosmos_container("Shop")
+    try:
+        # 1. 기존 데이터 읽기
+        try:
+            item = container.read_item(item=shop_id, partition_key=shop_id)
+        except Exception:
+            item = {"id": shop_id, "shop_id": shop_id}
+        
+        # 2. 데이터 병합
+        item.update(update_data)
+        
+        # 3. 저장
+        container.upsert_item(body=item)
+        return True
+    except Exception as e:
+        logging.error(f"Shop 필드 업데이트 실패 ({list(update_data.keys())}): {str(e)}")
+        return False
+
+# --- 개별 업데이트 함수들 ---
+
+def update_brand_tone(shop_id: str, brand_tone: str) -> bool:
+    """
+    Shop 컨테이너에서 브랜드 톤 정보를 업데이트합니다.
+    Args: shop_id (str), brand_tone (str): "남성적/클래식" 등 브랜드 느낌
+    """
+    return _update_shop_field(shop_id, {"brand_tone": brand_tone})
+
+def update_preferred_styles(shop_id: str, preferred_styles: str) -> bool:
+    """
+    Shop 컨테이너에서 선호하는 시술 스타일 정보를 업데이트합니다.
+    Args: shop_id (str), preferred_styles (str): 강조하고 싶은 시술
+    """
+    return _update_shop_field(shop_id, {"preferred_styles": preferred_styles})
+
+def update_exclude_conditions(shop_id: str, exclude_conditions: str) -> bool:
+    """
+    Shop 컨테이너에서 제외할 사진 유형 조건을 업데이트합니다.
+    Args: shop_id (str), exclude_conditions (str): 올리기 싫은 사진 유형
+    """
+    return _update_shop_field(shop_id, {"exclude_conditions": exclude_conditions})
+
+def update_hashtag_style(shop_id: str, hashtag_style: str) -> bool:
+    """
+    Shop 컨테이너에서 해시태그 스타일 방향을 업데이트합니다.
+    """
+    return _update_shop_field(shop_id, {"hashtag_style": hashtag_style})
+
+def update_cta(shop_id: str, cta: str) -> bool:
+    """
+    Shop 컨테이너에서 게시물 하단 고정 문구(CTA)를 업데이트합니다.
+    """
+    return _update_shop_field(shop_id, {"cta": cta})
+
+def update_shop_intro(shop_id: str, shop_intro: str) -> bool:
+    """
+    Shop 컨테이너에서 가게 소개 문구를 업데이트합니다.
+    """
+    return _update_shop_field(shop_id, {"shop_intro": shop_intro})
+
+def update_forbidden_words(shop_id: str, forbidden_words: str) -> bool:
+    """
+    Shop 컨테이너에서 금지어 리스트를 업데이트합니다.
+    """
+    return _update_shop_field(shop_id, {"forbidden_words": forbidden_words})
+
+def update_rag_reference(shop_id: str, rag_reference: str) -> bool:
+    """
+    Shop 컨테이너에서 RAG 참조용 URL 또는 텍스트 정보를 업데이트합니다.
+    """
+    # 정의서의 rag_reference 필드 구조에 맞춰 업데이트
+    return _update_shop_field(shop_id, {"rag_reference": rag_reference})
+
+def update_insta_upload_time_slot(shop_id: str, time_slot: str) -> bool:
+    """
+    Shop 컨테이너에서 인스타 업로드 시간대(오전/오후/저녁/심야)를 업데이트합니다.
+    """
+    return _update_shop_field(shop_id, {"insta_upload_time_slot": time_slot})
+
+def update_city(shop_id: str, city: str) -> bool:
+    """
+    Shop 컨테이너에서 상점 위치 도시 정보를 업데이트합니다.
+    """
+    return _update_shop_field(shop_id, {"city": city})
+
+def update_sns_connect(shop_id: str, sns_type: str, is_connected: bool) -> bool:
+    """
+    Shop 컨테이너에서 SNS 연결 상태(kakao, insta, gmail)를 업데이트합니다.
+    Args: sns_type (str): "kakao", "insta", "gmail" 중 하나
+    """
+    key = f"is_{sns_type}_connected"
+    return _update_shop_field(shop_id, {key: is_connected})
+
+def update_language(shop_id: str, language: str) -> bool:
+    """
+    Shop 컨테이너에서 사용 언어 설정(kor, eng)을 업데이트합니다.
+    """
+    return _update_shop_field(shop_id, {"language": language})
+
+def update_insta_auto_upload_yn(shop_id: str, yn: bool) -> bool:
+    """
+    Shop 컨테이너에서 인스타 자동 업로드 여부를 업데이트합니다.
+    """
+    return _update_shop_field(shop_id, {"insta_auto_upload_yn": yn})
+
+def update_insta_review_bfr_upload_yn(shop_id: str, yn: bool) -> bool:
+    """
+    Shop 컨테이너에서 업로드 전 검토 여부를 업데이트합니다.
+    """
+    return _update_shop_field(shop_id, {"insta_review_bfr_upload_yn": yn})
+
+def update_insta_upload_notice_yn(shop_id: str, yn: bool) -> bool:
+    """
+    Shop 컨테이너에서 알림 설정 여부(앱푸시)를 업데이트합니다.
+    """
+    return _update_shop_field(shop_id, {"insta_upload_notice_yn": yn})
+
+def update_insta_upload_time(shop_id: str, upload_time: str) -> bool:
+    """
+    Shop 컨테이너에서 구체적인 인스타 업로드 시간을 업데이트합니다.
+    """
+    return _update_shop_field(shop_id, {"insta_upload_time": upload_time})
+
+def update_insta_notice_time(shop_id: str, notice_time: str) -> bool:
+    """
+    Shop 컨테이너에서 인스타 업로드 알림 시간을 업데이트합니다.
+    """
+    return _update_shop_field(shop_id, {"insta_notice_time": notice_time})
