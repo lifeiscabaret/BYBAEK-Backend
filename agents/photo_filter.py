@@ -21,12 +21,16 @@ async def run_stage2_filter(
         print("[photo_filter] 대상 사진 없음 → 종료")
         return {"total": 0, "passed": 0, "failed": 0, "results": []}
 
-    # STEP 1: 레퍼런스 로드 (현재는 목업 사용)
-    reference_photos = _mock_reference_photos()
+    # STEP 1: 레퍼런스 로드 (실제 DB에서 조회)
+    reference_photos = await _load_reference_photos(shop_id)
     good_refs = [p for p in reference_photos if p.get("label") == "good"][:MAX_GOOD_EXAMPLES]
     bad_refs  = [p for p in reference_photos if p.get("label") == "bad"][:MAX_BAD_EXAMPLES]
 
     print(f"[photo_filter] 레퍼런스 로드 → 좋은 예시 {len(good_refs)}장, 나쁜 예시 {len(bad_refs)}장")
+    
+    # 레퍼런스 없어도 계속 진행 (fallback)
+    if not good_refs:
+        print("[photo_filter] ⚠️ 레퍼런스 사진 없음 → 기본 평가 진행")
 
     # STEP 2: 병렬 처리
     semaphore = asyncio.Semaphore(MAX_CONCURRENT)
@@ -201,7 +205,45 @@ def _make_fail_result(image_id, reason):
     return {"image_id": image_id, "stage2_pass": False, "reason": reason, "total_score": 0}
 
 # [테스트용 목업]
-def _mock_reference_photos(): return []
+async def _load_reference_photos(shop_id: str) -> list:
+    """
+    온보딩에서 사장님이 선택한 레퍼런스 사진 3장 조회
+    
+    onboarding.py에서 save_album(album_id=f"reference_{shop_id}")로 저장한 것을 조회
+    """
+    try:
+        from services.cosmos_db import get_album
+        
+        album_id = f"reference_{shop_id}"
+        album = get_album(shop_id, album_id)
+        
+        if not album:
+            print(f"[photo_filter] 레퍼런스 앨범 없음: {album_id}")
+            return []
+        
+        # album 구조: {"photo_list": [{"photo_id": "..."}, ...], ...}
+        photo_list = album.get("photo_list", [])
+        
+        # photo_id만 있으므로 실제 사진 메타 조회
+        from services.cosmos_db import get_photo_by_id
+        
+        references = []
+        for item in photo_list:
+            photo_id = item.get("photo_id")
+            if photo_id:
+                photo = get_photo_by_id(shop_id, photo_id)
+                if photo:
+                    # label은 기본적으로 "good" (온보딩에서 좋은 예시만 선택)
+                    photo["label"] = "good"
+                    references.append(photo)
+        
+        print(f"[photo_filter] 레퍼런스 {len(references)}장 로드 완료")
+        return references
+        
+    except Exception as e:
+        print(f"[photo_filter] 레퍼런스 로드 실패: {e}")
+        return []  # 에러 나도 파이프라인 계속 진행
+
 
 if __name__ == "__main__":
     from dotenv import load_dotenv
