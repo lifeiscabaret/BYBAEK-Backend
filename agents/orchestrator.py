@@ -339,13 +339,21 @@ async def _get_brand_settings(shop_id: str) -> dict:
             "cta": "DM으로 예약 문의주세요",
             "photo_range": {"min": 1, "max": 5}
         }
-    survey = data.get("survey_answers", {})
+
+    def to_list(val):
+        if isinstance(val, list): return val
+        if isinstance(val, str) and val: return [v.strip() for v in val.split(",")]
+        return []
+
+    shop = data.get("shop_info", {})
     return {
-        "brand_tone": survey.get("brand_tone", "친근하고 편안한 말투"),
-        "forbidden_words": survey.get("forbidden_words", []),
-        "cta": survey.get("cta", "DM으로 예약 문의주세요"),
-        "photo_range": survey.get("photo_range", {"min": 1, "max": 5}),
-        "feed_style": survey.get("feed_style", {})
+        "brand_tone": shop.get("brand_tone", "친근하고 편안한 말투"),
+        "forbidden_words": to_list(shop.get("forbidden_words")),
+        "preferred_styles": to_list(shop.get("preferred_styles")),
+        "cta": shop.get("cta", "DM으로 예약 문의주세요"),
+        "photo_range": {"min": 1, "max": 5},
+        "feed_style": shop.get("feed_style", {}),
+        "brand_differentiation": shop.get("shop_intro", "")
     }
 
 
