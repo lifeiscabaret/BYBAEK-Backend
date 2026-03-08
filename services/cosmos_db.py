@@ -540,6 +540,11 @@ def save_post_data(shop_id: str, post_data: dict) -> bool:
         post_data['status'] = 'success'
         post_data['updated_at'] = current_time_iso
         
+        # caption 초안에서 수정되는 경우 받아와서 교체 필요
+        # hashtags
+        # photo_ids
+        # cta
+
         container.upsert_item(body=post_data)
         return True
     except Exception as e:
