@@ -157,7 +157,8 @@ def publish_container(
 @router.post("/upload", response_model=InstagramPhotoPublishResponse, status_code=status.HTTP_201_CREATED)
 async def upload(req: InstagramPhotoPublishRequest):
 
-    container_ids = list[str]
+    # ✅ 수정: list[str] → []
+    container_ids = []
     
     for url in req.image_urls:
         container_ids.append(create_image_container(req.user_id, req.access_token, url))
@@ -165,15 +166,15 @@ async def upload(req: InstagramPhotoPublishRequest):
     creation_id = create_carousel_container(req.user_id, req.access_token, container_ids, req.caption)
 
     media_id = publish_container(req.user_id, creation_id, req.access_token)
+    
+    # ✅ 수정: result 제거 (이미 publish_container에서 에러 처리됨)
     if not media_id:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={
-                "message": "media_id not returned from Instagram publish",
-                "response": result,
+                "message": "media_id not returned from Instagram publish"
             },
         )
-    return { media_id: media_id }
-
-
-
+    
+    # ✅ 수정: {media_id: media_id} → {"media_id": media_id}
+    return {"media_id": media_id}
