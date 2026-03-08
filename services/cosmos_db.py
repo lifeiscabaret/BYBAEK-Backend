@@ -808,3 +808,76 @@ def get_photo_by_id(shop_id: str, photo_id: str) -> dict:
     except Exception as e:
         logging.error(f"단일 사진 조회 실패 (photo_id: {photo_id}): {str(e)}")
         return None
+    
+def save_auth(shop_id: str, auth_data: dict):
+    """
+    상점의 인증 정보(MS, 인스타그램 토큰 등)를 저장하거나 업데이트합니다.
+    """
+    container = get_cosmos_container("Shop")
+    try:
+        # 1. 기존 데이터가 있는지 먼저 확인
+        try:
+            item = container.read_item(item=shop_id, partition_key=shop_id)
+        except Exception:
+            item = {"id": shop_id, "shop_id": shop_id} # 없으면 기본 구조 생성
+
+        # 2. 전달받은 인증 데이터 병합
+        item.update(auth_data)
+        item["updated_at"] = datetime.utcnow().isoformat()
+
+        # 3. 저장 (Upsert)
+        container.upsert_item(item)
+        logging.info(f"인증 정보 저장 완료: {shop_id}")
+        return True
+    except Exception as e:
+        logging.error(f"인증 정보 저장 실패 ({shop_id}): {str(e)}")
+        return False
+
+def get_auth(shop_id: str):
+    """
+    상점의 인증 정보를 조회합니다.
+    """
+    container = get_cosmos_container("Shop")
+    try:
+        item = container.read_item(item=shop_id, partition_key=shop_id)
+        # 보안상 필요한 필드만 골라서 반환하거나 전체 반환
+        return item
+    except Exception as e:
+        logging.error(f"인증 정보 조회 실패 ({shop_id}): {str(e)}")
+        return None
+
+def save_auth(shop_id: str, auth_data: dict):
+    """
+    상점(shop_id)의 인증 정보(MS 토큰, 인스타 토큰 등)를 저장하거나 업데이트합니다.
+    """
+    container = get_cosmos_container("Shop")
+    try:
+        # 1. 기존 데이터 확인 (없으면 새로 생성)
+        try:
+            item = container.read_item(item=shop_id, partition_key=shop_id)
+        except Exception:
+            item = {"id": shop_id, "shop_id": shop_id}
+
+        # 2. 전달받은 필드들(ms_refresh_token, insta_access_token 등)을 병합
+        item.update(auth_data)
+        item["updated_at"] = datetime.utcnow().isoformat()
+
+        # 3. 저장 및 업데이트
+        container.upsert_item(item)
+        return True
+    except Exception as e:
+        logging.error(f"인증 정보 저장 실패 (shop_id: {shop_id}): {str(e)}")
+        return False
+
+def get_auth(shop_id: str):
+    """
+    특정 상점의 모든 연동 및 인증 정보를 조회합니다.
+    """
+    container = get_cosmos_container("Shop")
+    try:
+        # shop_id를 키로 사용하여 단일 아이템 조회
+        item = container.read_item(item=shop_id, partition_key=shop_id)
+        return item
+    except Exception as e:
+        logging.error(f"인증 정보 조회 실패 (shop_id: {shop_id}): {str(e)}")
+        return None
