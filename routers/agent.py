@@ -68,20 +68,24 @@ class PostSaveRequest(BaseModel):
 async def agent_run(req: AgentRunRequest):
     """
     에이전트 파이프라인 실행
-    - auto: 예약 시간 자동 실행
-    - manual: 사장님 직접 실행 (photo_ids 필수)
+    
+    트리거 타입:
+    - auto: 예약 시간 자동 실행 (photo_ids 없으면 자동 선택)
+    - manual: 사장님 직접 실행 (photo_ids 있으면 해당 사진 사용, 없으면 자동 선택)
+    
+    photo_ids가 없으면 orchestrator가 get_top_photos로 자동 선택합니다.
     """
     if req.trigger not in ("auto", "manual"):
         raise HTTPException(400, "trigger는 'auto' 또는 'manual'이어야 합니다.")
 
-    if req.trigger == "manual" and not req.photo_ids:
-        raise HTTPException(400, "manual 트리거는 photo_ids가 필요합니다.")
-
+    # ✅ 수정: manual도 photo_ids 선택사항
+    # orchestrator가 None이면 자동으로 후보 선택
+    
     try:
         result = await run_pipeline(
             shop_id=req.shop_id,
             trigger=req.trigger,
-            photo_ids=req.photo_ids
+            photo_ids=req.photo_ids  # None이어도 OK
         )
         return result
     except Exception as e:

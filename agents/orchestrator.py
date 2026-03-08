@@ -160,7 +160,18 @@ async def run_pipeline(
             print(f"[orchestrator] 확장 후 사진 수: {len(selected_photos)}장")
 
     elif trigger == "manual":
-        selected_photos = await _get_photos_by_ids(shop_id, photo_ids)
+        # ✅ 수정: photo_ids가 None이면 자동 선택
+        if photo_ids is None or len(photo_ids) == 0:
+            print(f"[orchestrator] manual이지만 photo_ids 없음 → 자동 선택 모드")
+            selected_photos = await photo_select_agent(
+                shop_id=shop_id,
+                trend_data=trend_data,
+                photo_candidates=photo_candidates,
+                brand_settings=brand_settings
+            )
+        else:
+            print(f"[orchestrator] manual → 사장님 선택 사진 {len(photo_ids)}장 사용")
+            selected_photos = await _get_photos_by_ids(shop_id, photo_ids)
 
     print(f"[orchestrator] STEP 3 완료 → 선택된 사진: {len(selected_photos)}장")
 

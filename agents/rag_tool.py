@@ -13,7 +13,7 @@ MAX_EXAMPLES = 3
 # [임베딩] 텍스트 → 벡터 변환
 async def get_embedding(text: str) -> list:
     """Azure OpenAI Embeddings로 텍스트를 벡터로 변환"""
-    api_key = os.getenv("AZURE_OPENAI_API_KEY") or os.getenv("AZURE_OPENAI_KEY")
+    api_key = os.getenv("AZURE_OPENAI_KEY") or os.getenv("AZURE_OPENAI_API_KEY")
     endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
 
     if not api_key:
@@ -62,7 +62,6 @@ async def search_rag_context(
         return _build_fallback(recent_posts, brand_settings)
 
     # 3. Vector DB 검색
-    # TODO: from services.vector_db import search_similar_captions
     from services.vector_db import search_similar_captions
     try:
         raw_results = search_similar_captions(
@@ -96,6 +95,8 @@ def _build_search_query(trend_data: dict, selected_photos: list, brand_settings:
     parts = []
 
     brand_tone = brand_settings.get("brand_tone", "")
+    if isinstance(brand_tone, list):
+        brand_tone = " ".join(brand_tone)
     if brand_tone:
         parts.append(brand_tone)
 
@@ -112,12 +113,13 @@ def _build_search_query(trend_data: dict, selected_photos: list, brand_settings:
     return " ".join(parts).strip()
 
 
-# [헬퍼] 후처리 (취소된 게시물 제거, 최신순 정렬)
+# [헬퍼] 후처리
 def _postprocess(raw_results: list) -> list:
-    """취소된 게시물 제거 + 최신순 정렬"""
-    filtered = [p for p in raw_results if p.get("upload_status") != "cancel"]
-    filtered.sort(key=lambda x: x.get("uploaded_at", ""), reverse=True)
-    return filtered[:MAX_EXAMPLES * 2]  # GPT에 넘기기 전 최대 2배만 유지
+    """
+    Vector DB 결과는 id/caption만 있음
+    → 필터링/정렬 없이 상위 MAX_EXAMPLES*2개만 반환
+    """
+    return raw_results[:MAX_EXAMPLES * 2]
 
 
 # [헬퍼] GPT로 컨텍스트 압축 
@@ -131,11 +133,14 @@ async def _compress_context(posts: list, brand_settings: dict) -> dict:
 
     # 게시물 텍스트 정리
     posts_text = "\n\n".join([
-        f"[게시물 {i+1}]\n캡션: {p.get('caption', '')}\n해시태그: {' '.join(p.get('hashtags', []))}"
+        f"[게시물 {i+1}]\n캡션: {p.get('caption', '')}"
         for i, p in enumerate(posts[:MAX_EXAMPLES * 2])
     ])
 
     brand_tone = brand_settings.get("brand_tone", "")
+    if isinstance(brand_tone, list):
+        brand_tone = " ".join(brand_tone)
+    
     forbidden = brand_settings.get("forbidden_words", [])
     if isinstance(forbidden, str):
         forbidden = [w.strip() for w in forbidden.split(",")]
@@ -165,7 +170,7 @@ async def _compress_context(posts: list, brand_settings: dict) -> dict:
     try:
         response = await chat.get_chat_message_content(
             chat_history=history,
-            settings=None
+            settings=chat.instantiate_prompt_execution_settings()
         )
         raw = str(response).strip()
 
@@ -198,9 +203,14 @@ def _build_fallback(recent_posts: list, brand_settings: dict) -> dict:
         {"caption": p.get("caption", ""), "hashtags": p.get("hashtags", [])}
         for p in (recent_posts or [])[:MAX_EXAMPLES]
     ]
+    
+    brand_tone = brand_settings.get("brand_tone", "")
+    if isinstance(brand_tone, list):
+        brand_tone = " ".join(brand_tone)
+    
     return {
         "examples": examples,
-        "tone_rules": brand_settings.get("brand_tone", ""),
+        "tone_rules": brand_tone,
         "hashtag_patterns": [],
         "cta_pattern": brand_settings.get("cta", "")
     }
@@ -211,7 +221,7 @@ def _build_fallback(recent_posts: list, brand_settings: dict) -> dict:
 # ─────────────────────────────────────────────
 def _init_kernel() -> Kernel:
     deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT_MINI") or os.getenv("AZURE_OPENAI_DEPLOYMENT")
-    api_key = os.getenv("AZURE_OPENAI_API_KEY") or os.getenv("AZURE_OPENAI_KEY")
+    api_key = os.getenv("AZURE_OPENAI_KEY") or os.getenv("AZURE_OPENAI_API_KEY")
 
     kernel = Kernel()
     kernel.add_service(AzureChatCompletion(

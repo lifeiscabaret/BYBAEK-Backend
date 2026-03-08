@@ -2,12 +2,13 @@
 기능: Azure AI Search를 이용한 벡터 데이터 저장 및 유사도 검색
 작성자: jiyeon back
 최초 생성: 2026. 03. 04.
-버전: 1.0
+버전: 1.1
 
 [Modification Information]
 DATE        AUTHOR          NOTE
 -----------------------------------------------------------
 2026.03.04  jiyeon back     최초 생성 및 벡터 검색 로직 구현
+2026.03.09  jiyeon back     select 필드 간소화 (id, caption만 반환)
 """
 
 import os
@@ -69,7 +70,7 @@ def search_similar_captions(shop_id: str, query_vector: list, top_k: int = 5) ->
         top_k (int): 검색 결과로 반환할 최상위 결과 수
 
     Returns:
-        list: 유사도가 높은 캡션 데이터 리스트
+        list: 유사도가 높은 캡션 데이터 리스트 (id, caption만 포함)
     """
     vector_query = VectorizedQuery(
         vector=query_vector, 

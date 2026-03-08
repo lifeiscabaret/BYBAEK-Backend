@@ -8,6 +8,7 @@
 DATE        AUTHOR          NOTE
 -----------------------------------------------------------
 2026.02.24  jiyeon back     최초 생성 및 기본 CRUD 구현
+2026.03.09  jiyeon back     save_photo_meta에 detected_angle 추가
 """
 
 from services.cosmos_client import get_cosmos_container
@@ -693,6 +694,7 @@ def save_photo_meta(shop_id: str, doc: dict) -> bool:
         existing_item = container.read_item(item=photo_id, partition_key=shop_id)
         existing_item.update({
             "fade_cut_score": doc.get("fade_cut_score", 0),
+            "detected_angle": doc.get("detected_angle", "unknown"),
             "style_tags": doc.get("style_tags", []),
             "is_usable": doc.get("is_usable", False),
             "updated_at": datetime.utcnow().isoformat()
@@ -844,40 +846,4 @@ def get_auth(shop_id: str):
         return item
     except Exception as e:
         logging.error(f"인증 정보 조회 실패 ({shop_id}): {str(e)}")
-        return None
-
-def save_auth(shop_id: str, auth_data: dict):
-    """
-    상점(shop_id)의 인증 정보(MS 토큰, 인스타 토큰 등)를 저장하거나 업데이트합니다.
-    """
-    container = get_cosmos_container("Shop")
-    try:
-        # 1. 기존 데이터 확인 (없으면 새로 생성)
-        try:
-            item = container.read_item(item=shop_id, partition_key=shop_id)
-        except Exception:
-            item = {"id": shop_id, "shop_id": shop_id}
-
-        # 2. 전달받은 필드들(ms_refresh_token, insta_access_token 등)을 병합
-        item.update(auth_data)
-        item["updated_at"] = datetime.utcnow().isoformat()
-
-        # 3. 저장 및 업데이트
-        container.upsert_item(item)
-        return True
-    except Exception as e:
-        logging.error(f"인증 정보 저장 실패 (shop_id: {shop_id}): {str(e)}")
-        return False
-
-def get_auth(shop_id: str):
-    """
-    특정 상점의 모든 연동 및 인증 정보를 조회합니다.
-    """
-    container = get_cosmos_container("Shop")
-    try:
-        # shop_id를 키로 사용하여 단일 아이템 조회
-        item = container.read_item(item=shop_id, partition_key=shop_id)
-        return item
-    except Exception as e:
-        logging.error(f"인증 정보 조회 실패 (shop_id: {shop_id}): {str(e)}")
         return None
