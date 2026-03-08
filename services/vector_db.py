@@ -81,7 +81,7 @@ def search_similar_captions(shop_id: str, query_vector: list, top_k: int = 5) ->
         results = search_client.search(
             search_text=None,
             vector_queries=[vector_query],
-            filter=f"shopId eq '{shop_id}'",
+            filter=f"shop_id eq '{shop_id}'",
             select=["id", "caption"]
         )
         return list(results)
