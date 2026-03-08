@@ -14,6 +14,7 @@ router = APIRouter()
 # --- Pydantic 모델 (새 앨범 만들 때 사용) ---
 class AlbumCreateRequest(BaseModel):
     shop_id: str
+    album_id: str
     album_name: str
     photo_ids: List[str]
     description: str = ""
@@ -44,7 +45,7 @@ async def create_album(req: AlbumCreateRequest):
     
     success = save_album(
         shop_id=req.shop_id, 
-        album_id=None, # None으로 주면 함수에서 자동 생성함
+        album_id=req.album_id, # None으로 주면 함수에서 자동 생성함
         photo_list=photo_list, 
         album_name=req.album_name,
         description=req.description
