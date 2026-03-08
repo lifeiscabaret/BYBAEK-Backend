@@ -202,7 +202,7 @@ def get_onboarding(shop_id: str) -> dict:
             "hashtag_style", "cta", "shop_intro", 
             "forbidden_words", "locale", "city", "language",
             "is_kakao_connected", "is_insta_connected", "is_gmail_connected",
-            "rag_reference"
+            "rag_reference", "is_ms_connected", "gmail_address" ,"district"
         ]
 
         filtered_shop_info = {k: shop_item.get(k) for k in allowed_keys if k in shop_item}
@@ -401,7 +401,7 @@ def save_onboarding(shop_id: str, data: dict) -> bool:
         "hashtag_style", "cta", "shop_intro", 
         "forbidden_words", "locale", "city", "language",
         "is_kakao_connected", "is_insta_connected", "is_gmail_connected",
-        "rag_reference"
+        "rag_reference", "is_ms_connected", "gmail_address" ,"district"
     ]
 
     try:
