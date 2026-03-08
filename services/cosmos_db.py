@@ -300,8 +300,11 @@ def save_album(shop_id: str, album_id: str, photo_list: list, album_name: str = 
     album_container = get_cosmos_container("Album")
     try:
         current_time_iso = datetime.utcnow().isoformat()
-        # 프론트에서 넘어온 확정된 사진 ID 리스트
-        new_photo_ids = [p.get('photo_id') for p in photo_list if p.get('photo_id')]
+         # 기존 photo_list
+        # new_photo_ids = [p.get('photo_id') for p in photo_list if p.get('photo_id')]
+
+        # 변경 예정
+        new_photo_ids = [p.get('photo_id') or p.get('id') for p in photo_list if p.get('photo_id') or p.get('id')]
 
         try:
             album_item = album_container.read_item(item=album_id, partition_key=shop_id)
