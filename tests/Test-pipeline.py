@@ -51,10 +51,10 @@ async def run_test():
     print("  BYBAEK 파이프라인 [실시간 웹 + 실데이터 DB 통합 테스트]")
     print("=" * 60)
 
-    # ── STEP 0-1. 웹 서치 ──────────────────────────────────────
+    # ── STEP 0-1. 웹 서치 (force_refresh=True로 캐시 무시) ──────
     print(f"\n🌐 STEP 0-1. web_search_agent (실시간 검색 중...)")
     try:
-        real_trend = await web_search_agent(SHOP_ID)
+        real_trend = await web_search_agent(SHOP_ID, force_refresh=True)  # ✅ 캐시 무시!
         print(f"✅ 트렌드 검색 완료! (날씨: {real_trend.get('weather')})")
     except Exception as e:
         print(f"❌ 트렌드 검색 실패: {e}")
@@ -68,6 +68,12 @@ async def run_test():
         if isinstance(val, list): return val
         if isinstance(val, str) and val: return [v.strip() for v in val.split(",")]
         return []
+    
+    def to_string(val):
+        """list를 string으로 변환"""
+        if isinstance(val, list):
+            return ", ".join(val)
+        return str(val) if val else ""
 
     try:
         query = f"SELECT * FROM c WHERE c.id = '{SHOP_ID}'"
@@ -85,12 +91,12 @@ async def run_test():
         else:
             db_brand = items[0]
             brand_settings = {
-                "brand_tone": db_brand.get("brand_tone", "친근하고 편안한 말투"),
-                "forbidden_words": to_list(db_brand.get("forbidden_words")),   # ← 수정
+                "brand_tone": to_string(db_brand.get("brand_tone", "친근하고 편안한 말투")),  # ✅ string 변환
+                "forbidden_words": to_list(db_brand.get("forbidden_words")),
                 "cta": db_brand.get("cta", "DM으로 예약 문의주세요"),
-                "preferred_styles": to_list(db_brand.get("preferred_styles")), # ← 수정
+                "preferred_styles": to_list(db_brand.get("preferred_styles")),
                 "feed_style": db_brand.get("feed_style", {}),
-                "brand_differentiation": db_brand.get("shop_intro", "")        # ← shop_intro로 수정
+                "brand_differentiation": db_brand.get("shop_intro", "")
             }
             print(f"✅ DB 설정 로드 성공! (말투: {brand_settings['brand_tone']})")
 
@@ -115,6 +121,7 @@ async def run_test():
                 if p["image_id"] == r["image_id"]
             ),
             "fade_cut_score": r.get("fade_cut_score", 0.5),
+            "detected_angle": r.get("detected_angle", "unknown"),  # ✅ 추가!
             "is_usable": True
         }
         for r in filter_result["results"] if r.get("stage2_pass")
@@ -129,6 +136,7 @@ async def run_test():
                 "photo_id": p["image_id"],
                 "blob_url": p["blob_url"],
                 "style_tags": [],
+                "detected_angle": "unknown",  # ✅ 추가!
                 "is_usable": True
             }
             for p in STAGE1_PASS_LIST
