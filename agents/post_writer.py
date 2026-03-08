@@ -87,37 +87,66 @@ def _build_prompt(
     """
 
     # ── 시스템 프롬프트 ──
-    forbidden_str = ", ".join(brand_settings.get("forbidden_words", []))
+    # ✅ brand_tone 리스트 처리
+    brand_tone = brand_settings.get("brand_tone", "친근하고 편안한 말투")
+    if isinstance(brand_tone, list):
+        brand_tone = " ".join(brand_tone)
+    
+    # ✅ forbidden_words 리스트 처리
+    forbidden_words = brand_settings.get("forbidden_words", [])
+    if isinstance(forbidden_words, str):
+        forbidden_words = [w.strip() for w in forbidden_words.split(",")]
+    forbidden_str = ", ".join(forbidden_words) if forbidden_words else "없음"
+    
     feed_style    = brand_settings.get("feed_style", {})
     emoji_usage   = feed_style.get("emoji_usage", "적당히")
     caption_len   = feed_style.get("caption_length", "2~4줄")
     hashtag_count = feed_style.get("hashtag_count", 10)
 
-    system_prompt = f"""너는 경력 20년의 바버샵 전문 인스타그램 마케터야.
-사장님의 브랜드 설정을 완벽하게 지키면서 인스타그램 게시물을 작성해줘.
+    system_prompt = f"""너는 남성 바버샵 전문 마케팅 디렉터야. 
+10년간 300개 이상 바버샵의 인스타그램 문의율을 평균 237% 증가시킨 전문가.
 
-[브랜드 설정]
-- 말투/톤: {brand_settings.get("brand_tone", "친근하고 편안한 말투")}
-- 절대 사용 금지 단어: {forbidden_str if forbidden_str else "없음"}
-- CTA 문구: {brand_settings.get("cta", "DM으로 예약 문의주세요")}
-- 이모지 사용: {emoji_usage}
-- 캡션 길이: {caption_len}
-- 해시태그 수: {hashtag_count}개 내외
+[핵심 목표 - 최우선 순위]
+문의 폭발 유도: 게시물 보는 순간 "나도 저렇게 하고 싶다" 생각하게 만들기
+→ 단순 예쁜 글 아님. 문의 버튼 누르게 하는 전략적 카피.
 
-[절대 규칙]
-1. 금지 단어는 절대 사용하지 마
-2. 여성 헤어, 펌, 염색 관련 내용 절대 금지
-3. 과장되거나 거짓된 표현 금지 (예: "최고", "완벽한")
-4. 반드시 JSON으로만 응답
-5. 캡션 첫 줄에 반드시 스타일명 키워드 포함 (예: "페이드컷으로 봄을 맞이해요 🌿")
-6. CTA는 문의/예약 행동을 직접적으로 유도하는 문구로 작성 (예: "이 스타일 궁금하면 DM 주세요 👇")
+[전문 마케터 전략 5단계]
 
-[응답 형식]
+1. 키워드 전략 (검색 노출 극대화)
+   - 첫 문장에 메인 키워드 무조건 배치 (예: "페이드 스타일" "사이드파트")
+   - 검색량 높은 키워드 우선: 페이드/투블럭/남자머리/바버샵
+   - 절대 금지: "cut/컷/자르다" (Azure 필터 차단)
+
+2. 타겟팅 전략 (우리 고객만 공략)
+   - 20-40대 남성 직장인 / 대학생 / 자영업자 페르소나
+   - 고객 니즈: 깔끔한 이미지, 시간 절약, 전문성, 트렌디함
+   - 금지: 여성 헤어/펌/염색/미용실 언급
+
+3. 문의 유도 전략 (CTA 강화)
+   - 수동적 X: "예약 문의주세요"
+   - 능동적 O: "지금 DM 주시면 이번 주 예약 가능", "오늘 3자리 남음"
+   - 긴박감 + 행동 유도 조합
+
+4. 해시태그 전략 (알고리즘 공략)
+   - 대분류 3개: #바버샵 #남자머리 #헤어스타일
+   - 중분류 4개: 스타일명 (페이드/사이드파트/슬릭백/투블럭)
+   - 소분류 3개: 지역/상황 (#강남바버샵 #출근룩 #데일리룩)
+   - 총 {hashtag_count}개 내외, 검색량 높은 순 배치
+
+5. 브랜드 톤 준수
+   - 말투: {brand_tone}
+   - 금칙어: {forbidden_str}
+   - 이모지: {emoji_usage}
+   - 길이: {caption_len}
+
+[출력 형식 - 엄수]
 {{
-  "caption": "캡션 내용 (줄바꿈은 \\n 사용)",
-  "hashtags": ["#해시태그1", "#해시태그2", ...],
-  "cta": "CTA 문구"
-}}"""
+  "caption": "메인 키워드로 시작 + 고객 니즈 자극 + 문의 유도\\n줄바꿈 최대 3번",
+  "hashtags": ["대분류3개", "중분류4개", "소분류3개"],
+  "cta": "긴박감 + 행동 유도 (예: 지금 DM 주시면 이번 주 예약 가능)"
+}}
+
+JSON만 출력. 설명/인사말/미사어구 절대 금지."""
 
     # ── 유저 프롬프트 ──
     parts = []
@@ -133,10 +162,10 @@ def _build_prompt(
     if promo:
         parts.append(f"[바버샵 홍보 포인트]\n{promo}")
 
-    # ↓ 여기에 추가 (트렌드 블록 바로 다음)
+    # ↓ 샵 차별점 강조 (마케터 전략: 상품 색깔 파악)
     brand_diff = brand_settings.get("brand_differentiation", "")
     if brand_diff:
-        parts.append(f"[우리 샵 차별점 - 반드시 언급]\n{brand_diff}")
+        parts.append(f"[우리 샵 차별점 - 반드시 첫 문장에 반영]\n{brand_diff}\n\n마케터 팁: 차별점을 메인 키워드와 조합하세요.\n예: '10년 경력 전문가의 페이드 스타일' (차별점 + 키워드)")
 
     # 2. 선택된 사진 스타일
     if selected_photos:
@@ -159,13 +188,15 @@ def _build_prompt(
             parts.append(f"[이 샵의 말투 패턴]\n{tone_rules}")
 
         if examples:
-            ex_text = f"[과거 게시물 예시 - {rag_source}]\n"
+            ex_text = f"[과거 성과 좋은 게시물 분석 - {rag_source}]\n"
+            ex_text += "마케터 관점: 이 게시물들이 왜 문의율이 높았는지 분석하고 패턴을 재현하세요.\n\n"
             for i, ex in enumerate(examples[:3], 1):
                 caption  = ex.get("caption", "")
                 hashtags = ex.get("hashtags", [])
                 ex_text += f"{i}. {caption[:80]}{'...' if len(caption) > 80 else ''}\n"
                 if hashtags:
                     ex_text += f"   해시태그: {' '.join(hashtags[:5])}\n"
+                ex_text += f"   → 분석: 첫 문장 키워드 여부 / CTA 강도 / 타겟팅 명확성 체크\n"
             parts.append(ex_text)
 
         if hashtag_patterns:
@@ -185,10 +216,17 @@ def _build_prompt(
         parts.append(
             f"[이전 초안 - 수정 필요]\n{prev_caption}\n\n"
             f"[수정 요청]\n{feedback}\n\n"
-            f"위 피드백을 반영해서 더 나은 캡션으로 재작성해줘."
+            f"마케터 관점으로 재작성: 문의율 올리는 데 집중."
         )
     else:
-        parts.append("위 내용을 바탕으로 인스타그램 게시물을 작성해줘.")
+        parts.append(
+            "위 전략과 데이터를 바탕으로, 문의가 폭발하는 게시물을 작성하세요.\n"
+            "체크리스트:\n"
+            "✅ 첫 문장에 메인 키워드 배치\n"
+            "✅ 타겟 고객 니즈 자극\n"
+            "✅ 긴박감 있는 CTA\n"
+            "✅ 검색량 높은 해시태그 우선 배치"
+        )
 
     user_prompt = "\n\n".join(parts)
     return system_prompt, user_prompt
@@ -202,7 +240,11 @@ def _validate_and_clean(result: dict, brand_settings: dict) -> dict:
     GPT가 금칙어를 포함했을 경우 자동으로 제거.
     완전 제거가 불가능한 경우 경고 로그만 출력.
     """
+    # ✅ forbidden_words 리스트 처리
     forbidden_words = brand_settings.get("forbidden_words", [])
+    if isinstance(forbidden_words, str):
+        forbidden_words = [w.strip() for w in forbidden_words.split(",")]
+    
     caption         = result.get("caption", "")
     found           = []
 
@@ -264,90 +306,3 @@ def _init_kernel(tier: str = "mini") -> Kernel:
         api_key=os.getenv("AZURE_OPENAI_KEY")
     ))
     return kernel
-
-
-# [목업 테스트] 단독 실행용
-if __name__ == "__main__":
-    import asyncio
-    from dotenv import load_dotenv
-    load_dotenv()
-
-    mock_trend = {
-        "trend": "2026년 봄 페이드컷(fade cut)과 사이드파트(side part) 인기 상승 중",
-        "weather": "맑음 18도, 봄 시즌",
-        "promo": "봄 신규 고객 이벤트"
-    }
-
-    mock_photos = [
-        {"id": "photo_001", "style_tags": ["fade_cut", "side_part"]},
-        {"id": "photo_002", "style_tags": ["slick_back"]}
-    ]
-
-    mock_brand = {
-        "brand_tone": "친근하고 편안한 말투",
-        "forbidden_words": ["저렴", "할인"],
-        "cta": "DM으로 예약 문의주세요",
-        "feed_style": {
-            "emoji_usage": "자주",
-            "caption_length": "2~4줄",
-            "hashtag_count": 10
-        }
-    }
-
-    mock_recent_posts = [
-        {
-            "caption": "봄이 왔어요! 새로운 스타일로 변신해볼까요? ✂️",
-            "hashtags": ["#바버샵", "#페이드컷", "#봄헤어"]
-        }
-    ]
-
-    # RAG Fallback 컨텍스트 목업
-    mock_rag = {
-        "examples": [
-            {
-                "caption": "깔끔한 페이드컷으로 봄을 맞이해요 🌿",
-                "hashtags": ["#바버샵", "#페이드컷"]
-            }
-        ],
-        "tone_rules": "친근한 말투, 이모지 자주 사용",
-        "hashtag_patterns": ["#바버샵", "#페이드컷", "#남성헤어"],
-        "cta_pattern": "DM으로 예약 문의주세요",
-        "source": "fallback"
-    }
-
-    async def test():
-        print("=" * 50)
-        print("[테스트 1] 최초 작성")
-        print("=" * 50)
-        result = await post_writer_agent(
-            shop_id="shop_test_001",
-            trend_data=mock_trend,
-            selected_photos=mock_photos,
-            brand_settings=mock_brand,
-            recent_posts=mock_recent_posts,
-            rag_context=mock_rag
-        )
-        print(f"\n[결과]")
-        print(f"  캡션:     {result['caption']}")
-        print(f"  해시태그: {result['hashtags']}")
-        print(f"  CTA:      {result['cta']}")
-
-        print("\n" + "=" * 50)
-        print("[테스트 2] 재작성 (피드백 반영)")
-        print("=" * 50)
-        result2 = await post_writer_agent(
-            shop_id="shop_test_001",
-            trend_data=mock_trend,
-            selected_photos=mock_photos,
-            brand_settings=mock_brand,
-            recent_posts=mock_recent_posts,
-            rag_context=mock_rag,
-            previous_draft=result,
-            feedback="브랜드 톤 점수 0.65 미달. 더 친근한 말투로 재조정 필요."
-        )
-        print(f"\n[재작성 결과]")
-        print(f"  캡션:     {result2['caption']}")
-        print(f"  해시태그: {result2['hashtags']}")
-        print(f"  CTA:      {result2['cta']}")
-
-    asyncio.run(test())
