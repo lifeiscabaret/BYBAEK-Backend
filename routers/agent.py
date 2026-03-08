@@ -5,6 +5,7 @@
 - GET /api/agent/posts/{shop_id}: 게시물 목록 조회
 - POST /api/agent/save: 게시물 저장
 - GET /api/agent/post/detail/{post_id}: 게시물 상세
+- POST /api/agent/manual_chat: 사장님 GPT 실시간 대화 (스트리밍)
 """
 
 from fastapi import APIRouter, HTTPException
@@ -15,14 +16,18 @@ from services.cosmos_db import save_draft
 from services.cosmos_db import save_post_data
 from services.cosmos_db import get_post_detail_data
 from agents.orchestrator import run_pipeline
+from routers.custom_chat import router as custom_chat_router  # 추가
 
 router = APIRouter()
+
+# 커스텀 라우터 결합
+router.include_router(custom_chat_router)
 
 # Request / Response 모델
 class AgentRunRequest(BaseModel):
     shop_id: str
-    trigger: str                        # "auto" | "manual"
-    photo_ids: Optional[List[str]] = None  # manual일 때만
+    trigger: str
+    photo_ids: Optional[List[str]] = None
     
     class Config:
         json_schema_extra = {
