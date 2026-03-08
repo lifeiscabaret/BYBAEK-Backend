@@ -647,6 +647,29 @@ def save_draft(shop_id: str, post_id: str, caption: str, hashtags: list, photo_i
         logging.error(f"초안 저장 실패 (post_id: {post_id}): {str(e)}")
         return False
 
+def get_draft(shop_id: str, post_id: str) -> dict:
+    """
+    저장된 마케팅 게시물 초안 데이터를 조회합니다.
+
+    Args:
+        shop_id (str): 상점 고유 식별자 (Partition Key)
+        post_id (str): 게시물 고유 식별자 (Item ID)
+
+    Returns:
+        dict: 조회된 초안 데이터 객체. 데이터를 찾지 못하거나 에러 발생 시 None 반환.
+    """
+    container = get_cosmos_container("Post")
+
+    try:
+        draft_item = container.read_item(item=post_id, partition_key=shop_id)
+        
+        logging.info(f"초안 조회 성공 (post_id: {post_id})")
+        return draft_item
+
+    except Exception as e:
+        logging.error(f"초안 조회 실패 (post_id: {post_id}): {str(e)}")
+        return None
+
 def save_photo_meta(shop_id: str, doc: dict) -> bool:
     """
     AI 분석이 완료된 사진의 평가 점수와 태그 정보를 기존 사진 데이터에 업데이트합니다.
