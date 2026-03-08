@@ -18,14 +18,7 @@ class InstagramLoginResponse(BaseModel):
 async def instagram_business_login(req: InstagramLoginRequest) -> Response:
 
     # instagram authentication redirect parameter
-    code = req.params.get('code')
-    if not code:
-        try:
-            req_body = req.get_json()
-        except ValueError:
-            pass
-        else:
-            code = req_body.get('code')
+    code = req.code
 
     # if cannot get code
     if not code:
