@@ -804,12 +804,7 @@ def get_photo_by_id(shop_id: str, photo_id: str) -> dict:
     try:
         # Photo 컨테이너에서 사진 상세 정보 조회
         photo_item = photo_container.read_item(item=photo_id, partition_key=shop_id)
-        return {
-            "id": photo_item.get("id"),
-            "blob_url": photo_item.get("blob_url"),
-            "original_name": photo_item.get("original_name"),
-            "created_at": photo_item.get("created_at")
-        }
+        return photo_item
     except Exception as e:
         logging.error(f"단일 사진 조회 실패 (photo_id: {photo_id}): {str(e)}")
         return None
