@@ -28,12 +28,15 @@ async def instagram_business_login(req: InstagramLoginRequest) -> Response:
     payload = {
         'client_id': (None, os.getenv("client_id")),
         'client_secret': (None, os.getenv("client_secret")),
-        'grant_type': (None, os.getenv("grant_type")),
+        'grant_type': (None, "authorization_code"),
         'redirect_uri': (None, os.getenv("redirect_uri")),
-        'code': (None, os.getenv("code"))
+        'code': (None, code)
     }
     
     response = requests.post("https://api.instagram.com/oauth/access_token", files=payload)
+
+    logger.info(os.getenv("client_id"))
+    logger.info(response)
     
     # access token request error
     if not response:
