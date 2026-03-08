@@ -1,0 +1,237 @@
+import os
+import mimetypes
+from typing import Dict, Generator, List, Optional
+
+import msal
+import requests
+from fastapi import APIRouter, HTTPException, status
+from pydantic import BaseModel
+from azure.storage.blob import BlobServiceClient, ContentSettings
+
+
+router = APIRouter(prefix="api/onedrive", tags=["OneDrive"])
+
+GRAPH_BASE = "https://graph.microsoft.com/v1.0"
+PHOTO_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".heic", ".heif", ".tiff"}
+PAGE_SIZE = 200
+
+
+class SyncPhotosResponse(BaseModel):
+    success: bool
+    uploaded: int
+    failed: int
+    skipped: int
+    container: str
+    target_user: Optional[str] = None
+
+
+class SyncPhotosRequest(BaseModel):
+    target_user_principal_name: Optional[str] = None
+    root_folder_item_id: str = "root"
+    overwrite: bool = True
+
+
+def get_env(name: str) -> str:
+    value = os.getenv(name)
+    if not value:
+        raise RuntimeError(f"Missing environment variable: {name}")
+    return value
+
+
+def get_graph_token() -> str:
+    tenant_id = get_env("TENANT_ID")
+    client_id = get_env("CLIENT_ID")
+    client_secret = get_env("CLIENT_SECRET")
+
+    authority = f"https://login.microsoftonline.com/{tenant_id}"
+    app = msal.ConfidentialClientApplication(
+        client_id=client_id,
+        authority=authority,
+        client_credential=client_secret,
+    )
+
+    result = app.acquire_token_for_client(scopes=["https://graph.microsoft.com/.default"])
+    access_token = result.get("access_token")
+    if not access_token:
+        raise RuntimeError(f"Failed to acquire Graph token: {result}")
+
+    return access_token
+
+
+def graph_get(url: str, token: str, params: Optional[Dict] = None) -> Dict:
+    headers = {
+        "Authorization": f"Bearer {token}"
+    }
+
+    response = requests.get(url, headers=headers, params=params, timeout=60)
+    if response.status_code >= 400:
+        raise RuntimeError(f"Graph GET failed: {response.status_code} {response.text}")
+
+    return response.json()
+
+
+def get_user_drive_id(token: str, user_principal_name: str) -> str:
+    data = graph_get(
+        f"{GRAPH_BASE}/users/{user_principal_name}/drive",
+        token,
+        params={"$select": "id"}
+    )
+    return data["id"]
+
+
+def iter_children(token: str, drive_id: str, item_id: str) -> Generator[Dict, None, None]:
+    url = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/children"
+    params = {
+        "$top": PAGE_SIZE,
+        "$select": "id,name,folder,file,parentReference,@microsoft.graph.downloadUrl"
+    }
+
+    while url:
+        data = graph_get(url, token, params=params)
+        for item in data.get("value", []):
+            yield item
+
+        url = data.get("@odata.nextLink")
+        params = None
+
+
+def is_photo(item: Dict) -> bool:
+    if "file" not in item:
+        return False
+
+    name = item.get("name", "")
+    ext = os.path.splitext(name)[1].lower()
+    if ext in PHOTO_EXTENSIONS:
+        return True
+
+    mime_type = item.get("file", {}).get("mimeType", "")
+    return mime_type.startswith("image/")
+
+
+def sanitize_blob_path(path: str) -> str:
+    return path.strip("/").replace("\\", "/")
+
+
+def walk_drive_for_photos(token: str, drive_id: str, root_item_id: str = "root") -> Generator[Dict, None, None]:
+    stack: List[tuple[str, str]] = [(root_item_id, "")]
+
+    while stack:
+        current_item_id, current_path = stack.pop()
+
+        for item in iter_children(token, drive_id, current_item_id):
+            name = item["name"]
+            rel_path = f"{current_path}/{name}" if current_path else name
+
+            if "folder" in item:
+                stack.append((item["id"], rel_path))
+            elif is_photo(item):
+                item["_relative_path"] = rel_path
+                yield item
+
+
+def stream_download_file(download_url: str) -> requests.Response:
+    response = requests.get(download_url, stream=True, timeout=300)
+    if response.status_code >= 400:
+        raise RuntimeError(f"Download failed: {response.status_code} {response.text}")
+    return response
+
+
+def ensure_container(blob_service_client: BlobServiceClient, container_name: str) -> None:
+    container_client = blob_service_client.get_container_client(container_name)
+    try:
+        container_client.create_container()
+    except Exception:
+        # 이미 존재하면 무시
+        pass
+
+
+def upload_stream_to_blob(
+    blob_service_client: BlobServiceClient,
+    container_name: str,
+    blob_name: str,
+    response_stream: requests.Response,
+    content_type: Optional[str],
+    overwrite: bool,
+) -> None:
+    blob_client = blob_service_client.get_blob_client(container=container_name, blob=blob_name)
+
+    content_settings = None
+    if content_type:
+        content_settings = ContentSettings(content_type=content_type)
+
+    blob_client.upload_blob(
+        data=response_stream.raw,
+        overwrite=overwrite,
+        content_settings=content_settings,
+    )
+
+
+@router.post(
+    "/sync-photos",
+    response_model=SyncPhotosResponse,
+    status_code=status.HTTP_200_OK,
+)
+def sync_onedrive_photos(req: SyncPhotosRequest) -> SyncPhotosResponse:
+    try:
+        token = get_graph_token()
+
+        target_user = req.target_user_principal_name or os.getenv("TARGET_USER_PRINCIPAL_NAME")
+        if not target_user:
+            raise RuntimeError("target_user_principal_name is required")
+
+        drive_id = get_user_drive_id(token, target_user)
+
+        storage_connection_string = get_env("STORAGE_CONNECTION_STRING")
+        container_name = get_env("CONTAINER_NAME")
+
+        blob_service_client = BlobServiceClient.from_connection_string(storage_connection_string)
+        ensure_container(blob_service_client, container_name)
+
+        uploaded = 0
+        failed = 0
+        skipped = 0
+
+        for photo in walk_drive_for_photos(token, drive_id, req.root_folder_item_id):
+            rel_path = photo.get("_relative_path", photo.get("name", "unknown"))
+            download_url = photo.get("@microsoft.graph.downloadUrl")
+
+            if not download_url:
+                skipped += 1
+                continue
+
+            try:
+                blob_name = sanitize_blob_path(rel_path)
+
+                content_type = photo.get("file", {}).get("mimeType")
+                if not content_type:
+                    guessed, _ = mimetypes.guess_type(photo.get("name", ""))
+                    content_type = guessed
+
+                download_resp = stream_download_file(download_url)
+                upload_stream_to_blob(
+                    blob_service_client=blob_service_client,
+                    container_name=container_name,
+                    blob_name=blob_name,
+                    response_stream=download_resp,
+                    content_type=content_type,
+                    overwrite=req.overwrite,
+                )
+                uploaded += 1
+
+            except Exception:
+                failed += 1
+
+        return SyncPhotosResponse(
+            success=True,
+            uploaded=uploaded,
+            failed=failed,
+            skipped=skipped,
+            container=container_name,
+            target_user=target_user,
+        )
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e),
+        )

@@ -13,3 +13,6 @@ pillow==10.4.0
 python-jose==3.3.0
 azure-search-documents==11.4.0
 gunicorn
+requests==2.31.0
+urllib3<2
+charset-normalizer<4
