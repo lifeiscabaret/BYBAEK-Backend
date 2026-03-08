@@ -782,3 +782,34 @@ def remove_photo_from_all_albums(shop_id: str, photo_id: str):
 
     except Exception as e:
         logging.error(f"앨범 내 사진 참조 제거 중 오류 발생: {str(e)}")
+
+def get_album(shop_id: str, album_id: str) -> dict:
+    """
+    특정 앨범(album_id)의 메타데이터 정보를 단일 조회합니다.
+    """
+    album_container = get_cosmos_container("Album")
+    try:
+        # id가 album_id이고 partition_key가 shop_id인 아이템 조회
+        album = album_container.read_item(item=album_id, partition_key=shop_id)
+        return album
+    except Exception as e:
+        logging.error(f"단일 앨범 조회 실패 (album_id: {album_id}): {str(e)}")
+        return None
+    
+def get_photo_by_id(shop_id: str, photo_id: str) -> dict:
+    """
+    특정 사진(photo_id)의 상세 정보(blob_url, 이름 등)를 단일 조회합니다.
+    """
+    photo_container = get_cosmos_container("Photo")
+    try:
+        # Photo 컨테이너에서 사진 상세 정보 조회
+        photo_item = photo_container.read_item(item=photo_id, partition_key=shop_id)
+        return {
+            "id": photo_item.get("id"),
+            "blob_url": photo_item.get("blob_url"),
+            "original_name": photo_item.get("original_name"),
+            "created_at": photo_item.get("created_at")
+        }
+    except Exception as e:
+        logging.error(f"단일 사진 조회 실패 (photo_id: {photo_id}): {str(e)}")
+        return None
