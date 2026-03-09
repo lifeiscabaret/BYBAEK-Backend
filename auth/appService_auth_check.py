@@ -1,6 +1,6 @@
 from fastapi import Request, HTTPException
 
-async def auth_instagram(request: Request):
+async def appService_auth_check(request: Request):
     
     session_cookie = request.cookies.get("AppServiceAuthSession")
     
