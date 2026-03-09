@@ -3,6 +3,7 @@ from typing import Optional, Literal
 import requests
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, HttpUrl
+from utils.logging import logger
 
 router = APIRouter()
 
@@ -68,14 +69,14 @@ def create_image_container(
     access_token: str,
     image_url: HttpUrl,
 ) -> str:
-    
+        
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {access_token}"
     }
 
     data = {
-        "image_url": image_url,
+        "image_url": f'{image_url}',
     }
 
     result = graph_post(f"/{ig_user_id}/media", headers=headers, data=data)
