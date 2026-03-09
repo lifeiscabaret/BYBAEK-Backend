@@ -5,6 +5,7 @@ from pydantic import BaseModel
 from utils.logging import logger
 import os
 import requests
+from auth.appService_auth_check import appService_auth_check
 
 router = APIRouter()
 
@@ -13,6 +14,9 @@ class InstagramLoginRequest(BaseModel):
 
 @router.post("/instagram", status_code=status.HTTP_201_CREATED)
 async def instagram_business_login(req: InstagramLoginRequest, res: Response, fast_req: Request) -> Response:
+    
+    # app service auth check
+    appService_auth_check(req)
 
     # instagram authentication redirect parameter
     code = req.code
