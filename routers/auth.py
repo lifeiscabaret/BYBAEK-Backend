@@ -83,4 +83,4 @@ async def instagram_business_login(req: InstagramLoginRequest, res: Response, fa
     
     logger.info(fast_req.cookies)
 
-    return { 'status': 'ok' }
+    return { 'access_token': access_token, "user_id": user_id }
