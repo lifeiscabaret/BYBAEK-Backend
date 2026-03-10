@@ -1,4 +1,5 @@
 import os
+import json
 import asyncio
 from semantic_kernel import Kernel
 from semantic_kernel.connectors.ai.open_ai import AzureChatCompletion
@@ -8,9 +9,38 @@ from agents.photo_select import photo_select_agent
 from agents.post_writer import post_writer_agent
 from agents.rag_tool import search_rag_context
 
+# [환경변수 검증]
+def _get_deployment_name(tier: str) -> str:
+    """
+    환경변수에서 배포 이름 가져오기 + 검증
+    
+    우선순위:
+    1. AZURE_OPENAI_DEPLOYMENT_MINI / FULL
+    2. AZURE_OPENAI_DEPLOYMENT (fallback)
+    
+    Raises:
+        ValueError: 환경변수가 없을 때
+    """
+    if tier == "mini":
+        deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT_MINI") or os.getenv("AZURE_OPENAI_DEPLOYMENT")
+    else:  # tier == "full"
+        deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT_FULL") or os.getenv("AZURE_OPENAI_DEPLOYMENT")
+    
+    if not deployment:
+        raise ValueError(
+            f"❌ Azure OpenAI 배포 이름이 설정되지 않았습니다!\n\n"
+            f".env 파일에 다음 중 하나를 추가하세요:\n"
+            f"  AZURE_OPENAI_DEPLOYMENT=gpt-4.1-mini-BYBAEK\n"
+            f"또는\n"
+            f"  AZURE_OPENAI_DEPLOYMENT_MINI=gpt-4.1-mini-BYBAEK\n"
+            f"  AZURE_OPENAI_DEPLOYMENT_FULL=gpt-4.1-BYBAEK\n"
+        )
+    
+    return deployment
+
 MODEL_TIER = {
-    "mini": os.getenv("AZURE_OPENAI_DEPLOYMENT_MINI", os.getenv("AZURE_OPENAI_DEPLOYMENT")),
-    "full": os.getenv("AZURE_OPENAI_DEPLOYMENT_FULL", os.getenv("AZURE_OPENAI_DEPLOYMENT")),
+    "mini": "mini",  # _get_deployment_name()으로 실제 이름 조회
+    "full": "full"
 }
 
 
@@ -130,7 +160,18 @@ async def run_pipeline(
             print(f"[orchestrator] 확장 후 사진 수: {len(selected_photos)}장")
 
     elif trigger == "manual":
-        selected_photos = await _get_photos_by_ids(shop_id, photo_ids)
+        # ✅ 수정: photo_ids가 None이면 자동 선택
+        if photo_ids is None or len(photo_ids) == 0:
+            print(f"[orchestrator] manual이지만 photo_ids 없음 → 자동 선택 모드")
+            selected_photos = await photo_select_agent(
+                shop_id=shop_id,
+                trend_data=trend_data,
+                photo_candidates=photo_candidates,
+                brand_settings=brand_settings
+            )
+        else:
+            print(f"[orchestrator] manual → 사장님 선택 사진 {len(photo_ids)}장 사용")
+            selected_photos = await _get_photos_by_ids(shop_id, photo_ids)
 
     print(f"[orchestrator] STEP 3 완료 → 선택된 사진: {len(selected_photos)}장")
 
@@ -260,34 +301,89 @@ async def _evaluate_trend(kernel: Kernel, trend_data: dict) -> float:
 
 async def _evaluate_caption(kernel: Kernel, post_draft: dict, brand_settings: dict) -> float:
     """
-    캡션 품질 평가
-    - 브랜드 톤 준수 여부
-    - 금칙어 포함 여부
-    - 해시태그 적절성
-    - 0.0 ~ 1.0 점수 반환
+    캡션 품질 다면 평가 (5개 차원)
+    
+    바버샵 특화 평가:
+    - reservation_inquiry: 예약 문의 전환율 예측
+    - fade_keyword: 페이드컷 키워드 배치 (고객 1순위 니즈)
+    - cta_strength: CTA 강도
+    - brand_tone: 브랜드 톤
+    - target_appeal: 타겟 어필
+    
+    Returns:
+        float: 0.0~1.0 (가중 평균)
     """
     try:
         caption = post_draft.get("caption", "")
         hashtags = post_draft.get("hashtags", [])
+        cta = post_draft.get("cta", "")
+        
+        # ✅ brand_tone 리스트 처리
         brand_tone = brand_settings.get("brand_tone", "")
+        if isinstance(brand_tone, list):
+            brand_tone = " ".join(brand_tone)
+        
+        # ✅ forbidden_words 리스트 처리
         forbidden_words = brand_settings.get("forbidden_words", [])
+        if isinstance(forbidden_words, str):
+            forbidden_words = [w.strip() for w in forbidden_words.split(",")]
 
         if not caption:
             return 0.0
 
         chat_history = ChatHistory()
         chat_history.add_user_message(
-            "아래 인스타그램 캡션이 브랜드 기준에 맞는지 평가해줘.\n\n"
-            f"브랜드 톤: {brand_tone}\n"
-            f"금칙어 (포함되면 안 됨): {', '.join(forbidden_words)}\n\n"
-            "평가 기준:\n"
-            "- 브랜드 톤과 말투가 일치하는가\n"
-            "- 금칙어가 포함되지 않았는가\n"
-            "- 자연스럽고 매력적인 문장인가\n"
-            "- 바버샵 관련 내용인가\n\n"
-            "0.0에서 1.0 사이의 숫자만 출력해. 다른 말은 하지 마.\n\n"
-            f"캡션:\n{caption}\n\n"
-            f"해시태그: {' '.join(hashtags)}"
+            f"""너는 바버샵 마케팅 전문가야.
+아래 인스타그램 캡션을 5개 차원으로 평가해줘.
+
+[캡션]
+{caption}
+
+[해시태그]
+{' '.join(hashtags)}
+
+[CTA]
+{cta}
+
+[브랜드 설정]
+- 톤: {brand_tone}
+- 금칙어: {', '.join(forbidden_words) if forbidden_words else '없음'}
+
+[평가 기준 5가지] (각 0.0~1.0)
+
+1. reservation_inquiry (예약 문의 전환율)
+   - 이 캡션을 보고 예약 DM 보낼 확률은?
+   - CTA 긴박감: "지금 DM 주시면" (0.8) vs "문의주세요" (0.4)
+   - 행동 유도: "오늘 3자리 남음" (0.9)
+
+2. fade_keyword (페이드컷 키워드)
+   - 고객 1순위 니즈: 페이드컷
+   - 첫 문장에 "페이드" 포함? → 1.0
+   - 본문 어디든 포함? → 0.7
+   - 미포함? → 0.3
+
+3. cta_strength (CTA 강도)
+   - 수동적 (0.3): "문의주세요"
+   - 능동적 (0.7): "지금 DM 주시면"
+   - 초강력 (1.0): "오늘 3자리 남음"
+
+4. brand_tone (브랜드 톤)
+   - 설정된 톤과 일치?
+   - 금칙어 포함 시 -0.5
+
+5. target_appeal (타겟 어필)
+   - 20-40대 남성이 공감하는 문구?
+   - 직장인: 깔끔함, 전문성
+   - 대학생: 트렌디함, 스타일
+
+0.0~1.0 숫자 5개만 출력 (JSON):
+{{
+  "reservation_inquiry": 0.0~1.0,
+  "fade_keyword": 0.0~1.0,
+  "cta_strength": 0.0~1.0,
+  "brand_tone": 0.0~1.0,
+  "target_appeal": 0.0~1.0
+}}"""
         )
 
         chat_service = kernel.get_service("azure_openai")
@@ -296,8 +392,25 @@ async def _evaluate_caption(kernel: Kernel, post_draft: dict, brand_settings: di
             settings=chat_service.instantiate_prompt_execution_settings()
         )
 
-        score = float(str(response).strip())
-        return max(0.0, min(1.0, score))
+        raw = str(response).strip()
+        raw = raw.replace("```json", "").replace("```", "").strip()
+        scores = json.loads(raw)
+
+        # 가중 평균 (예약 문의 40%)
+        total_score = (
+            scores.get("reservation_inquiry", 0.5) * 0.40 +
+            scores.get("fade_keyword", 0.5) * 0.25 +
+            scores.get("cta_strength", 0.5) * 0.15 +
+            scores.get("brand_tone", 0.5) * 0.10 +
+            scores.get("target_appeal", 0.5) * 0.10
+        )
+        
+        print(f"[orchestrator] 캡션 평가 상세:")
+        print(f"  - 예약문의율: {scores.get('reservation_inquiry', 0):.2f}")
+        print(f"  - 페이드키워드: {scores.get('fade_keyword', 0):.2f}")
+        print(f"  - CTA강도: {scores.get('cta_strength', 0):.2f}")
+
+        return max(0.0, min(1.0, total_score))
 
     except Exception as e:
         print(f"[orchestrator] 캡션 평가 실패: {e}")
@@ -311,11 +424,10 @@ def _init_kernel(tier: str = "mini") -> Kernel:
         tier: "mini" → GPT-4.1-mini (기본)
               "full" → GPT-4.1 (복잡한 요청 / 재시도 소진 시 승격)
 
-    Note:
-        GPT-4.1 발급 전까지는 DEPLOYMENT_FULL이 없어서
-        자동으로 현재 배포(AZURE_OPENAI_DEPLOYMENT)로 fallback됨
+    Raises:
+        ValueError: 환경변수가 없을 때
     """
-    deployment = MODEL_TIER.get(tier, MODEL_TIER["mini"])
+    deployment = _get_deployment_name(tier)
     print(f"[orchestrator] Kernel 초기화 → tier={tier}, deployment={deployment}")
 
     kernel = Kernel()
@@ -339,13 +451,21 @@ async def _get_brand_settings(shop_id: str) -> dict:
             "cta": "DM으로 예약 문의주세요",
             "photo_range": {"min": 1, "max": 5}
         }
-    survey = data.get("survey_answers", {})
+
+    def to_list(val):
+        if isinstance(val, list): return val
+        if isinstance(val, str) and val: return [v.strip() for v in val.split(",")]
+        return []
+
+    shop = data.get("shop_info", {})
     return {
-        "brand_tone": survey.get("brand_tone", "친근하고 편안한 말투"),
-        "forbidden_words": survey.get("forbidden_words", []),
-        "cta": survey.get("cta", "DM으로 예약 문의주세요"),
-        "photo_range": survey.get("photo_range", {"min": 1, "max": 5}),
-        "feed_style": survey.get("feed_style", {})
+        "brand_tone": shop.get("brand_tone", "친근하고 편안한 말투"),
+        "forbidden_words": to_list(shop.get("forbidden_words")),
+        "preferred_styles": to_list(shop.get("preferred_styles")),
+        "cta": shop.get("cta", "DM으로 예약 문의주세요"),
+        "photo_range": {"min": 1, "max": 5},
+        "feed_style": shop.get("feed_style", {}),
+        "brand_differentiation": shop.get("shop_intro", "")
     }
 
 

@@ -4,8 +4,7 @@ python-multipart==0.0.9
 azure-cosmos==4.7.0
 azure-storage-blob==12.21.0
 azure-identity==1.17.0
-semantic-kernel==1.3.0
-openai==1.40.0
+openai>=1.98.0
 tavily-python==0.3.3
 python-dotenv==1.0.1
 httpx==0.27.0
@@ -13,6 +12,11 @@ pillow==10.4.0
 python-jose==3.3.0
 azure-search-documents==11.4.0
 gunicorn
+<<<<<<< HEAD
 requests==2.31.0
 urllib3<2
 charset-normalizer<4
+=======
+semantic-kernel>=1.30.0
+pydantic>=2.10,<3
+>>>>>>> ca2a50c44a1c73a58cc974f5521c4f23d545f75b
