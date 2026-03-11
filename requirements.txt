@@ -12,11 +12,5 @@ pillow==10.4.0
 python-jose==3.3.0
 azure-search-documents==11.4.0
 gunicorn
-<<<<<<< HEAD
-requests==2.31.0
-urllib3<2
-charset-normalizer<4
-=======
 semantic-kernel>=1.30.0
 pydantic>=2.10,<3
->>>>>>> ca2a50c44a1c73a58cc974f5521c4f23d545f75b

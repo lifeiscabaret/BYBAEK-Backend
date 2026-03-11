@@ -14,9 +14,13 @@ class InstagramLoginRequest(BaseModel):
 
 @router.post("/instagram", status_code=status.HTTP_201_CREATED)
 async def instagram_business_login(req: InstagramLoginRequest, res: Response, fast_req: Request) -> Response:
+
+    access_token = fast_req.headers.get("x-ms-token-aad-access-token")
+    logger.info(access_token)
+
     
     # app service auth check
-    appService_auth_check(req)
+    await appService_auth_check(fast_req)
 
     # instagram authentication redirect parameter
     code = req.code
@@ -39,12 +43,14 @@ async def instagram_business_login(req: InstagramLoginRequest, res: Response, fa
     
     # access token response error
     if 'error' in response:
-        error_type = response['type']
-        error_code = response['code']
-        error_message = response['message']
+        # error_type = response['type']
+        # error_code = response['code']
+        # error_message = response['message']
         
-        logger.error(f'Access Token Response Error {error_code} {error_type}: {error_message}')
-        raise HTTPException(status_code=error_code, datail=error_type)
+        # logger.error(f'Access Token Response Error {error_code} {error_type}: {error_message}')
+        logger.error(f'{response}')
+        #raise HTTPException(status_code=error_code, datail=error_type)
+        raise HTTPException(datail=f'{response}')
     
     # get user_id and short_access_token
     user_id = response['user_id']
@@ -63,12 +69,14 @@ async def instagram_business_login(req: InstagramLoginRequest, res: Response, fa
     
     # access token response error
     if 'error' in response:
-        error_type = response['type']
-        error_code = response['code']
-        error_message = response['message']
+        # error_type = response['type']
+        # error_code = response['code']
+        # error_message = response['message']
         
-        logger.error(f'Access Token Response Error {error_code} {error_type}: {error_message}')
-        raise HTTPException(status_code=error_code, datail=error_type)
+        # logger.error(f'Access Token Response Error {error_code} {error_type}: {error_message}')
+        logger.error(f'{response}')
+        #raise HTTPException(status_code=error_code, datail=error_type)
+        raise HTTPException(datail=f'{response}')
     
     access_token = response['access_token']
     expires_in = response['expires_in']
