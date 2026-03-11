@@ -39,9 +39,9 @@ class AgentRunRequest(BaseModel):
         }
 
 class AgentReviewRequest(BaseModel):
-    shop_id: str                        # get_draft에 필수
+    shop_id: str                        
     post_id: str
-    action: str                         # "ok" | "edit" | "cancel"
+    action: str                        
     edited_caption: Optional[str] = None  # action이 "edit"일 때만
     
     class Config:
@@ -78,7 +78,7 @@ async def agent_run(req: AgentRunRequest):
     if req.trigger not in ("auto", "manual"):
         raise HTTPException(400, "trigger는 'auto' 또는 'manual'이어야 합니다.")
 
-    # ✅ 수정: manual도 photo_ids 선택사항
+    # 수정: manual도 photo_ids 선택사항
     # orchestrator가 None이면 자동으로 후보 선택
     
     try:
@@ -172,6 +172,27 @@ async def _handle_upload(shop_id: str, post_id: str, edited_caption: str = None)
             "status": "success"
         }
     )
+
+    # 업로드 성공 후 캡션 임베딩 → Vector DB 저장 (RAG 품질 향상)
+    try:
+        from agents.rag_tool import get_embedding
+        from services.vector_db import save_embedding
+
+        caption_for_embed = draft["caption"]
+        embedding = await get_embedding(caption_for_embed)
+        if embedding:
+            save_embedding(
+                shop_id=shop_id,
+                post_id=post_id,
+                caption=caption_for_embed,
+                embedding=embedding
+            )
+            print(f"[agent] AG-051 Vector DB 임베딩 저장 완료 → post_id={post_id}")
+        else:
+            print(f"[agent] AG-051 임베딩 생성 실패 → Vector DB 저장 스킵")
+    except Exception as e:
+        # 임베딩 저장 실패해도 업로드 자체는 성공으로 처리
+        print(f"[agent] AG-051 Vector DB 저장 실패 (무시됨): {e}")
 
 
 async def _handle_cancel(shop_id: str, post_id: str):

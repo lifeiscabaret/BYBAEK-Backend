@@ -1,6 +1,8 @@
 import os
 import json
 import asyncio
+import time
+from datetime import datetime, timezone, timedelta
 from semantic_kernel import Kernel
 from semantic_kernel.connectors.ai.open_ai import AzureChatCompletion
 from semantic_kernel.contents import ChatHistory
@@ -9,58 +11,43 @@ from agents.photo_select import photo_select_agent
 from agents.post_writer import post_writer_agent
 from agents.rag_tool import search_rag_context
 
-# [환경변수 검증]
-def _get_deployment_name(tier: str) -> str:
-    """
-    환경변수에서 배포 이름 가져오기 + 검증
-    
-    우선순위:
-    1. AZURE_OPENAI_DEPLOYMENT_MINI / FULL
-    2. AZURE_OPENAI_DEPLOYMENT (fallback)
-    
-    Raises:
-        ValueError: 환경변수가 없을 때
-    """
-    if tier == "mini":
-        deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT_MINI") or os.getenv("AZURE_OPENAI_DEPLOYMENT")
-    else:  # tier == "full"
-        deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT_FULL") or os.getenv("AZURE_OPENAI_DEPLOYMENT")
-    
-    if not deployment:
-        raise ValueError(
-            f"❌ Azure OpenAI 배포 이름이 설정되지 않았습니다!\n\n"
-            f".env 파일에 다음 중 하나를 추가하세요:\n"
-            f"  AZURE_OPENAI_DEPLOYMENT=gpt-4.1-mini-BYBAEK\n"
-            f"또는\n"
-            f"  AZURE_OPENAI_DEPLOYMENT_MINI=gpt-4.1-mini-BYBAEK\n"
-            f"  AZURE_OPENAI_DEPLOYMENT_FULL=gpt-4.1-BYBAEK\n"
-        )
-    
-    return deployment
+KST = timezone(timedelta(hours=9))
+
+QUALITY_THRESHOLD = 0.7
+MAX_RETRY = 2
+MIN_PHOTO_COUNT = 1
 
 MODEL_TIER = {
-    "mini": "mini",  # _get_deployment_name()으로 실제 이름 조회
+    "mini": "mini",
     "full": "full"
 }
 
 
-# [설정] 품질 게이팅 임계값
-QUALITY_THRESHOLD = 0.7     # 이 점수 미만이면 재시도
-MAX_RETRY = 2               # 초과 시 GPT-4.1로 승격
-MIN_PHOTO_COUNT = 1         # 최소 사진 수 (부족 시 날짜 범위 확장)
+def _get_deployment_name(tier: str) -> str:
+    """
+    우선순위:
+    1. AZURE_OPENAI_DEPLOYMENT_MINI / FULL
+    2. AZURE_OPENAI_DEPLOYMENT (fallback)
+    """
+    if tier == "mini":
+        deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT_MINI") or os.getenv("AZURE_OPENAI_DEPLOYMENT")
+    else:
+        deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT_FULL") or os.getenv("AZURE_OPENAI_DEPLOYMENT")
+
+    if not deployment:
+        raise ValueError(
+            f"Azure OpenAI 배포 이름이 설정되지 않았습니다!\n"
+            f".env 파일에 AZURE_OPENAI_DEPLOYMENT_MINI 또는 AZURE_OPENAI_DEPLOYMENT 를 추가하세요."
+        )
+    return deployment
 
 
-# [STEP 0] 
 def _classify_complexity(trigger: str, photo_ids: list = None) -> str:
     """
     요청 복잡도를 분류해서 사용할 모델 티어 반환
 
-    단순 → "mini" (GPT-4.1-mini)
-    복잡 → "full" (GPT-4.1)
-
-    복잡도 판단 기준:
-    - trigger == 'manual': 사장님이 직접 개입 → 더 신중한 처리 필요
-    - photo_ids >= 5장: 대량 사진 분석 → 더 강한 추론 필요
+    auto + 사진 5장 미만  -> mini
+    manual OR 사진 5장+  -> full
     """
     if trigger == "manual":
         reason = "manual 트리거 (사장님 직접 개입)"
@@ -72,47 +59,38 @@ def _classify_complexity(trigger: str, photo_ids: list = None) -> str:
         reason = "일반 자동 실행"
         tier = "mini"
 
-    print(f"[orchestrator] STEP 0 복잡도 분류 → {tier} ({reason})")
-    print(f"[orchestrator] 사용 모델: {MODEL_TIER[tier]}")
+    print(f"[orchestrator] STEP 0 복잡도 분류 -> {tier} ({reason})")
     return tier
 
-# [메인] 오케스트레이터 진입점
+# 메인 파이프라인
 async def run_pipeline(
     shop_id: str,
-    trigger: str,           # 'auto' | 'manual'
-    photo_ids: list = None  # 수동일 때만
+    trigger: str,
+    photo_ids: list = None,
 ) -> dict:
     """
-    에이전트 오케스트레이터 메인 함수
+    에이전트 오케스트레이터 메인 함수.
+    agent.py 라우터에서 호출.
 
-    Args:
-        shop_id:   샵 고유 ID
-        trigger:   'auto' (자동 예약) | 'manual' (사장님 수동 실행)
-        photo_ids: 수동 모드일 때 사장님이 선택한 사진 ID 리스트
-
-    Returns:
-        {
-            "post_id": "post_abc12345",
-            "caption": "...",
-            "hashtags": [...],
-            "photo_urls": [...],
-            "cta": "DM으로 예약 문의주세요",
-            "status": "draft",
-            "quality": {
-                "trend_score": 0.85,
-                "caption_score": 0.90,
-                "retries": 0,
-                "model_used": "mini"    ← 실제로 어떤 모델 사용했는지 기록
-            }
-        }
+    AG-050: 전체 및 스텝별 elapsed_seconds 측정 -> draft 저장 + 반환값 포함
     """
-    # STEP 0
+    # AG-050: 파이프라인 타이머 시작
+    pipeline_start = time.time()
+    step_timings: dict = {}
+    now_kst = datetime.now(KST)
+    print(f"\n{'='*60}")
+    print(f"[orchestrator] 파이프라인 시작 -> {now_kst.strftime('%Y-%m-%d %H:%M:%S KST')}")
+    print(f"  shop_id : {shop_id}  |  trigger : {trigger}")
+    print(f"{'='*60}")
+
+    # STEP 0: 복잡도 분류
     tier = _classify_complexity(trigger, photo_ids)
     kernel = _init_kernel(tier)
     total_retries = 0
 
-    # STEP 1
-    print(f"[orchestrator] STEP 1 시작 → shop_id={shop_id}, trigger={trigger}")
+    # STEP 1: 병렬 데이터 수집
+    print(f"[orchestrator] STEP 1 병렬 수집 시작")
+    _t = time.time()
 
     trend_data, brand_settings, photo_candidates, recent_posts = await asyncio.gather(
         web_search_agent(shop_id),
@@ -121,7 +99,11 @@ async def run_pipeline(
         _get_recent_posts(shop_id)
     )
 
-    # STEP 2
+    step_timings["step1_data_collection"] = round(time.time() - _t, 2)
+    print(f"[orchestrator] STEP 1 완료 -> {step_timings['step1_data_collection']}s")
+
+    # STEP 2: 트렌드 품질 평가
+    _t = time.time()
     trend_score = await _evaluate_trend(kernel, trend_data)
     print(f"[orchestrator] STEP 2 트렌드 품질 점수: {trend_score:.2f}")
 
@@ -129,17 +111,22 @@ async def run_pipeline(
     while trend_score < QUALITY_THRESHOLD and retry_count < MAX_RETRY:
         retry_count += 1
         total_retries += 1
-        print(f"[orchestrator] 트렌드 품질 미달 → 재시도 {retry_count}/{MAX_RETRY}")
+        print(f"[orchestrator] 트렌드 품질 미달 -> 재시도 {retry_count}/{MAX_RETRY}")
         trend_data = await web_search_agent(shop_id, force_refresh=True)
         trend_score = await _evaluate_trend(kernel, trend_data)
         print(f"[orchestrator] 재시도 후 트렌드 점수: {trend_score:.2f}")
 
         if retry_count >= MAX_RETRY and trend_score < QUALITY_THRESHOLD and tier == "mini":
-            print(f"[orchestrator] 재시도 소진 → GPT-4.1로 승격해서 마지막 평가")
+            print(f"[orchestrator] 재시도 소진 -> GPT-4.1로 승격")
             tier = "full"
             kernel = _init_kernel(tier)
 
-    # STEP 3
+    step_timings["step2_trend_eval"] = round(time.time() - _t, 2)
+    print(f"[orchestrator] STEP 2 완료 -> {step_timings['step2_trend_eval']}s")
+
+    # STEP 3: 사진 선택
+    _t = time.time()
+
     if trigger == "auto":
         selected_photos = await photo_select_agent(
             shop_id=shop_id,
@@ -147,9 +134,8 @@ async def run_pipeline(
             photo_candidates=photo_candidates,
             brand_settings=brand_settings
         )
-
         if len(selected_photos) < MIN_PHOTO_COUNT:
-            print(f"[orchestrator] 사진 부족 ({len(selected_photos)}장) → 날짜 범위 확장 후 재요청")
+            print(f"[orchestrator] 사진 부족 ({len(selected_photos)}장) -> 날짜 범위 확장")
             extended_candidates = await _get_photo_candidates(shop_id, extend_days=30)
             selected_photos = await photo_select_agent(
                 shop_id=shop_id,
@@ -158,11 +144,9 @@ async def run_pipeline(
                 brand_settings=brand_settings
             )
             print(f"[orchestrator] 확장 후 사진 수: {len(selected_photos)}장")
-
-    elif trigger == "manual":
-        # ✅ 수정: photo_ids가 None이면 자동 선택
+    else:
         if photo_ids is None or len(photo_ids) == 0:
-            print(f"[orchestrator] manual이지만 photo_ids 없음 → 자동 선택 모드")
+            print(f"[orchestrator] manual이지만 photo_ids 없음 -> 자동 선택 모드")
             selected_photos = await photo_select_agent(
                 shop_id=shop_id,
                 trend_data=trend_data,
@@ -170,12 +154,14 @@ async def run_pipeline(
                 brand_settings=brand_settings
             )
         else:
-            print(f"[orchestrator] manual → 사장님 선택 사진 {len(photo_ids)}장 사용")
+            print(f"[orchestrator] manual -> 사장님 선택 사진 {len(photo_ids)}장 사용")
             selected_photos = await _get_photos_by_ids(shop_id, photo_ids)
 
-    print(f"[orchestrator] STEP 3 완료 → 선택된 사진: {len(selected_photos)}장")
+    step_timings["step3_photo_select"] = round(time.time() - _t, 2)
+    print(f"[orchestrator] STEP 3 완료 -> {step_timings['step3_photo_select']}s  |  선택 사진: {len(selected_photos)}장")
 
-    # STEP 4
+    # STEP 4: RAG
+    _t = time.time()
     print(f"[orchestrator] STEP 4 RAG 시작")
 
     rag_context = await search_rag_context(
@@ -185,6 +171,12 @@ async def run_pipeline(
         brand_settings=brand_settings,
         recent_posts=recent_posts
     )
+
+    step_timings["step4_rag"] = round(time.time() - _t, 2)
+    print(f"[orchestrator] STEP 4 RAG 완료 -> {step_timings['step4_rag']}s")
+
+    # STEP 5: 게시물 작성 + Self-Eval
+    _t = time.time()
 
     post_draft = await post_writer_agent(
         shop_id=shop_id,
@@ -202,7 +194,7 @@ async def run_pipeline(
     while caption_score < QUALITY_THRESHOLD and retry_count < MAX_RETRY:
         retry_count += 1
         total_retries += 1
-        print(f"[orchestrator] 캡션 품질 미달 → 재작성 지시 {retry_count}/{MAX_RETRY}")
+        print(f"[orchestrator] 캡션 품질 미달 -> 재작성 지시 {retry_count}/{MAX_RETRY}")
 
         post_draft = await post_writer_agent(
             shop_id=shop_id,
@@ -217,9 +209,8 @@ async def run_pipeline(
         caption_score = await _evaluate_caption(kernel, post_draft, brand_settings)
         print(f"[orchestrator] 재작성 후 캡션 점수: {caption_score:.2f}")
 
-        # 재시도 2회 소진 + 여전히 미달 → GPT-4.1로 승격 후 최종 시도
         if retry_count >= MAX_RETRY and caption_score < QUALITY_THRESHOLD and tier == "mini":
-            print(f"[orchestrator] 재시도 소진 → GPT-4.1로 승격해서 최종 재작성")
+            print(f"[orchestrator] 재시도 소진 -> GPT-4.1로 승격해서 최종 재작성")
             tier = "full"
             kernel = _init_kernel(tier)
             post_draft = await post_writer_agent(
@@ -234,16 +225,40 @@ async def run_pipeline(
             )
             caption_score = await _evaluate_caption(kernel, post_draft, brand_settings)
             print(f"[orchestrator] GPT-4.1 승격 후 캡션 점수: {caption_score:.2f}")
-            break   # 승격 후에는 더 이상 루프 없이 결과 사용
+            break
 
-    # STEP 6
+    step_timings["step5_post_writer"] = round(time.time() - _t, 2)
+    print(f"[orchestrator] STEP 5 완료 -> {step_timings['step5_post_writer']}s")
+
+    # STEP 6: 초안 저장 + 알림 (AG-050: elapsed 포함)
+    _t = time.time()
+    elapsed_seconds = round(time.time() - pipeline_start, 2)
+
     post_id = await _generate_post_id()
     await asyncio.gather(
-        _save_draft(shop_id, post_id, post_draft, selected_photos),
+        _save_draft(
+            shop_id, post_id, post_draft, selected_photos,
+            elapsed_seconds=elapsed_seconds,
+            step_timings=step_timings,
+            model_used=tier,
+            caption_score=round(caption_score, 2),
+            trend_score=round(trend_score, 2),
+        ),
         _send_push_notification(shop_id, post_draft)
     )
 
-    print(f"[orchestrator] 완료 → post_id={post_id}, 모델={tier}, 총 재시도={total_retries}회")
+    step_timings["step6_save_draft"] = round(time.time() - _t, 2)
+
+    # AG-050: 최종 로깅
+    total_elapsed = round(time.time() - pipeline_start, 2)
+    print(f"\n{'='*60}")
+    print(f"[orchestrator] 파이프라인 완료")
+    print(f"  post_id      : {post_id}")
+    print(f"  총 실행 시간 : {total_elapsed}s  (태경님 스케줄러 -40분 타이밍 참고용)")
+    print(f"  모델         : {tier}  |  총 재시도: {total_retries}회")
+    print(f"  캡션 점수    : {caption_score:.2f}  |  트렌드 점수: {trend_score:.2f}")
+    print(f"  스텝별 시간  : {step_timings}")
+    print(f"{'='*60}\n")
 
     return {
         "post_id": post_id,
@@ -256,19 +271,15 @@ async def run_pipeline(
             "trend_score": round(trend_score, 2),
             "caption_score": round(caption_score, 2),
             "retries": total_retries,
-            "model_used": tier      # 실제로 어떤 모델 사용했는지
+            "model_used": tier,
+            "elapsed_seconds": total_elapsed,       # AG-050
+            "step_timings": step_timings,            # AG-050
         }
     }
 
-
-# [평가]
+# 평가 함수
 async def _evaluate_trend(kernel: Kernel, trend_data: dict) -> float:
-    """
-    트렌드 결과 품질 평가
-    - 바버샵 전용 스타일 키워드 포함 여부
-    - 여성 헤어, 미용실 관련 내용 혼입 여부
-    - 0.0 (완전 무관) ~ 1.0 (완벽) 점수 반환
-    """
+    """트렌드 결과 품질 평가 (0.0 ~ 1.0)"""
     try:
         trend_text = trend_data.get("trend", "")
         if not trend_text:
@@ -300,30 +311,16 @@ async def _evaluate_trend(kernel: Kernel, trend_data: dict) -> float:
 
 
 async def _evaluate_caption(kernel: Kernel, post_draft: dict, brand_settings: dict) -> float:
-    """
-    캡션 품질 다면 평가 (5개 차원)
-    
-    바버샵 특화 평가:
-    - reservation_inquiry: 예약 문의 전환율 예측
-    - fade_keyword: 페이드컷 키워드 배치 (고객 1순위 니즈)
-    - cta_strength: CTA 강도
-    - brand_tone: 브랜드 톤
-    - target_appeal: 타겟 어필
-    
-    Returns:
-        float: 0.0~1.0 (가중 평균)
-    """
+    """캡션 품질 다면 평가 5개 차원 (가중 평균, 예약 문의 40%)"""
     try:
         caption = post_draft.get("caption", "")
         hashtags = post_draft.get("hashtags", [])
         cta = post_draft.get("cta", "")
-        
-        # ✅ brand_tone 리스트 처리
+
         brand_tone = brand_settings.get("brand_tone", "")
         if isinstance(brand_tone, list):
             brand_tone = " ".join(brand_tone)
-        
-        # ✅ forbidden_words 리스트 처리
+
         forbidden_words = brand_settings.get("forbidden_words", [])
         if isinstance(forbidden_words, str):
             forbidden_words = [w.strip() for w in forbidden_words.split(",")]
@@ -352,37 +349,28 @@ async def _evaluate_caption(kernel: Kernel, post_draft: dict, brand_settings: di
 [평가 기준 5가지] (각 0.0~1.0)
 
 1. reservation_inquiry (예약 문의 전환율)
-   - 이 캡션을 보고 예약 DM 보낼 확률은?
    - CTA 긴박감: "지금 DM 주시면" (0.8) vs "문의주세요" (0.4)
    - 행동 유도: "오늘 3자리 남음" (0.9)
 
 2. fade_keyword (페이드컷 키워드)
-   - 고객 1순위 니즈: 페이드컷
-   - 첫 문장에 "페이드" 포함? → 1.0
-   - 본문 어디든 포함? → 0.7
-   - 미포함? → 0.3
+   - 첫 문장에 "페이드" 포함? -> 1.0 / 본문 포함 -> 0.7 / 미포함 -> 0.3
 
 3. cta_strength (CTA 강도)
-   - 수동적 (0.3): "문의주세요"
-   - 능동적 (0.7): "지금 DM 주시면"
-   - 초강력 (1.0): "오늘 3자리 남음"
+   - 수동적 (0.3) / 능동적 (0.7) / 초강력 (1.0)
 
 4. brand_tone (브랜드 톤)
-   - 설정된 톤과 일치?
-   - 금칙어 포함 시 -0.5
+   - 설정된 톤과 일치? 금칙어 포함 시 -0.5
 
 5. target_appeal (타겟 어필)
    - 20-40대 남성이 공감하는 문구?
-   - 직장인: 깔끔함, 전문성
-   - 대학생: 트렌디함, 스타일
 
-0.0~1.0 숫자 5개만 출력 (JSON):
+JSON으로만 응답:
 {{
-  "reservation_inquiry": 0.0~1.0,
-  "fade_keyword": 0.0~1.0,
-  "cta_strength": 0.0~1.0,
-  "brand_tone": 0.0~1.0,
-  "target_appeal": 0.0~1.0
+  "reservation_inquiry": 0.0,
+  "fade_keyword": 0.0,
+  "cta_strength": 0.0,
+  "brand_tone": 0.0,
+  "target_appeal": 0.0
 }}"""
         )
 
@@ -392,11 +380,9 @@ async def _evaluate_caption(kernel: Kernel, post_draft: dict, brand_settings: di
             settings=chat_service.instantiate_prompt_execution_settings()
         )
 
-        raw = str(response).strip()
-        raw = raw.replace("```json", "").replace("```", "").strip()
+        raw = str(response).strip().replace("```json", "").replace("```", "").strip()
         scores = json.loads(raw)
 
-        # 가중 평균 (예약 문의 40%)
         total_score = (
             scores.get("reservation_inquiry", 0.5) * 0.40 +
             scores.get("fade_keyword", 0.5) * 0.25 +
@@ -404,11 +390,13 @@ async def _evaluate_caption(kernel: Kernel, post_draft: dict, brand_settings: di
             scores.get("brand_tone", 0.5) * 0.10 +
             scores.get("target_appeal", 0.5) * 0.10
         )
-        
+
         print(f"[orchestrator] 캡션 평가 상세:")
-        print(f"  - 예약문의율: {scores.get('reservation_inquiry', 0):.2f}")
+        print(f"  - 예약문의율 : {scores.get('reservation_inquiry', 0):.2f}")
         print(f"  - 페이드키워드: {scores.get('fade_keyword', 0):.2f}")
-        print(f"  - CTA강도: {scores.get('cta_strength', 0):.2f}")
+        print(f"  - CTA강도    : {scores.get('cta_strength', 0):.2f}")
+        print(f"  - 브랜드톤   : {scores.get('brand_tone', 0):.2f}")
+        print(f"  - 타겟어필   : {scores.get('target_appeal', 0):.2f}")
 
         return max(0.0, min(1.0, total_score))
 
@@ -416,20 +404,10 @@ async def _evaluate_caption(kernel: Kernel, post_draft: dict, brand_settings: di
         print(f"[orchestrator] 캡션 평가 실패: {e}")
         return 0.5
 
+# 유틸
 def _init_kernel(tier: str = "mini") -> Kernel:
-    """
-    티어에 따라 다른 모델로 Kernel 초기화
-
-    Args:
-        tier: "mini" → GPT-4.1-mini (기본)
-              "full" → GPT-4.1 (복잡한 요청 / 재시도 소진 시 승격)
-
-    Raises:
-        ValueError: 환경변수가 없을 때
-    """
     deployment = _get_deployment_name(tier)
-    print(f"[orchestrator] Kernel 초기화 → tier={tier}, deployment={deployment}")
-
+    print(f"[orchestrator] Kernel 초기화 -> tier={tier}, deployment={deployment}")
     kernel = Kernel()
     kernel.add_service(AzureChatCompletion(
         service_id="azure_openai",
@@ -439,8 +417,7 @@ def _init_kernel(tier: str = "mini") -> Kernel:
     ))
     return kernel
 
-# TODO: 아래 함수들은 지연님 함수로 교체
-
+# DB 연동 함수 (fallback 데이터 포함)
 async def _get_brand_settings(shop_id: str) -> dict:
     from services.cosmos_db import get_onboarding
     data = get_onboarding(shop_id)
@@ -453,8 +430,10 @@ async def _get_brand_settings(shop_id: str) -> dict:
         }
 
     def to_list(val):
-        if isinstance(val, list): return val
-        if isinstance(val, str) and val: return [v.strip() for v in val.split(",")]
+        if isinstance(val, list):
+            return val
+        if isinstance(val, str) and val:
+            return [v.strip() for v in val.split(",")]
         return []
 
     shop = data.get("shop_info", {})
@@ -462,6 +441,8 @@ async def _get_brand_settings(shop_id: str) -> dict:
         "brand_tone": shop.get("brand_tone", "친근하고 편안한 말투"),
         "forbidden_words": to_list(shop.get("forbidden_words")),
         "preferred_styles": to_list(shop.get("preferred_styles")),
+        "exclude_conditions": to_list(shop.get("exclude_conditions")),
+        "hashtag_style": shop.get("hashtag_style", "감성형"),
         "cta": shop.get("cta", "DM으로 예약 문의주세요"),
         "photo_range": {"min": 1, "max": 5},
         "feed_style": shop.get("feed_style", {}),
@@ -486,20 +467,46 @@ async def _get_photos_by_ids(shop_id: str, photo_ids: list) -> list:
     return [p for p in all_photos if p.get("id") in photo_ids]
 
 
-async def _save_draft(shop_id: str, post_id: str, post_draft: dict, selected_photos: list):
+async def _save_draft(
+    shop_id: str,
+    post_id: str,
+    post_draft: dict,
+    selected_photos: list,
+    elapsed_seconds: float = 0.0,
+    step_timings: dict = None,
+    model_used: str = "mini",
+    caption_score: float = 0.0,
+    trend_score: float = 0.0,
+):
+    """
+    초안 저장.
+    AG-050: elapsed_seconds / step_timings / model_used / caption_score 포함.
+    태경님 스케줄러가 -40분 타이밍 설정 시 elapsed_seconds를 실측 근거로 사용.
+    """
     from services.cosmos_db import save_draft
+    now_kst = datetime.now(KST)
+    review_deadline = now_kst + timedelta(minutes=29)
+
     save_draft(
         shop_id=shop_id,
         post_id=post_id,
         caption=post_draft.get("caption", ""),
         hashtags=post_draft.get("hashtags", []),
         photo_ids=[p.get("id", p.get("photo_id")) for p in selected_photos],
-        cta=post_draft.get("cta", "")
+        cta=post_draft.get("cta", ""),
+        # AG-050
+        elapsed_seconds=elapsed_seconds,
+        step_timings=step_timings or {},
+        model_used=model_used,
+        caption_score=caption_score,
+        trend_score=trend_score,
+        review_deadline=review_deadline.isoformat(),
+        created_at=now_kst.isoformat(),
     )
 
 
 async def _send_push_notification(shop_id: str, post_draft: dict):
-    # TODO: Windows 토스트 알림 + 이메일 백업
+    # TODO: Gmail 알림 (태경님 구현 후 연결)
     pass
 
 
