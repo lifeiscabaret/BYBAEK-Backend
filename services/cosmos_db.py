@@ -166,6 +166,7 @@ def save_photo(shop_id: str, photo_data: dict) -> bool:
         "id": photo_data['photo_id'],
         "shop_id": shop_id,
         "blob_url": photo_data['blob_url'], 
+        "onedrive_url": photo_data['onedrive_url'],
         "original_name": photo_data['name'],
         "used_yn": False,
         "created_at": photo_data['last_modified']
