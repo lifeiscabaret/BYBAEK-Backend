@@ -1,142 +1,131 @@
+"""
+역할: 사진 필터링 요청 및 상태 조회 라우터
+흐름: OneDrive 동기화 완료 후 호출 -> 백그라운드 필터링(1,2차) 실행 -> 프론트엔드 폴링으로 결과 확인
+"""
+
+import os
 from fastapi import APIRouter, HTTPException, BackgroundTasks
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
+from services.cosmos_db import get_all_photos_by_shop
 
 router = APIRouter()
 
-
-# 요청/응답 모델
+# --- 요청/응답 모델 ---
 
 class FilterTriggerRequest(BaseModel):
     shop_id: str
     force_refilter: bool = False    # True면 이미 필터링된 사진도 재처리
 
-
 class FilterTriggerResponse(BaseModel):
     shop_id: str
     status: str                     # "started" | "error"
-    total_photos: int
+    total: int
     message: str
-
 
 class FilterStatusResponse(BaseModel):
     shop_id: str
     total: int
-    stage1_passed: int
-    stage2_passed: int
-    pending: int                    # 아직 필터링 안 된 사진 수
+    passed: int                     # is_usable == True
+    failed: int                     # is_usable == False
+    pending: int                    # is_usable == None
+    status: str                     # "done" | "in_progress" | "no_photos"
 
-
-# 엔드포인트 
+# --- 엔드포인트 ---
 
 @router.post("/filter", response_model=FilterTriggerResponse)
 async def trigger_photo_filter(
     req: FilterTriggerRequest,
     background_tasks: BackgroundTasks
 ):
-    """
-    사진 필터링 트리거.
-
-    OneDrive 동기화 완료 후 호출.
-    CosmosDB Photo 컨테이너에서 미필터링 사진 목록 조회 → 백그라운드로 필터링 실행.
-
-    백그라운드 실행이므로 즉시 "started" 응답 반환.
-    진행 상황은 GET /api/photos/status 로 폴링.
-    """
     try:
-        photo_list = _get_unfiltered_photos(req.shop_id, req.force_refilter)
+        all_photos = get_all_photos_by_shop(req.shop_id)
+        
+        if req.force_refilter:
+            photo_list = all_photos
+        else:
+            photo_list = [p for p in all_photos if p.get("stage1_pass") is None]
 
         if not photo_list:
             return FilterTriggerResponse(
-                shop_id=req.shop_id,
-                status="started",
-                total_photos=0,
-                message="필터링 대상 사진 없음"
+                shop_id=req.shop_id, status="started", total=0, message="새로운 사진이 없습니다."
             )
 
-        # 백그라운드 실행 (응답 먼저 반환)
+        # ✅ 다시 백그라운드 방식으로 복구!
         background_tasks.add_task(
-            _run_filter_background,
+            _run_filter_process,
             shop_id=req.shop_id,
             photo_list=photo_list
         )
 
-        print(f"[photos] 필터링 트리거 → shop_id={req.shop_id}, 대상={len(photo_list)}장")
         return FilterTriggerResponse(
             shop_id=req.shop_id,
             status="started",
-            total_photos=len(photo_list),
-            message=f"{len(photo_list)}장 필터링 시작"
+            total=len(photo_list),
+            message=f"{len(photo_list)}장의 사진에 대해 필터링을 백그라운드에서 시작합니다."
         )
 
     except Exception as e:
+        print(f"[Photo Router] Trigger Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/status/{shop_id}", response_model=FilterStatusResponse)
 async def get_filter_status(shop_id: str):
     """
-    필터링 진행 상황 조회. 프론트 폴링용.
-
-    Photo 컨테이너에서 단계별 카운트 반환.
+    [STEP 2] 필터링 진행 상황 조회
+    프론트엔드에서 폴링(Polling)하여 'done'이 될 때까지 확인합니다.
     """
     try:
-        from services.cosmos_db import get_all_photos_by_shop
+        all_photos = get_all_photos_by_shop(shop_id)
+        
+        if not all_photos:
+            return FilterStatusResponse(
+                shop_id=shop_id, total=0, passed=0, failed=0, pending=0, status="no_photos"
+            )
 
-        photos = get_all_photos_by_shop(shop_id)
+        # 상태 집계 (is_usable 기준)
+        passed  = sum(1 for p in all_photos if p.get("is_usable") is True)
+        failed  = sum(1 for p in all_photos if p.get("is_usable") is False)
+        # 1차 필터링 결과조차 없는 사진들을 대기 중으로 판단
+        pending = sum(1 for p in all_photos if p.get("stage1_pass") is None)
 
-        total         = len(photos)
-        stage1_passed = sum(1 for p in photos if p.get("stage1_pass") is True)
-        stage2_passed = sum(1 for p in photos if p.get("is_usable") is True)
-        pending       = sum(1 for p in photos if p.get("stage1_pass") is None)
+        # 1차 통과자 중 2차(is_usable)가 결정되지 않은게 없는지 확인하는 로직 추가 예정
+        # pending == 0 을 완료 기준으로 잡음.
+        current_status = "done" if pending == 0 else "in_progress"
 
         return FilterStatusResponse(
             shop_id=shop_id,
-            total=total,
-            stage1_passed=stage1_passed,
-            stage2_passed=stage2_passed,
-            pending=pending
+            total=len(all_photos),
+            passed=passed,
+            failed=failed,
+            pending=pending,
+            status=current_status
         )
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"[Photo Router] Status Error: {e}")
+        raise HTTPException(status_code=500, detail=f"상태 조회 실패: {str(e)}")
 
 
-# 헬퍼 
-def _get_unfiltered_photos(shop_id: str, force_refilter: bool = False) -> list:
-    """
-    CosmosDB Photo 컨테이너에서 필터링 대상 사진 목록 조회.
+# --- 내부 헬퍼 함수 ---
 
-    force_refilter=False: stage1_pass가 None인 사진만 (미처리)
-    force_refilter=True : 모든 사진 재처리
-    """
-    from services.cosmos_db import get_all_photos_by_shop
-
-    photos = get_all_photos_by_shop(shop_id)
-
-    if not force_refilter:
-        photos = [p for p in photos if p.get("stage1_pass") is None]
-
-    return [
-        {
-            "image_id": p.get("id"),
-            "blob_url": p.get("blob_url")
-        }
-        for p in photos
-        if p.get("id") and p.get("blob_url")
-    ]
-
-
-async def _run_filter_background(shop_id: str, photo_list: list):
-    """백그라운드 필터링 실행"""
+async def _run_filter_process(shop_id: str, photo_list: list):
+    print(f"DEBUG: 1. 프로세스 진입 (shop_id: {shop_id})")
     try:
-        from agents.photo_filter import run_photo_filter
-        result = await run_photo_filter(shop_id, photo_list)
-        print(
-            f"[photos] 필터링 완료 → shop_id={shop_id} | "
-            f"전체={result['total']} | "
-            f"1차={result['stage1_passed']} | "
-            f"2차={result['stage2_passed']}"
-        )
+        from agents.photo_filter import run_stage2_filter
+        print("DEBUG: 2. 에이전트 임포트 성공")
+
+        prepared_list = [
+            {"image_id": p.get("id") or p.get("photo_id"), "blob_url": p.get("blob_url")}
+            for p in photo_list if p.get("blob_url")
+        ]
+        print(f"DEBUG: 3. 사진 준비 완료 ({len(prepared_list)}장)")
+
+        result = await run_stage2_filter(shop_id=shop_id, stage1_pass_list=prepared_list)
+        print(f"DEBUG: 4. 결과: {result}")
+
     except Exception as e:
-        print(f"[photos] 백그라운드 필터링 실패 (shop_id={shop_id}): {e}")
+        print(f"❌ DEBUG ERROR: {str(e)}")
+        import traceback
+        traceback.print_exc()
