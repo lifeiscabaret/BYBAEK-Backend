@@ -238,12 +238,22 @@ async def run_pipeline(
 
     # STEP 6
     post_id = await _generate_post_id()
-    await asyncio.gather(
-        _save_draft(shop_id, post_id, post_draft, selected_photos),
-        _send_push_notification(shop_id, post_draft)
-    )
+    need_review = brand_settings.get("insta_review_bfr_upload_yn", True)
 
-    print(f"[orchestrator] 완료 → post_id={post_id}, 모델={tier}, 총 재시도={total_retries}회")
+    await _save_draft(shop_id, post_id, post_draft, selected_photos)
+
+    if not need_review:
+        # 자동 업로드: 검토 없이 바로 인스타 업로드
+        print(f"[orchestrator] STEP 6 자동 업로드 (insta_review_bfr_upload_yn=False)")
+        upload_status = await _auto_upload_instagram(shop_id, post_id, post_draft, selected_photos)
+        status_str = "uploaded" if upload_status else "draft"
+    else:
+        # 검토 후 업로드: 푸시 알림만 발송
+        print(f"[orchestrator] STEP 6 검토 대기 (insta_review_bfr_upload_yn=True)")
+        await _send_push_notification(shop_id, post_draft)
+        status_str = "draft"
+
+    print(f"[orchestrator] 완료 → post_id={post_id}, 모델={tier}, 총 재시도={total_retries}회, 상태={status_str}")
 
     return {
         "post_id": post_id,
@@ -251,12 +261,12 @@ async def run_pipeline(
         "hashtags": post_draft["hashtags"],
         "photo_urls": [p["blob_url"] for p in selected_photos],
         "cta": post_draft["cta"],
-        "status": "draft",
+        "status": status_str,
         "quality": {
             "trend_score": round(trend_score, 2),
             "caption_score": round(caption_score, 2),
             "retries": total_retries,
-            "model_used": tier      # 실제로 어떤 모델 사용했는지
+            "model_used": tier
         }
     }
 
@@ -439,8 +449,6 @@ def _init_kernel(tier: str = "mini") -> Kernel:
     ))
     return kernel
 
-# TODO: 아래 함수들은 지연님 함수로 교체
-
 async def _get_brand_settings(shop_id: str) -> dict:
     from services.cosmos_db import get_onboarding
     data = get_onboarding(shop_id)
@@ -465,7 +473,8 @@ async def _get_brand_settings(shop_id: str) -> dict:
         "cta": shop.get("cta", "DM으로 예약 문의주세요"),
         "photo_range": {"min": 1, "max": 5},
         "feed_style": shop.get("feed_style", {}),
-        "brand_differentiation": shop.get("shop_intro", "")
+        "brand_differentiation": shop.get("shop_intro", ""),
+        "insta_review_bfr_upload_yn": shop.get("insta_review_bfr_upload_yn", True)  # 기본값 True (검토 후 업로드)
     }
 
 
@@ -496,6 +505,72 @@ async def _save_draft(shop_id: str, post_id: str, post_draft: dict, selected_pho
         photo_ids=[p.get("id", p.get("photo_id")) for p in selected_photos],
         cta=post_draft.get("cta", "")
     )
+
+
+async def _auto_upload_instagram(
+    shop_id: str,
+    post_id: str,
+    post_draft: dict,
+    selected_photos: list
+) -> bool:
+    """
+    검토 없이 자동 업로드.
+    insta_review_bfr_upload_yn=False 일 때 STEP 6에서 호출.
+    """
+    try:
+        from services.cosmos_db import get_auth, save_post_data
+
+        # 1. 인스타 인증 정보 조회
+        shop_auth = get_auth(shop_id)
+        if not shop_auth:
+            print(f"[orchestrator] 인스타 인증 정보 없음 → 업로드 스킵")
+            return False
+
+        insta_user_id    = shop_auth.get("insta_user_id")
+        insta_access_token = shop_auth.get("insta_access_token")
+
+        if not insta_user_id or not insta_access_token:
+            print(f"[orchestrator] insta_user_id 또는 access_token 없음 → 업로드 스킵")
+            return False
+
+        # 2. 캡션 구성 (caption + hashtags + cta)
+        caption    = post_draft.get("caption", "")
+        hashtags   = post_draft.get("hashtags", [])
+        cta        = post_draft.get("cta", "")
+        full_caption = (caption + "\n\n" + " ".join(hashtags) + "\n" + cta).strip()
+
+        # 3. 이미지 URL 리스트
+        image_urls = [p["blob_url"] for p in selected_photos if p.get("blob_url")]
+        if not image_urls:
+            print(f"[orchestrator] 업로드할 이미지 없음 → 스킵")
+            return False
+
+        # 4. Instagram 업로드 호출
+        from routers.instagram import create_image_container, create_carousel_container, publish_container
+        container_ids = [
+            create_image_container(insta_user_id, insta_access_token, url)
+            for url in image_urls
+        ]
+        creation_id = create_carousel_container(insta_user_id, insta_access_token, container_ids, full_caption)
+        media_id    = publish_container(insta_user_id, creation_id, insta_access_token)
+
+        # 5. 업로드 결과 저장
+        save_post_data(shop_id, {
+            "id":           post_id,
+            "caption":      caption,
+            "hashtags":     hashtags,
+            "photo_ids":    [p.get("id", p.get("photo_id")) for p in selected_photos],
+            "cta":          cta,
+            "status":       "success",
+            "instagram_media_id": media_id
+        })
+
+        print(f"[orchestrator] 자동 업로드 성공 → media_id={media_id}")
+        return True
+
+    except Exception as e:
+        print(f"[orchestrator] 자동 업로드 실패: {e} → draft 상태 유지")
+        return False
 
 
 async def _send_push_notification(shop_id: str, post_draft: dict):

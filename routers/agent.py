@@ -78,7 +78,7 @@ async def agent_run(req: AgentRunRequest):
     if req.trigger not in ("auto", "manual"):
         raise HTTPException(400, "trigger는 'auto' 또는 'manual'이어야 합니다.")
 
-    # ✅ 수정: manual도 photo_ids 선택사항
+    # 수정: manual도 photo_ids 선택사항
     # orchestrator가 None이면 자동으로 후보 선택
     
     try:
@@ -157,19 +157,49 @@ async def _handle_upload(shop_id: str, post_id: str, edited_caption: str = None)
     if edited_caption:
         draft["caption"] = edited_caption
 
-    # TODO: 태경님 instagram 업로드 완성되면 주석 해제
-    # from routers.instagram import upload_to_instagram
-    # await upload_to_instagram(draft)
+    # 인스타 인증 정보 조회
+    from services.cosmos_db import get_auth
+    shop_auth      = get_auth(shop_id) or {}
+    insta_user_id  = shop_auth.get("insta_user_id")
+    access_token   = shop_auth.get("insta_access_token")
+
+    # 캡션 구성 (caption + hashtags + cta)
+    caption  = draft["caption"]
+    hashtags = draft.get("hashtags", [])
+    cta      = draft.get("cta", "")
+    full_caption = f"{caption}\n\n{' '.join(hashtags)}\n{cta}".strip()
+
+    # blob_url 리스트 조회
+    from services.cosmos_db import get_photo_by_id
+    photo_ids  = draft.get("photo_ids", [])
+    image_urls = []
+    for pid in photo_ids:
+        photo = get_photo_by_id(shop_id, pid)
+        if photo and photo.get("blob_url"):
+            image_urls.append(photo["blob_url"])
+
+    # Instagram 업로드
+    instagram_media_id = None
+    if insta_user_id and access_token and image_urls:
+        try:
+            from routers.instagram import create_image_container, create_carousel_container, publish_container
+            container_ids  = [create_image_container(insta_user_id, access_token, url) for url in image_urls]
+            creation_id    = create_carousel_container(insta_user_id, access_token, container_ids, full_caption)
+            instagram_media_id = publish_container(insta_user_id, creation_id, access_token)
+            print(f"[agent] 인스타 업로드 성공 → media_id={instagram_media_id}")
+        except Exception as e:
+            print(f"[agent] 인스타 업로드 실패: {e} → status=fail 로 저장")
 
     save_post_data(
         shop_id=shop_id,
         post_data={
-            "id": post_id,
-            "caption": draft["caption"],
-            "hashtags": draft.get("hashtags", []),
-            "photo_ids": draft.get("photo_ids", []),
-            "cta": draft.get("cta", ""),
-            "status": "success"
+            "id":                  post_id,
+            "caption":             caption,
+            "hashtags":            hashtags,
+            "photo_ids":           photo_ids,
+            "cta":                 cta,
+            "status":              "success" if instagram_media_id else "fail",
+            "instagram_media_id":  instagram_media_id
         }
     )
 
