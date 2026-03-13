@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException, Query
 from typing import List, Optional
 from pydantic import BaseModel
+import uuid
 
 from services.cosmos_db import get_all_photos_by_shop   # 전체사진 조회
 from services.cosmos_db import get_photos_by_album      # 앨범 상세 조회
@@ -43,9 +44,14 @@ async def create_album(req: AlbumCreateRequest):
     # photo_ids 리스트를 함수 형식에 맞게 변환 (dict 형태의 list)
     photo_list = [{"photo_id": pid} for pid in req.photo_ids]
     
+    # 🚨 [수정] album_id가 "new"이거나 없으면 새로 생성
+    actual_album_id = req.album_id
+    if not actual_album_id or actual_album_id == "new":
+        actual_album_id = str(uuid.uuid4()) # 새 UUID 생성
+
     success = save_album(
         shop_id=req.shop_id, 
-        album_id=req.album_id, # None으로 주면 함수에서 자동 생성함
+        album_id=actual_album_id, # None으로 주면 함수에서 자동 생성함
         photo_list=photo_list, 
         album_name=req.album_name,
         description=req.description
@@ -54,7 +60,7 @@ async def create_album(req: AlbumCreateRequest):
     if not success:
         raise HTTPException(status_code=500, detail="앨범 저장에 실패했습니다.")
     
-    return {"status": "success", "message": "앨범이 생성되었습니다."}
+    return {"status": "success", "album_id": actual_album_id}
 
 # 앨범 삭제 API
 @router.delete("/albums/{shop_id}/{album_id}")
