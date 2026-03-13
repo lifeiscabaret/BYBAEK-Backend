@@ -102,12 +102,12 @@ async def instagram_business_login(req: InstagramLoginRequest, res: Response, fa
 @router.get("/me")
 async def get_my_info(request: Request):
     ms_user_id = request.headers.get("X-MS-CLIENT-PRINCIPAL-ID")
-    ms_user_email = request.headers.get("X-MS-CLIENT-PRINCIPAL-NAME")
+    ms_user_name = request.headers.get("X-MS-CLIENT-PRINCIPAL-NAME")
     
     if not ms_user_id:
         # 로컬에서 uvicorn으로 돌릴 때 헤더가 없으므로 강제로 ID를 할당
         ms_user_id = "test_barber_jiyeon" 
-        ms_user_email = "jiyeon@test.com"
+        ms_user_name = "jiyeon@test.com"
 
     current_time = datetime.utcnow().isoformat()
 
@@ -115,7 +115,7 @@ async def get_my_info(request: Request):
     existing_user = get_auth(ms_user_id)
     
     auth_data = {
-        "email": ms_user_email,
+        "name": ms_user_name,
         "last_login_at": current_time, # 매번 업데이트
     }
 

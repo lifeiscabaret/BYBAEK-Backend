@@ -13,6 +13,7 @@ DATE        AUTHOR          NOTE
 
 from services.cosmos_client import get_cosmos_container
 import logging
+import uuid
 from datetime import datetime, timedelta
 from azure.cosmos.errors import CosmosResourceNotFoundError
 from services.blob_storage import delete_blob
@@ -204,7 +205,7 @@ def get_onboarding(shop_id: str) -> dict:
             "hashtag_style", "cta", "shop_intro", 
             "forbidden_words", "locale", "city", "language",
             "is_kakao_connected", "is_insta_connected", "is_gmail_connected",
-            "rag_reference", "is_ms_connected", "gmail_address" ,"district"
+            "rag_reference", "is_ms_connected", "owner_email" ,"district"
         ]
 
         filtered_shop_info = {k: shop_item.get(k) for k in allowed_keys if k in shop_item}
@@ -403,7 +404,7 @@ def save_onboarding(shop_id: str, data: dict) -> bool:
         "hashtag_style", "cta", "shop_intro", 
         "forbidden_words", "locale", "city", "language",
         "is_kakao_connected", "is_insta_connected", "is_gmail_connected",
-        "rag_reference", "is_ms_connected", "gmail_address" ,"district"
+        "rag_reference", "is_ms_connected", "owner_email" ,"district"
     ]
 
     try:
@@ -526,8 +527,8 @@ def save_post_data(shop_id: str, post_data: dict) -> bool:
         # 이미 id가 있으면(수정 건) 그대로 쓰고, 없으면 새로 생성합니다.
         post_id = post_data.get('id')
         if not post_id:
-            timestamp = current_time.strftime("%Y%m%d_%H%M%S")
-            post_id = f"post_{shop_id}_{timestamp}"
+            new_uuid = str(uuid.uuid4())
+            post_id = f"post_{new_uuid}"
             post_data['id'] = post_id
             post_data['created_at'] = current_time_iso
         else:
@@ -546,6 +547,22 @@ def save_post_data(shop_id: str, post_data: dict) -> bool:
         # hashtags
         # photo_ids
         # cta
+
+        # [추가] AI 생성 시점에 들어가는 데이터 (post_data에 미리 담겨와야 함)
+
+        post_data['trend_score'] = post_data.get('trend_score', 0)
+        post_data['caption_score'] = post_data.get('caption_score', 0)
+        post_data['model_used'] = post_data.get('model_used', '')
+        post_data['elapsed_seconds'] = post_data.get('elapsed_seconds', 0)
+
+        # [추가] 검토 프로세스 초기화
+        # 생성 시점 기준 + 24시간 등 로직에 따라 deadline 설정 가능
+        if 'review_deadline' not in post_data:
+            deadline = current_time + timedelta(hours=24) 
+            post_data['review_deadline'] = deadline.isoformat()
+            
+        post_data['result_notified'] = False  # 초기값
+        post_data['review_action'] = 'pending' # 검토 대기 상태
 
         container.upsert_item(body=post_data)
         return True
@@ -608,7 +625,7 @@ def get_recent_posts(shop_id: str, limit: int = 3) -> list:
         logging.error(f"recent_posts 조회 실패: {str(e)}")
         return []
 
-def save_draft(shop_id: str, post_id: str, caption: str, hashtags: list, photo_ids: list, cta: str) -> bool:
+def save_draft(shop_id: str, post_id: str, caption: str, hashtags: list, photo_ids: list, cta: str, review_action: str) -> bool:
     """
     마케팅 게시물 확정 전 초안 상태로 데이터를 저장합니다.
 
@@ -645,7 +662,10 @@ def save_draft(shop_id: str, post_id: str, caption: str, hashtags: list, photo_i
             "cta": cta,
             "status": "pending",
             "created_at": created_at,  # 생성 시간 유지
-            "updated_at": now_iso       # 수정 시간 갱신
+            "updated_at": now_iso,       # 수정 시간 갱신
+            "review_action": review_action, # 'ok' | 'edit' | 'cancel'
+            "reviewed_at": datetime.utcnow().isoformat(), # 검토 시각 기록
+            "status": "success" if review_action in ['ok', 'auto_approved'] else "pending"
         }
         
         container.upsert_item(body=draft_data)
