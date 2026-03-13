@@ -1,3 +1,16 @@
+"""
+기능: Azure AI Search를 이용한 벡터 데이터 저장 및 유사도 검색
+작성자: jiyeon back
+최초 생성: 2026. 03. 04.
+버전: 1.1
+
+[Modification Information]
+DATE        AUTHOR          NOTE
+-----------------------------------------------------------
+2026.03.04  jiyeon back     최초 생성 및 벡터 검색 로직 구현
+2026.03.09  jiyeon back     select 필드 간소화 (id, caption만 반환)
+"""
+
 import os
 import logging
 from azure.core.credentials import AzureKeyCredential
@@ -7,28 +20,18 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-ENDPOINT   = os.getenv("AZURE_SEARCH_ENDPOINT")
-KEY        = os.getenv("AZURE_SEARCH_KEY")
-INDEX_NAME = os.getenv("AZURE_SEARCH_INDEX_NAME", "bybaek-captions")
+ENDPOINT = os.getenv("AZURE_SEARCH_ENDPOINT")
+KEY = os.getenv("AZURE_SEARCH_KEY")
+INDEX_NAME = os.getenv("AZURE_SEARCH_INDEX_NAME")
 
-#모듈 임포트 시점에 raise 금지 → 함수 호출 시점에 검증
-_search_client: SearchClient | None = None
+if not ENDPOINT or not KEY or not INDEX_NAME:
+    raise ValueError("Azure Search 환경변수가 설정되지 않았습니다.")
 
-def _get_client() -> SearchClient:
-    """SearchClient 지연 초기화. 함수 호출 시점에 환경변수 검증."""
-    global _search_client
-    if _search_client is None:
-        if not ENDPOINT or not KEY or not INDEX_NAME:
-            raise ValueError(
-                "Azure Search 환경변수 누락: "
-                "AZURE_SEARCH_ENDPOINT / AZURE_SEARCH_KEY / AZURE_SEARCH_INDEX_NAME"
-            )
-        _search_client = SearchClient(
-            endpoint=ENDPOINT,
-            index_name=INDEX_NAME,
-            credential=AzureKeyCredential(KEY)
-        )
-    return _search_client
+search_client = SearchClient(
+    endpoint=ENDPOINT,
+    index_name=INDEX_NAME,
+    credential=AzureKeyCredential(KEY)
+)
 
 def save_embedding(shop_id: str, post_id: str, caption: str, embedding: list) -> bool:
     """
@@ -51,11 +54,10 @@ def save_embedding(shop_id: str, post_id: str, caption: str, embedding: list) ->
     }
     
     try:
-        _get_client().upload_documents(documents=[document])
-        logging.info(f"[vector_db] 임베딩 저장 완료 → post_id={post_id}, shop_id={shop_id}")
+        search_client.upload_documents(documents=[document])
         return True
     except Exception as e:
-        logging.error(f"[vector_db] 임베딩 저장 실패 (post_id={post_id}): {e}")
+        logging.error(f"Vector DB 저장 실패: {str(e)}")
         return False
 
 def search_similar_captions(shop_id: str, query_vector: list, top_k: int = 5) -> list:
@@ -77,7 +79,7 @@ def search_similar_captions(shop_id: str, query_vector: list, top_k: int = 5) ->
     )
 
     try:
-        results = _get_client().search(
+        results = search_client.search(
             search_text=None,
             vector_queries=[vector_query],
             filter=f"shop_id eq '{shop_id}'",
@@ -85,5 +87,5 @@ def search_similar_captions(shop_id: str, query_vector: list, top_k: int = 5) ->
         )
         return list(results)
     except Exception as e:
-        logging.error(f"[vector_db] 유사 캡션 검색 실패 (shop_id={shop_id}): {e}")
+        logging.error(f"유사 캡션 검색 실패: {str(e)}")
         return []

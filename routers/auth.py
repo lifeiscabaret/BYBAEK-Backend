@@ -6,6 +6,9 @@ from utils.logging import logger
 import os
 import requests
 from auth.appService_auth_check import appService_auth_check
+from services.cosmos_db import save_auth, get_auth
+import logging
+from datetime import datetime
 
 router = APIRouter()
 
@@ -14,9 +17,13 @@ class InstagramLoginRequest(BaseModel):
 
 @router.post("/instagram", status_code=status.HTTP_201_CREATED)
 async def instagram_business_login(req: InstagramLoginRequest, res: Response, fast_req: Request) -> Response:
+
+    access_token = fast_req.headers.get("x-ms-token-aad-access-token")
+    logger.info(access_token)
+
     
     # app service auth check
-    appService_auth_check(req)
+    await appService_auth_check(fast_req)
 
     # instagram authentication redirect parameter
     code = req.code
@@ -39,12 +46,14 @@ async def instagram_business_login(req: InstagramLoginRequest, res: Response, fa
     
     # access token response error
     if 'error' in response:
-        error_type = response['type']
-        error_code = response['code']
-        error_message = response['message']
+        # error_type = response['type']
+        # error_code = response['code']
+        # error_message = response['message']
         
-        logger.error(f'Access Token Response Error {error_code} {error_type}: {error_message}')
-        raise HTTPException(status_code=error_code, datail=error_type)
+        # logger.error(f'Access Token Response Error {error_code} {error_type}: {error_message}')
+        logger.error(f'{response}')
+        #raise HTTPException(status_code=error_code, datail=error_type)
+        raise HTTPException(datail=f'{response}')
     
     # get user_id and short_access_token
     user_id = response['user_id']
@@ -63,12 +72,14 @@ async def instagram_business_login(req: InstagramLoginRequest, res: Response, fa
     
     # access token response error
     if 'error' in response:
-        error_type = response['type']
-        error_code = response['code']
-        error_message = response['message']
+        # error_type = response['type']
+        # error_code = response['code']
+        # error_message = response['message']
         
-        logger.error(f'Access Token Response Error {error_code} {error_type}: {error_message}')
-        raise HTTPException(status_code=error_code, datail=error_type)
+        # logger.error(f'Access Token Response Error {error_code} {error_type}: {error_message}')
+        logger.error(f'{response}')
+        #raise HTTPException(status_code=error_code, datail=error_type)
+        raise HTTPException(datail=f'{response}')
     
     access_token = response['access_token']
     expires_in = response['expires_in']
@@ -83,4 +94,47 @@ async def instagram_business_login(req: InstagramLoginRequest, res: Response, fa
     
     logger.info(fast_req.cookies)
 
+    # 현재 로그인된 MS 유저 ID 가져오기
+    ms_id = fast_req.headers.get("X-MS-CLIENT-PRINCIPAL-ID") or "test_barber_jiyeon"
+    
+    # 토큰 정보를 기존 Shop 데이터에 추가
+    insta_data = {
+        "insta_access_token": access_token,
+        "insta_user_id": user_id,
+        "insta_updated_at": datetime.utcnow().isoformat()
+    }
+    save_auth(ms_id, insta_data) # 기존 데이터와 합쳐짐
+
     return { 'access_token': access_token, "user_id": user_id }
+
+@router.get("/me")
+async def get_my_info(request: Request):
+    ms_user_id = request.headers.get("X-MS-CLIENT-PRINCIPAL-ID")
+    ms_user_email = request.headers.get("X-MS-CLIENT-PRINCIPAL-NAME")
+    
+    if not ms_user_id:
+        # 로컬에서 uvicorn으로 돌릴 때 헤더가 없으므로 강제로 ID를 할당
+        ms_user_id = "test_barber_jiyeon" 
+        ms_user_email = "jiyeon@test.com"
+
+    current_time = datetime.utcnow().isoformat()
+
+    # 1. 기존 유저인지 확인 (get_auth 활용)
+    existing_user = get_auth(ms_user_id)
+    
+    auth_data = {
+        "email": ms_user_email,
+        "last_login_at": current_time, # 매번 업데이트
+    }
+
+    if not existing_user:
+        # 최초 가입 시점에만 created_at 추가
+        auth_data["created_at"] = current_time
+        logging.info(f"신규 유저 가입: {ms_user_id}")
+    else:
+        logging.info(f"기존 유저 로그인: {ms_user_id}")
+
+    # 2. 정보 저장 (기존 정보와 병합됨)
+    save_auth(ms_user_id, auth_data)
+
+    return {"shop_id": ms_user_id, "is_new": not existing_user}

@@ -16,6 +16,15 @@ async def post_writer_agent(
     previous_draft: dict = None,    # 재작성 시 이전 초안
     feedback: str = None            # 재작성 시 피드백
 ) -> dict:
+    """
+    게시물 작성 에이전트 메인 함수
+
+    orchestrator STEP 4에서 호출.
+    최초 작성 또는 재작성(previous_draft + feedback 있을 때) 모두 처리.
+
+    Returns:
+        {"caption": "...", "hashtags": [...], "cta": "..."}
+    """
     is_rewrite = previous_draft is not None
     mode = "재작성" if is_rewrite else "최초 작성"
     print(f"[post_writer] 시작 → shop_id={shop_id}, 모드={mode}")
@@ -78,12 +87,12 @@ def _build_prompt(
     """
 
     # ── 시스템 프롬프트 ──
-    # brand_tone 리스트 처리
+    # ✅ brand_tone 리스트 처리
     brand_tone = brand_settings.get("brand_tone", "친근하고 편안한 말투")
     if isinstance(brand_tone, list):
         brand_tone = " ".join(brand_tone)
     
-    # forbidden_words 리스트 처리
+    # ✅ forbidden_words 리스트 처리
     forbidden_words = brand_settings.get("forbidden_words", [])
     if isinstance(forbidden_words, str):
         forbidden_words = [w.strip() for w in forbidden_words.split(",")]
@@ -93,19 +102,6 @@ def _build_prompt(
     emoji_usage   = feed_style.get("emoji_usage", "적당히")
     caption_len   = feed_style.get("caption_length", "2~4줄")
     hashtag_count = feed_style.get("hashtag_count", 10)
-
-    # AG-040: 온보딩 추가 필드
-    hashtag_style = brand_settings.get("hashtag_style", "감성형")
-
-    preferred_styles = brand_settings.get("preferred_styles", [])
-    if isinstance(preferred_styles, str):
-        preferred_styles = [s.strip() for s in preferred_styles.split(",") if s.strip()]
-    preferred_str = ", ".join(preferred_styles) if preferred_styles else "페이드컷, 투블럭 등 바버샵 스타일"
-
-    exclude_conditions = brand_settings.get("exclude_conditions", [])
-    if isinstance(exclude_conditions, str):
-        exclude_conditions = [s.strip() for s in exclude_conditions.split(",") if s.strip()]
-    exclude_str = ", ".join(exclude_conditions) if exclude_conditions else "없음"
 
     # 시스템 프롬프트 구성
     system_prompt = f"""너는 22년 경력 바버샵 원장님의 마케팅 파트너야.
@@ -144,16 +140,6 @@ def _build_prompt(
    - 금칙어: {forbidden_str}
    - 이모지: {emoji_usage}
    - 길이: {caption_len}
-
-[이 샵 전문 스타일 - 반드시 이 범위 안에서만 작성]
-{preferred_str}
-
-[절대 언급 금지 조건]
-{exclude_str}
-(위 조건에 해당하는 내용이 사진에 있어도 캡션에서 언급하지 말 것)
-
-[해시태그 스타일]
-{hashtag_style} 스타일로 작성 (감성형: 분위기 강조 / 정보형: 스타일명 나열)
 
 [출력 형식 - 엄수]
 {{
@@ -248,70 +234,35 @@ JSON만 출력. 설명/인사말 절대 금지."""
     return system_prompt, user_prompt
 
 
-# 할루시네이션 방지 - 바버샵 무관 주제 키워드
-_FORBIDDEN_TOPICS = [
-    "레이어컷", "펌", "염색", "여성", "헤어숍", "미용실",
-    "네일", "왁싱", "속눈썹", "피부", "스킨케어",
-]
-
-# 과장 표현 금지
-_FORBIDDEN_EXAGGERATIONS = [
-    "최고의", "완벽한", "세계 최초", "혁신적인", "압도적인",
-    "독보적인", "전국 1위", "업계 최고",
-]
-
-
-# [검증] 금칙어 + 할루시네이션 자동 제거
+# [검증] 금칙어 자동 제거
 def _validate_and_clean(result: dict, brand_settings: dict) -> dict:
     """
-    AG-042 강화: 금칙어 + 주제 이탈 + 과장 표현 3중 검사
+    금칙어 검증 + 자동 제거
 
-    1) 금칙어 (브랜드 설정)  → 자동 제거
-    2) 주제 이탈 키워드      → 자동 제거 + 경고
-    3) 과장 표현             → 자동 제거 + 경고
+    GPT가 금칙어를 포함했을 경우 자동으로 제거.
+    완전 제거가 불가능한 경우 경고 로그만 출력.
     """
-    # forbidden_words 리스트 처리
+    # ✅ forbidden_words 리스트 처리
     forbidden_words = brand_settings.get("forbidden_words", [])
     if isinstance(forbidden_words, str):
         forbidden_words = [w.strip() for w in forbidden_words.split(",")]
+    
+    caption         = result.get("caption", "")
+    found           = []
 
-    caption = result.get("caption", "")
-
-    # 1) 금칙어 제거
-    found_forbidden = []
     for word in forbidden_words:
         if word in caption:
-            found_forbidden.append(word)
+            found.append(word)
             caption = caption.replace(word, "")
-    if found_forbidden:
-        print(f"[post_writer] AG-042 금칙어 제거: {found_forbidden}")
 
-    # 2) 주제 이탈 제거
-    found_topics = []
-    for word in _FORBIDDEN_TOPICS:
-        if word in caption:
-            found_topics.append(word)
-            caption = caption.replace(word, "")
-    if found_topics:
-        print(f"[post_writer] AG-042 주제 이탈 키워드 제거: {found_topics}")
+    if found:
+        print(f"[post_writer] ⚠️ 금칙어 발견 후 제거: {found}")
+        result["caption"] = caption.strip()
 
-    # 3) 과장 표현 제거
-    found_exaggerations = []
-    for word in _FORBIDDEN_EXAGGERATIONS:
-        if word in caption:
-            found_exaggerations.append(word)
-            caption = caption.replace(word, "")
-    if found_exaggerations:
-        print(f"[post_writer] AG-042 과장 표현 제거: {found_exaggerations}")
-
-    result["caption"] = caption.strip()
-
-    # 해시태그에서도 금칙어 + 주제 이탈 제거
-    all_banned = forbidden_words + _FORBIDDEN_TOPICS
     hashtags = result.get("hashtags", [])
     result["hashtags"] = [
         tag for tag in hashtags
-        if not any(word in tag for word in all_banned)
+        if not any(word in tag for word in forbidden_words)
     ]
 
     return result

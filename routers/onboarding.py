@@ -9,6 +9,8 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import List, Optional
 from datetime import datetime
+from services.cosmos_db import save_onboarding as save_onboarding_db
+from services.cosmos_db import get_onboarding as get_onboarding_db
 
 router = APIRouter()
 
@@ -36,13 +38,13 @@ class ReferencePhotoRequest(BaseModel):
     photo_ids: List[str]  # 사장님이 선택한 레퍼런스 사진 ID 리스트 (3장)
     label: str = "good"    # "good" 고정 (나쁜 예시는 없음)
 
-@router.post("")
-async def save_onboarding(req: OnboardingRequest):
-    return {"shop_id": req.shop_id, "status": "success"}
+# @router.post("")
+# async def save_onboarding(req: OnboardingRequest):
+#     return {"shop_id": req.shop_id, "status": "success"}
 
-@router.get("/{shop_id}")
-async def get_onboarding(shop_id: str):
-    return {"shop_id": shop_id, "status": "mock"}
+# @router.get("/{shop_id}")
+# async def get_onboarding(shop_id: str):
+#     return {"shop_id": shop_id, "status": "mock"}
 
 @router.post("/reference")
 async def save_reference_photos(req: ReferencePhotoRequest):
@@ -101,3 +103,31 @@ async def save_reference_photos(req: ReferencePhotoRequest):
             status_code=500,
             detail=f"레퍼런스 사진 저장 중 오류 발생: {str(e)}"
         )
+
+@router.post("/{shop_id}")
+async def save_onboarding_api(shop_id: str, data: dict):
+    """
+    온보딩 데이터 저장
+    """
+    success = save_onboarding_db(shop_id, data)
+
+    if not success:
+        raise HTTPException(status_code=500, detail="온보딩 데이터 저장 실패")
+
+    return {
+        "success": True,
+        "message": "온보딩 데이터 저장 완료"
+    }
+
+
+@router.get("/{shop_id}")
+async def get_onboarding_api(shop_id: str):
+    """
+    온보딩 데이터 조회
+    """
+    result = get_onboarding_db(shop_id)
+
+    if not result:
+        raise HTTPException(status_code=404, detail="온보딩 데이터 없음")
+
+    return result
