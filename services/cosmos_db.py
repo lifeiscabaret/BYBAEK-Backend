@@ -14,7 +14,7 @@ DATE        AUTHOR          NOTE
 from services.cosmos_client import get_cosmos_container
 import logging
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from azure.cosmos.errors import CosmosResourceNotFoundError
 from services.blob_storage import delete_blob
 
@@ -36,7 +36,7 @@ def update_shop_instagram_info(shop_id: str, insta_data: dict) -> bool:
         shop_item['insta_user_id'] = insta_data.get('user_id')
         shop_item['insta_access_token'] = insta_data.get('access_token')
         shop_item['insta_expires_in'] = insta_data.get('expires_in')
-        shop_item['updated_at'] = datetime.utcnow().isoformat()
+        shop_item['updated_at'] = datetime.now(timezone.utc).isoformat()
         
         container.upsert_item(body=shop_item)
         return True
@@ -143,7 +143,7 @@ def update_shop_onedrive_info(shop_id: str, token_info: dict) -> bool:
         shop_item['one_refresh_token'] = token_info.get('refresh_token')
         shop_item['one_expires_in'] = token_info.get('expires_in')
         shop_item['one_delta_link'] = token_info.get('delta_link')
-        shop_item['updated_at'] = datetime.utcnow().isoformat()
+        shop_item['updated_at'] = datetime.now(timezone.utc).isoformat()
         
         container.upsert_item(body=shop_item)
         return True
@@ -194,22 +194,14 @@ def get_onboarding(shop_id: str) -> dict:
     try:
         # Shop 조회
         shop_item = shop_container.read_item(item=shop_id, partition_key=shop_id)
-        
-        # 허용된 필드 리스트
-        allowed_keys = [
-            "id", "shop_id", "system_prompt", 
-            "insta_auto_upload_yn", "insta_upload_notice_yn", 
-            "insta_upload_time", "insta_upload_time_slot", 
-            "insta_notice_time", "insta_review_bfr_upload_yn",
-            "brand_tone", "preferred_styles", "exclude_conditions", 
-            "hashtag_style", "cta", "shop_intro", 
-            "forbidden_words", "locale", "city", "language",
-            "is_kakao_connected", "is_insta_connected", "is_gmail_connected",
-            "rag_reference", "is_ms_connected", "owner_email" ,"district"
-        ]
 
-        filtered_shop_info = {k: shop_item.get(k) for k in allowed_keys if k in shop_item}
+        excluded_keys = ["_rid", "_self", "_etag", "_attachments", "_ts"]
         
+        filtered_shop_info = {
+            k: v for k, v in shop_item.items() 
+            if k not in excluded_keys
+        }
+          
         return {
             "shop_info": filtered_shop_info
         }
@@ -302,7 +294,7 @@ def save_album(shop_id: str, album_id: str, photo_list: list, album_name: str = 
     """
     album_container = get_cosmos_container("Album")
     try:
-        current_time_iso = datetime.utcnow().isoformat()
+        current_time_iso = datetime.now(timezone.utc).isoformat()
          # 기존 photo_list
         # new_photo_ids = [p.get('photo_id') for p in photo_list if p.get('photo_id')]
 
@@ -394,32 +386,18 @@ def save_onboarding(shop_id: str, data: dict) -> bool:
         bool: 저장 성공 여부
     """
     shop_container = get_cosmos_container("Shop")
-    now_iso = datetime.utcnow().isoformat() # 현재 시간 (UTC)
-
-    allowed_shop_keys = [
-        "system_prompt", "insta_auto_upload_yn", "insta_upload_notice_yn", 
-        "insta_upload_time", "insta_upload_time_slot", 
-        "insta_notice_time", "insta_review_bfr_upload_yn",
-        "brand_tone", "preferred_styles", "exclude_conditions", 
-        "hashtag_style", "cta", "shop_intro", 
-        "forbidden_words", "locale", "city", "language",
-        "is_kakao_connected", "is_insta_connected", "is_gmail_connected",
-        "rag_reference", "is_ms_connected", "owner_email" ,"district"
-    ]
+    now_iso = datetime.now(timezone.utc).isoformat()
 
     try:
-        # --- Shop 업데이트 ---
         try:
-            # 기존 데이터를 먼저 읽어와서 토큰 등 민감 정보를 유지함
             shop_item = shop_container.read_item(item=shop_id, partition_key=shop_id)
         except Exception:
-            # 기존 데이터가 없는 경우 신규 생성
             shop_item = {"id": shop_id, "shop_id": shop_id, "created_at": now_iso}
             
-        # 허용된 필드만 골라서 업데이트
-        for key in allowed_shop_keys:
-            if key in data:
-                shop_item[key] = data[key]
+        for key, value in data.items():
+            if key not in ["id", "shop_id", "created_at", "updated_at"]:
+                shop_item[key] = value
+        
         shop_item["updated_at"] = now_iso
         shop_container.upsert_item(body=shop_item)
         
@@ -520,7 +498,7 @@ def save_post_data(shop_id: str, post_data: dict) -> bool:
     """
     container = get_cosmos_container("Post")
     try:
-        current_time = datetime.utcnow()
+        current_time = datetime.now(timezone.utc)
         current_time_iso = current_time.isoformat()
         
         # 1. ID 자동 생성: post_{shop_id}_{날짜_시간}
@@ -642,7 +620,7 @@ def save_draft(shop_id: str, post_id: str, caption: str, hashtags: list, photo_i
     """
     container = get_cosmos_container("Post")
 
-    now_iso = datetime.utcnow().isoformat()
+    now_iso = datetime.now(timezone.utc).isoformat()
     
     # 초안(Draft)은 보통 새로 생성되는 경우가 많지만, 
     # 기존 초안을 덮어쓸 때를 대비해 로직을 구성합니다.
@@ -664,7 +642,7 @@ def save_draft(shop_id: str, post_id: str, caption: str, hashtags: list, photo_i
             "created_at": created_at,  # 생성 시간 유지
             "updated_at": now_iso,       # 수정 시간 갱신
             "review_action": review_action, # 'ok' | 'edit' | 'cancel'
-            "reviewed_at": datetime.utcnow().isoformat(), # 검토 시각 기록
+            "reviewed_at": datetime.now(timezone.utc).isoformat(), # 검토 시각 기록
             "status": "success" if review_action in ['ok', 'auto_approved'] else "pending"
         }
         
@@ -718,7 +696,7 @@ def save_photo_meta(shop_id: str, doc: dict) -> bool:
             "detected_angle": doc.get("detected_angle", "unknown"),
             "style_tags": doc.get("style_tags", []),
             "is_usable": doc.get("is_usable", False),
-            "updated_at": datetime.utcnow().isoformat()
+            "updated_at": datetime.now(timezone.utc).isoformat()
         })
         container.upsert_item(body=existing_item)
         return True
@@ -797,7 +775,7 @@ def remove_photo_from_all_albums(shop_id: str, photo_id: str):
                 # 리스트에서 해당 ID 제거
                 updated_ids = [pid for pid in existing_ids if pid != photo_id]
                 album["photo_ids"] = updated_ids
-                album["updated_at"] = datetime.utcnow().isoformat()
+                album["updated_at"] = datetime.now(timezone.utc).isoformat()
                 
                 # 3. 변경된 앨범 정보 업데이트
                 album_container.upsert_item(body=album)
@@ -846,7 +824,7 @@ def save_auth(shop_id: str, auth_data: dict):
 
         # 2. 전달받은 인증 데이터 병합
         item.update(auth_data)
-        item["updated_at"] = datetime.utcnow().isoformat()
+        item["updated_at"] = datetime.now(timezone.utc).isoformat()
 
         # 3. 저장 (Upsert)
         container.upsert_item(item)
@@ -894,7 +872,7 @@ def update_schedule_settings(shop_id: str, upload_time: str, timezone: str = "As
         # 2. 시간 설정 업데이트 (필드명은 온보딩 규격에 맞춤)
         shop_item["insta_upload_time"] = upload_time
         shop_item["insta_upload_time_slot"] = timezone
-        shop_item["updated_at"] = datetime.utcnow().isoformat()
+        shop_item["updated_at"] = datetime.now(timezone.utc).isoformat()
         # 3. 저장
         container.upsert_item(body=shop_item)
         return True
