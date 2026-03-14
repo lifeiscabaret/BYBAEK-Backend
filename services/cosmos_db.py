@@ -194,22 +194,14 @@ def get_onboarding(shop_id: str) -> dict:
     try:
         # Shop 조회
         shop_item = shop_container.read_item(item=shop_id, partition_key=shop_id)
-        
-        # 허용된 필드 리스트
-        allowed_keys = [
-            "id", "shop_id", "system_prompt", 
-            "insta_auto_upload_yn", "insta_upload_notice_yn", 
-            "insta_upload_time", "insta_upload_time_slot", 
-            "insta_notice_time", "insta_review_bfr_upload_yn",
-            "brand_tone", "preferred_styles", "exclude_conditions", 
-            "hashtag_style", "cta", "shop_intro", 
-            "forbidden_words", "locale", "city", "language",
-            "is_kakao_connected", "is_insta_connected", "is_gmail_connected",
-            "rag_reference", "is_ms_connected", "owner_email" ,"district"
-        ]
 
-        filtered_shop_info = {k: shop_item.get(k) for k in allowed_keys if k in shop_item}
+        excluded_keys = ["_rid", "_self", "_etag", "_attachments", "_ts"]
         
+        filtered_shop_info = {
+            k: v for k, v in shop_item.items() 
+            if k not in excluded_keys
+        }
+          
         return {
             "shop_info": filtered_shop_info
         }
@@ -394,32 +386,18 @@ def save_onboarding(shop_id: str, data: dict) -> bool:
         bool: 저장 성공 여부
     """
     shop_container = get_cosmos_container("Shop")
-    now_iso = datetime.now(timezone.utc).isoformat() # 현재 시간 (UTC)
-
-    allowed_shop_keys = [
-        "system_prompt", "insta_auto_upload_yn", "insta_upload_notice_yn", 
-        "insta_upload_time", "insta_upload_time_slot", 
-        "insta_notice_time", "insta_review_bfr_upload_yn",
-        "brand_tone", "preferred_styles", "exclude_conditions", 
-        "hashtag_style", "cta", "shop_intro", 
-        "forbidden_words", "locale", "city", "language",
-        "is_kakao_connected", "is_insta_connected", "is_gmail_connected",
-        "rag_reference", "is_ms_connected", "owner_email" ,"district"
-    ]
+    now_iso = datetime.now(timezone.utc).isoformat()
 
     try:
-        # --- Shop 업데이트 ---
         try:
-            # 기존 데이터를 먼저 읽어와서 토큰 등 민감 정보를 유지함
             shop_item = shop_container.read_item(item=shop_id, partition_key=shop_id)
         except Exception:
-            # 기존 데이터가 없는 경우 신규 생성
             shop_item = {"id": shop_id, "shop_id": shop_id, "created_at": now_iso}
             
-        # 허용된 필드만 골라서 업데이트
-        for key in allowed_shop_keys:
-            if key in data:
-                shop_item[key] = data[key]
+        for key, value in data.items():
+            if key not in ["id", "shop_id", "created_at", "updated_at"]:
+                shop_item[key] = value
+        
         shop_item["updated_at"] = now_iso
         shop_container.upsert_item(body=shop_item)
         
