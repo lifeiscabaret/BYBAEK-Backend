@@ -164,12 +164,16 @@ def sync_onedrive_photos(req: SyncPhotosRequest, request: Request) -> SyncPhotos
         blob_service_client = BlobServiceClient(account_url, credential=credential)
         container_client = blob_service_client.get_container_client(container=container_name)
 
+        # shop_id: MS 로그인 유저 ID (CosmosDB Photo 저장에 사용)
+        shop_id = request.headers.get("X-MS-CLIENT-PRINCIPAL-ID", "unknown")
+
         uploaded = 0
         failed = 0
         skipped = 0
 
         for photo in walk_drive_for_photos(token, drive_id, req.root_folder_item_id):
-            name = photo["name"]
+            name         = photo["name"]
+            relative_path = sanitize_blob_path(photo.get("_relative_path", name))
             logger.info(name)
 
             download_url = photo.get("@microsoft.graph.downloadUrl")
@@ -181,22 +185,36 @@ def sync_onedrive_photos(req: SyncPhotosRequest, request: Request) -> SyncPhotos
             try:
                 content_type = photo.get("file", {}).get("mimeType")
                 if not content_type:
-                    guessed, _ = mimetypes.guess_type(photo.get("name", ""))
+                    guessed, _ = mimetypes.guess_type(name)
                     content_type = guessed
 
                 download_resp = stream_download_file(download_url)
                 content_settings = ContentSettings(content_type=content_type)
 
+                # 1. Blob Storage에 저장 (실제 파일명 사용)
                 container_client.upload_blob(
-                    name="",
+                    name=relative_path,
                     data=download_resp.raw,
                     content_settings=content_settings,
                     overwrite=req.overwrite
                 )
 
+                # 2. CosmosDB Photo 컨테이너에 메타데이터 저장
+                blob_url  = f"https://stctrla.blob.core.windows.net/{container_name}/{relative_path}"
+                photo_id  = f"photo_{shop_id}_{relative_path.replace('/', '_').replace(' ', '_')}"
+                from services.cosmos_db import save_photo
+                save_photo(shop_id, {
+                    "photo_id":      photo_id,
+                    "blob_url":      blob_url,
+                    "onedrive_url":  download_url,
+                    "name":          name,
+                    "last_modified": photo.get("lastModifiedDateTime", "")
+                })
+
                 uploaded += 1
 
-            except Exception:
+            except Exception as e:
+                logger.error(f"업로드 실패 ({name}): {e}")
                 failed += 1
 
         return SyncPhotosResponse(
