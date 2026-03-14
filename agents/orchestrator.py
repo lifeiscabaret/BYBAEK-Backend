@@ -11,16 +11,6 @@ from agents.rag_tool import search_rag_context
 
 # [환경변수 검증]
 def _get_deployment_name(tier: str) -> str:
-    """
-    환경변수에서 배포 이름 가져오기 + 검증
-    
-    우선순위:
-    1. AZURE_OPENAI_DEPLOYMENT_MINI / FULL
-    2. AZURE_OPENAI_DEPLOYMENT (fallback)
-    
-    Raises:
-        ValueError: 환경변수가 없을 때
-    """
     if tier == "mini":
         deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT_MINI") or os.getenv("AZURE_OPENAI_DEPLOYMENT")
     else:  # tier == "full"
@@ -250,7 +240,7 @@ async def run_pipeline(
     else:
         # 검토 후 업로드: 푸시 알림만 발송
         print(f"[orchestrator] STEP 6 검토 대기 (insta_review_bfr_upload_yn=True)")
-        await _send_push_notification(shop_id, post_draft)
+        await _send_push_notification(shop_id, post_id, post_draft)
         status_str = "draft"
 
     print(f"[orchestrator] 완료 → post_id={post_id}, 모델={tier}, 총 재시도={total_retries}회, 상태={status_str}")
@@ -449,6 +439,8 @@ def _init_kernel(tier: str = "mini") -> Kernel:
     ))
     return kernel
 
+# TODO: 아래 함수들은 지연님 함수로 교체
+
 async def _get_brand_settings(shop_id: str) -> dict:
     from services.cosmos_db import get_onboarding
     data = get_onboarding(shop_id)
@@ -573,9 +565,36 @@ async def _auto_upload_instagram(
         return False
 
 
-async def _send_push_notification(shop_id: str, post_draft: dict):
-    # TODO: Windows 토스트 알림 + 이메일 백업
-    pass
+async def _send_push_notification(shop_id: str, post_id: str, post_draft: dict):
+    """
+    초안 완성 알림: Gmail 발송.
+    shop_id로 사장님 이메일 조회 후 send_draft_notification() 호출.
+    """
+    try:
+        # TODO: from services.cosmos_db import get_auth
+        # shop_auth  = get_auth(shop_id) or {}
+        # owner_email = shop_auth.get("owner_email") or shop_auth.get("gmail")
+        # 목업: get_auth() 연동 전까지 사용
+        from services.cosmos_db import get_onboarding
+        shop_data   = get_onboarding(shop_id) or {}
+        shop_info   = shop_data.get("shop_info", shop_data)
+        owner_email = shop_info.get("owner_email") or shop_info.get("gmail")
+
+        if not owner_email:
+            print(f"[orchestrator] 이메일 없음 → 알림 스킵 (shop_id={shop_id})")
+            return
+
+        from services.email_service import send_draft_notification
+        caption = post_draft.get("caption", "")
+        success = await send_draft_notification(owner_email, post_id, caption)
+
+        if success:
+            print(f"[orchestrator] 알림 메일 발송 완료 → {owner_email}")
+        else:
+            print(f"[orchestrator] 알림 메일 발송 실패 → {owner_email}")
+
+    except Exception as e:
+        print(f"[orchestrator] 푸시 알림 에러 (무시): {e}")
 
 
 async def _generate_post_id() -> str:
