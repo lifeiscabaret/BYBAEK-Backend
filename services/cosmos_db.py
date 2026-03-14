@@ -868,3 +868,36 @@ def get_auth(shop_id: str):
     except Exception as e:
         logging.error(f"인증 정보 조회 실패 ({shop_id}): {str(e)}")
         return None
+    
+def get_shop_info(shop_id: str) -> dict:
+    """
+    [추가] 스케줄러가 상점의 'insta_upload_time' 등을 확인하기 위해 
+    Shop 컨테이너에서 데이터를 읽어옵니다.
+    """
+    container = get_cosmos_container("Shop")
+    try:
+        # id와 partition_key가 모두 shop_id인 아이템 조회
+        shop_item = container.read_item(item=shop_id, partition_key=shop_id)
+        return shop_item
+    except Exception as e:
+        logging.error(f"상점 설정 조회 실패 (shop_id: {shop_id}): {str(e)}")
+        return None
+ 
+def update_schedule_settings(shop_id: str, upload_time: str, timezone: str = "Asia/Seoul") -> bool:
+    """
+    [추가] 사장님이 수정한 예약 시간을 Shop 컨테이너에 반영합니다.
+    """
+    container = get_cosmos_container("Shop")
+    try:
+        # 1. 기존 데이터 먼저 읽기
+        shop_item = container.read_item(item=shop_id, partition_key=shop_id)
+        # 2. 시간 설정 업데이트 (필드명은 온보딩 규격에 맞춤)
+        shop_item["insta_upload_time"] = upload_time
+        shop_item["insta_upload_time_slot"] = timezone
+        shop_item["updated_at"] = datetime.utcnow().isoformat()
+        # 3. 저장
+        container.upsert_item(body=shop_item)
+        return True
+    except Exception as e:
+        logging.error(f"스케줄 설정 저장 실패 (shop_id: {shop_id}): {str(e)}")
+        return False
