@@ -57,8 +57,28 @@ async def post_writer_agent(
         raw = raw.replace("```json", "").replace("```", "").strip()
         result = json.loads(raw)
 
-        # 금칙어 검증 + 자동 제거
+        # 금칙어 + 할루시네이션 검증
         result = _validate_and_clean(result, brand_settings)
+
+        # 할루시네이션 감지 시 한 번 재시도
+        if result.get("needs_retry"):
+            reason = result.get("retry_reason", "할루시네이션")
+            print(f"[post_writer] {reason} 감지 → 재시도 (feedback 주입)")
+            feedback_msg = f"이전 캡션에서 '{reason}'이 감지됐어. 확인되지 않은 사실은 절대 쓰지 마."
+            chat_history.add_assistant_message(str(result.get("caption", "")))
+            chat_history.add_user_message(feedback_msg)
+            response2 = await chat_service.get_chat_message_content(
+                chat_history=chat_history,
+                settings=chat_service.instantiate_prompt_execution_settings()
+            )
+            raw2 = str(response2).strip().replace("```json", "").replace("```", "").strip()
+            try:
+                result = _validate_and_clean(json.loads(raw2), brand_settings)
+            except Exception:
+                pass  # 재시도도 실패하면 원본 그대로 사용
+
+        result.pop("needs_retry", None)
+        result.pop("retry_reason", None)
 
         print(f"[post_writer] 완료 → 캡션 {len(result.get('caption', ''))}자, "
               f"해시태그 {len(result.get('hashtags', []))}개")
@@ -103,52 +123,50 @@ def _build_prompt(
     caption_len   = feed_style.get("caption_length", "2~4줄")
     hashtag_count = feed_style.get("hashtag_count", 10)
 
+    # AG-040: 온보딩 추가 필드
+    hashtag_style = brand_settings.get("hashtag_style", "감성형")
+
+    preferred_styles = brand_settings.get("preferred_styles", [])
+    if isinstance(preferred_styles, str):
+        preferred_styles = [s.strip() for s in preferred_styles.split(",") if s.strip()]
+    preferred_str = ", ".join(preferred_styles) if preferred_styles else "페이드컷, 투블럭 등 바버샵 스타일"
+
+    exclude_conditions = brand_settings.get("exclude_conditions", [])
+    if isinstance(exclude_conditions, str):
+        exclude_conditions = [s.strip() for s in exclude_conditions.split(",") if s.strip()]
+    exclude_str = ", ".join(exclude_conditions) if exclude_conditions else "없음"
+
     # 시스템 프롬프트 구성
-    system_prompt = f"""너는 22년 경력 바버샵 원장님의 마케팅 파트너야.
+    system_prompt = f"""너는 한국 바버샵 인스타그램 게시물을 대신 써주는 마케터야.
+사장님은 시술로 바빠서 직접 홍보할 시간이 없어. 네가 대신 써줘야 해.
 
-[원장님 상황]
-- 시술로 바쁨 → 홍보 편집 시간 없음 (가장 큰 고민)
-- 인스타 광고 + 네이버 체험단: 월 20만원 지출 중
-- 목표: 예약 문의 폭발 시켜서 매출 올리기
+[작성 원칙]
+1. 절대로 확인되지 않은 정보를 지어내지 마
+   - 경력 연수 (예: "22년 경력", "10년 경력") → 절대 금지. DB에 없으면 쓰지 마
+   - 예약 현황 (예: "오늘 3자리 남음", "마감 임박") → 절대 금지. 실제 현황 모름
+   - 수상 이력, 인증서, 특허 → 절대 금지
 
-[고객이 바버샵에 원하는 것]
-1순위: 페이드컷 (고객 인터뷰 결과)
-- 한국인 두상 울퉁불퉁 → 정교한 그라데이션 기술력 증명 필수
-
-[게시물 전략 5단계]
-
-1. 키워드 전략 (검색 노출)
-   - 첫 문장에 "페이드컷" 또는 "페이드" 필수
-   - 스타일명 포함: 사이드파트, 슬릭백, 투블럭 등
-   - 절대 금지: "cut/컷/자르다" (Azure 필터)
-   
-2. 기술력 증명 (고객 신뢰)
-   - 그라데이션의 자연스러움 강조
-   - "정교한", "디테일", "경력" 같은 키워드
-   
-3. 타겟 고객 저격 (20-40대 남성)
-   - 직장인: 깔끔함, 전문성, 시간 절약
-   - 대학생: 트렌디함, 스타일 변화
-   
-4. 예약 문의 유도 (최우선!)
-   - 수동적 X: "예약 문의주세요"
-   - 능동적 O: "지금 DM 주시면 이번 주 예약 가능"
-   - 초강력: "오늘 3자리 남음", "주말 예약 마감 임박"
-   
-5. 브랜드 톤 준수
-   - 말투: {brand_tone}
-   - 금칙어: {forbidden_str}
+2. 자연스러운 사람 말투로 써
+   - AI티 나는 표현 금지: "정교한 그라데이션으로 완성하는", "트렌디한 스타일을 선사하는"
+   - 실제 바버샵 사장님이 쓸 법한 말투로: 짧고, 직접적으로
    - 이모지: {emoji_usage}
    - 길이: {caption_len}
 
-[출력 형식 - 엄수]
-{{
-  "caption": "페이드[스타일]로 시작 + 기술력 강조 + 예약 긴박감\\n줄바꿈 최대 3번",
-  "hashtags": ["#페이드컷", "#바버샵", ... 총 {hashtag_count}개],
-  "cta": "긴박감 있는 예약 유도 (예: 지금 DM 주시면 이번 주 예약 가능)"
-}}
+3. 이 샵 스타일 범위 안에서만 작성
+   - 전문 스타일: {preferred_str}
+   - 금칙어: {forbidden_str}
+   - 언급 금지 조건: {exclude_str}
 
-JSON만 출력. 설명/인사말 절대 금지."""
+4. 브랜드 톤: {brand_tone}
+
+5. 해시태그: {hashtag_style} 스타일 / 총 {hashtag_count}개
+
+[출력 형식 - JSON만, 설명 없이]
+{{
+  "caption": "첫 문장에 페이드 스타일명 포함\\n2~3줄, 자연스러운 말투",
+  "hashtags": ["#페이드컷", "#바버샵", ... 총 {hashtag_count}개],
+  "cta": "예약 유도 문구 (예: DM 주시면 바로 확인해드려요)"
+}}"""
 
     # ── 유저 프롬프트 ──
     parts = []
@@ -164,10 +182,16 @@ JSON만 출력. 설명/인사말 절대 금지."""
     if promo:
         parts.append(f"[바버샵 홍보 포인트]\n{promo}")
 
-    # ↓ 샵 차별점 강조 (마케터 전략: 상품 색깔 파악)
-    brand_diff = brand_settings.get("brand_differentiation", "")
+    # 샵 차별점 - shop_intro 있을 때만 반영 (없으면 GPT가 지어내므로 금지)
+    brand_diff = brand_settings.get("brand_differentiation", "").strip()
     if brand_diff:
-        parts.append(f"[우리 샵 차별점 - 반드시 첫 문장에 반영]\n{brand_diff}\n\n마케터 팁: 차별점을 메인 키워드와 조합하세요.\n예: '10년 경력 전문가의 페이드 스타일' (차별점 + 키워드)")
+        parts.append(f"[우리 샵 차별점 - 첫 문장에 자연스럽게 녹여줘]\n{brand_diff}")
+
+    # 실제 검색 스니펫 - 사람들이 실제로 쓰는 말투 참고용
+    raw_snippets = trend_data.get("raw_snippets", [])
+    if raw_snippets:
+        snippet_text = "\n".join(f"- {s}" for s in raw_snippets[:3])
+        parts.append(f"[실제 검색에서 수집한 표현 - 말투 참고만, 그대로 복붙 금지]\n{snippet_text}")
 
     # 2. 선택된 사진 스타일
     if selected_photos:
@@ -234,35 +258,85 @@ JSON만 출력. 설명/인사말 절대 금지."""
     return system_prompt, user_prompt
 
 
-# [검증] 금칙어 자동 제거
+# AG-042: 할루시네이션 방지 - 바버샵 무관 주제 키워드
+_FORBIDDEN_TOPICS = [
+    "레이어컷", "펌", "염색", "여성", "헤어숍", "미용실",
+    "네일", "왁싱", "속눈썹", "피부", "스킨케어",
+]
+
+# AG-042: 과장 표현 금지
+_FORBIDDEN_EXAGGERATIONS = [
+    "최고의", "완벽한", "세계 최초", "혁신적인", "압도적인",
+    "독보적인", "전국 1위", "업계 최고",
+]
+
+
+# [검증] 금칙어 + 할루시네이션 자동 제거
 def _validate_and_clean(result: dict, brand_settings: dict) -> dict:
     """
-    금칙어 검증 + 자동 제거
+    AG-042 강화: 금칙어 + 주제 이탈 + 과장 표현 3중 검사
 
-    GPT가 금칙어를 포함했을 경우 자동으로 제거.
-    완전 제거가 불가능한 경우 경고 로그만 출력.
+    1) 금칙어 (브랜드 설정)  → 자동 제거
+    2) 주제 이탈 키워드      → 자동 제거 + 경고
+    3) 과장 표현             → 자동 제거 + 경고
     """
-    # ✅ forbidden_words 리스트 처리
+    # forbidden_words 리스트 처리
     forbidden_words = brand_settings.get("forbidden_words", [])
     if isinstance(forbidden_words, str):
         forbidden_words = [w.strip() for w in forbidden_words.split(",")]
-    
-    caption         = result.get("caption", "")
-    found           = []
 
+    caption = result.get("caption", "")
+
+    # 0) 할루시네이션 패턴 감지 → 재생성 신호 (제거 말고 플래그)
+    import re
+    hallucination_patterns = [
+        (r'\d+년\s*경력',   "경력 연수 할루시네이션"),
+        (r'\d+자리\s*남',   "예약 현황 할루시네이션"),
+        (r'마감\s*임박',     "마감 임박 할루시네이션"),
+        (r'오늘만\s*할인',   "근거없는 할인 할루시네이션"),
+    ]
+    for pattern, label in hallucination_patterns:
+        if re.search(pattern, caption):
+            print(f"[post_writer] ⚠️  {label} 감지 → needs_retry=True")
+            result["needs_retry"] = True
+            result["retry_reason"] = label
+            return result
+
+    # 1) 금칙어 제거
+    found_forbidden = []
     for word in forbidden_words:
         if word in caption:
-            found.append(word)
+            found_forbidden.append(word)
             caption = caption.replace(word, "")
+    if found_forbidden:
+        print(f"[post_writer] AG-042 금칙어 제거: {found_forbidden}")
 
-    if found:
-        print(f"[post_writer] ⚠️ 금칙어 발견 후 제거: {found}")
-        result["caption"] = caption.strip()
+    # 2) 주제 이탈 제거
+    found_topics = []
+    for word in _FORBIDDEN_TOPICS:
+        if word in caption:
+            found_topics.append(word)
+            caption = caption.replace(word, "")
+    if found_topics:
+        print(f"[post_writer] AG-042 주제 이탈 키워드 제거: {found_topics}")
 
+    # 3) 과장 표현 제거
+    found_exaggerations = []
+    for word in _FORBIDDEN_EXAGGERATIONS:
+        if word in caption:
+            found_exaggerations.append(word)
+            caption = caption.replace(word, "")
+    if found_exaggerations:
+        print(f"[post_writer] AG-042 과장 표현 제거: {found_exaggerations}")
+
+    result["caption"] = caption.strip()
+
+    # 해시태그에서도 금칙어 + 주제 이탈 제거
+    all_banned = forbidden_words + _FORBIDDEN_TOPICS
     hashtags = result.get("hashtags", [])
     result["hashtags"] = [
         tag for tag in hashtags
-        if not any(word in tag for word in forbidden_words)
+        if not any(word in tag for word in all_banned)
     ]
 
     return result

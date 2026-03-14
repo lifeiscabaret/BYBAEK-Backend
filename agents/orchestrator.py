@@ -355,7 +355,7 @@ async def _evaluate_caption(kernel: Kernel, post_draft: dict, brand_settings: di
 1. reservation_inquiry (예약 문의 전환율)
    - 이 캡션을 보고 예약 DM 보낼 확률은?
    - CTA 긴박감: "지금 DM 주시면" (0.8) vs "문의주세요" (0.4)
-   - 행동 유도: "오늘 3자리 남음" (0.9)
+   - 사실 기반 행동 유도 문구 포함 여부 (0.7 이상)
 
 2. fade_keyword (페이드컷 키워드)
    - 고객 1순위 니즈: 페이드컷
@@ -366,7 +366,7 @@ async def _evaluate_caption(kernel: Kernel, post_draft: dict, brand_settings: di
 3. cta_strength (CTA 강도)
    - 수동적 (0.3): "문의주세요"
    - 능동적 (0.7): "지금 DM 주시면"
-   - 초강력 (1.0): "오늘 3자리 남음"
+   - 강력 (1.0): 즉각 행동 유도 + 구체적 혜택
 
 4. brand_tone (브랜드 톤)
    - 설정된 톤과 일치?

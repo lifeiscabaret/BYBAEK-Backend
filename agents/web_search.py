@@ -1,3 +1,16 @@
+"""
+web_search.py - 웹 서치 에이전트 (파이프라인 시작점)
+
+마케터 인터뷰 반영:
+- "타겟팅 조사, 어디서 쓰이게 될지 파악"
+- "메인 키워드를 첫 문단에"
+- 성공 지표: 예약 문의 폭발
+
+바버샵 특화:
+- 고객 1순위: 페이드컷
+- 타겟: 20-40대 남성 (직장인/대학생)
+"""
+
 import os
 import re
 import json
@@ -16,8 +29,9 @@ LOCALE_CONFIG = {
         "timezone_name": "KST",
         "weather_query": "{city} 오늘 날씨",
         "trend_queries": [
-            "2026 바버샵 남성 페이드컷 헤어스타일 트렌드 추천 한국",
-            "2026 barbershop men fade cut haircut sidepart trend Korea"
+            "바버샵 페이드컷 인스타그램 후기 2026",
+            "남성 페이드컷 헤어 스타일 후기 커뮤니티",
+            "barbershop fade cut men hairstyle 2026 review",
         ],
         "seasons": {
             (3, 4, 5): "봄",
@@ -32,34 +46,34 @@ LOCALE_CONFIG = {
             "겨울": "연말 특별한 포마드컷, 리젠트로 스타일 변화 시즌"
         },
         "weather_prompt": (
-            "아래 날씨 정보를 '맑음, 6도, 봄바람' 형식으로 최대 두 줄로 요약해줘. "
+            "아래 날씨 정보를 '맑음, 6도, 봄바람' 형식으로 한 줄 요약해줘. "
             "요약만 출력해."
         ),
-        "trend_prompt": """아래 검색 결과에서 바버샵 남성 헤어스타일 트렌드를 분석하고
-마케팅 활용 전략까지 제시해줘.
-
-[분석 목표]
-- 고객 1순위 니즈: 페이드컷
-- 타겟: 20-40대 남성 (직장인/대학생)
-- 최종 목표: 예약 문의 폭발
-
-[바버샵 전용 스타일만 포함]
-페이드컷 (최우선), 사이드파트, 슬릭백, 아이비리그, 포마드,
-버즈컷, 크루컷, 크롭컷, 투블럭, 멀릿 등
-
-[절대 금지]
-여성 헤어, 펌, 염색, 미용실 관련 내용
+        # AG-001: JSON 응답으로 변경 → 파싱 안정성 확보
+        "trend_prompt": """아래는 바버샵 페이드컷 관련 실제 검색 결과야.
 
 검색 결과:
 {raw_trend}
 
 아래 JSON 형식으로만 응답해줘. 설명/마크다운 없이 JSON만:
 {{
-  "trend_summary": "어떤 스타일이 인기인가? 페이드컷 중심 2줄 이내",
-  "target_analysis": "어떤 고객층이 이 트렌드를 찾는가? 1줄",
-  "marketing_strategy": "이 트렌드로 어떻게 예약 문의를 유도할 수 있는가? 1줄"
+  "trend_summary": "지금 어떤 스타일이 인기인지 2줄 이내. 스타일명 구체적으로.",
+  "target_analysis": "어떤 고객층이 찾는지 1줄.",
+  "marketing_strategy": "인스타 게시물에 쓸 수 있는 홍보 포인트 1줄.",
+  "raw_snippets": [
+    "검색 결과에서 뽑은 자연스러운 실제 표현 1 (사람들이 실제로 쓴 말투)",
+    "검색 결과에서 뽑은 자연스러운 실제 표현 2",
+    "검색 결과에서 뽑은 자연스러운 실제 표현 3"
+  ]
 }}
+
+raw_snippets 규칙:
+- 검색 결과에 실제로 등장한 표현만 뽑을 것
+- AI가 요약한 말 말고, 사람이 직접 쓴 것처럼 느껴지는 표현
+- 없으면 빈 배열 []
+- 바버샵/남성 헤어 무관한 내용 포함 금지
 """,
+        # AG-002: promo에 target/strategy 통합
         "promo_prompt": (
             "오늘은 {today}이고 계절은 {season}이야.\n"
             "트렌드 요약: {trend_summary}\n"
@@ -98,6 +112,7 @@ def _parse_json_safe(text: str) -> dict:
     마크다운 코드블록 제거 후 파싱, 실패 시 빈 dict 반환.
     """
     text = str(text).strip()
+    # ```json ... ``` 블록 제거
     match = re.search(r"```(?:json)?\s*([\s\S]+?)\s*```", text)
     if match:
         text = match.group(1)
@@ -175,6 +190,7 @@ async def web_search_agent(shop_id: str, force_refresh: bool = False) -> dict:
         _get_barbershop_trend(tavily, kernel, config)
     )
 
+    # AG-002: promo 생성 시 trend_data 반영
     promo = await _get_promo_info(kernel, now, config, trend_data)
 
     result = {
@@ -275,13 +291,21 @@ async def _get_barbershop_trend(tavily, kernel, config) -> tuple:
             settings=chat_service.instantiate_prompt_execution_settings()
         )
 
+        # AG-001: JSON 파싱으로 변경 (기존 줄바꿈 split 방식 제거)
         parsed = _parse_json_safe(str(response))
 
         trend_data = {
             "trend_summary":      parsed.get("trend_summary",      fallback["trend_summary"]),
             "target_analysis":    parsed.get("target_analysis",    fallback["target_analysis"]),
-            "marketing_strategy": parsed.get("marketing_strategy", fallback["marketing_strategy"])
+            "marketing_strategy": parsed.get("marketing_strategy", fallback["marketing_strategy"]),
+            "raw_snippets":       parsed.get("raw_snippets",       []),   # 실제 검색 표현 (post_writer 말투 참고용)
+            "sources":            sources                                  # 출처 URL
         }
+
+        if trend_data["raw_snippets"]:
+            print(f"  스니펫: {trend_data['raw_snippets'][0][:40]}...")
+        if sources:
+            print(f"  출처  : {sources[0]['url']}")
 
         print(f"[web_search] 트렌드 분석 완료:")
         print(f"  요약  : {trend_data['trend_summary'][:50]}...")

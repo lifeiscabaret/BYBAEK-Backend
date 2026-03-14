@@ -193,7 +193,7 @@ async def _gpt_expand_selection(
     rag_reference = brand_settings.get("rag_reference", "")
     reference_line = f"\n[레퍼런스 샵 스타일]\n{rag_reference}\n이 샵의 피드 톤/구도를 참고해서 선택해줘." if rag_reference else ""
 
-    prompt = f"""너는 22년 경력 바버샵 원장님이야.
+    prompt = f"""너는 바버샵 사진 큐레이터야.
 기본 조합 {len(base_selection)}장을 최대 {max_count}장으로 확장해줘.
 
 [원장님 조합 원칙]
