@@ -15,6 +15,8 @@ from services.cosmos_db import get_post_by_shop
 from services.cosmos_db import save_draft
 from services.cosmos_db import save_post_data
 from services.cosmos_db import get_post_detail_data
+from services.cosmos_db import get_shop_cta
+from services.cosmos_db import parse_caption_data
 from agents.orchestrator import run_pipeline
 from routers.custom_chat import router as custom_chat_router  # 추가
 
@@ -130,7 +132,23 @@ async def get_posts(shop_id: str):
 # 3. 게시물 최종 확정 및 저장
 @router.post("/save")
 async def save_post(req: PostSaveRequest):
-    success = save_post_data(req.shop_id, req.dict())
+# 1. Shop 컨테이너에서 기준 CTA 가져오기
+    shop_cta = get_shop_cta(req.shop_id)
+    
+    # 2. 파싱 로직을 위해 request 데이터를 dict로 변환
+    post_data = req.dict()
+    # 3. [핵심] 통짜 텍스트를 파싱하여 caption, hashtags, cta로 분리
+    # req.caption에 통짜 텍스트가 들어있다고 가정 (프론트 payload에 따라 조정)
+    full_text = post_data.get('caption', '') 
+    parsed_result = parse_caption_data(full_text, shop_cta)
+
+    # 4. 파싱된 데이터로 덮어쓰기
+    post_data.update({
+        "caption": parsed_result['caption'],
+        "hashtags": parsed_result['hashtags'],
+        "cta": parsed_result['cta']
+    })
+    success = save_post_data(req.shop_id, post_data)
     if not success:
         raise HTTPException(status_code=500, detail="게시물 저장 실패")
     return {"status": "success", "message": "게시물이 저장되었습니다."}

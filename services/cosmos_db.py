@@ -426,6 +426,12 @@ def get_post_by_shop(shop_id: str) -> list:
 
     # 2. 각 게시물에 대표 이미지 URL 추가
     for post in posts:
+        # 날짜 필드가 없는 데이터를 위한 로직
+        if "created_at" not in post:
+            post["created_at"] = datetime.fromtimestamp(post["_ts"], timezone.utc).isoformat()
+        if "updated_at" not in post:
+            post["updated_at"] = post["created_at"]
+
         photo_ids = post.get("photo_ids", [])
         post["thumbnail_url"] = None  # 기본값 설정
 
@@ -509,6 +515,7 @@ def save_post_data(shop_id: str, post_data: dict) -> bool:
             post_id = f"post_{new_uuid}"
             post_data['id'] = post_id
             post_data['created_at'] = current_time_iso
+            post_data['shop_id'] = shop_id
         else:
             try:
                 existing_item = container.read_item(item=post_id, partition_key=shop_id)
@@ -517,7 +524,6 @@ def save_post_data(shop_id: str, post_data: dict) -> bool:
                 post_data['created_at'] = current_time_iso
 
         # 2. 공통 정보 설정
-        post_data['shop_id'] = shop_id
         post_data['status'] = 'success'
         post_data['updated_at'] = current_time_iso
         
@@ -642,8 +648,7 @@ def save_draft(shop_id: str, post_id: str, caption: str, hashtags: list, photo_i
             "created_at": created_at,  # 생성 시간 유지
             "updated_at": now_iso,       # 수정 시간 갱신
             "review_action": review_action, # 'ok' | 'edit' | 'cancel'
-            "reviewed_at": datetime.now(timezone.utc).isoformat(), # 검토 시각 기록
-            "status": "success" if review_action in ['ok', 'auto_approved'] else "pending"
+            "reviewed_at": datetime.now(timezone.utc).isoformat() # 검토 시각 기록
         }
         
         container.upsert_item(body=draft_data)
@@ -879,3 +884,47 @@ def update_schedule_settings(shop_id: str, upload_time: str, timezone: str = "As
     except Exception as e:
         logging.error(f"스케줄 설정 저장 실패 (shop_id: {shop_id}): {str(e)}")
         return False
+
+def get_shop_cta(shop_id: str):
+    container = get_cosmos_container("Shop")
+    try:
+        # id와 partition_key가 같으므로 바로 읽기
+        shop_item = container.read_item(item=shop_id, partition_key=shop_id)
+        
+        # cta 필드만 추출 (없을 경우를 대비해 get 사용)
+        return shop_item.get('cta', '') 
+        
+    except Exception as e:
+        print(f"Shop 데이터를 읽는 중 오류 발생: {e}")
+        return ""
+    
+def parse_caption_data(full_text: str, shop_cta: str):
+    """
+    Shop의 실제 CTA 문구를 기준으로 텍스트를 분리합니다.
+    """
+    lines = full_text.split('\n')
+    caption_parts = []
+    hashtags = []
+    found_cta = ""
+
+    for line in lines:
+        clean_line = line.strip()
+        if not clean_line: continue
+        
+        # 1. 해시태그 분리
+        if clean_line.startswith('#'):
+            hashtags.append(clean_line)
+        
+        # 2. Shop CTA와 대조 (문구가 포함되어 있거나 유사한지 확인)
+        elif shop_cta and shop_cta in clean_line:
+            found_cta = clean_line
+            
+        # 3. 나머지는 본문(Caption)
+        else:
+            caption_parts.append(line)
+
+    return {
+        "caption": "\n".join(caption_parts).strip(),
+        "hashtags": " ".join(hashtags).strip(),
+        "cta": found_cta if found_cta else shop_cta # 없으면 기본값 유지 혹은 빈값
+    }

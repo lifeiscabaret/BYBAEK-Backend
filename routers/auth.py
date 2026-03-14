@@ -107,6 +107,7 @@ async def instagram_business_login(req: InstagramLoginRequest, res: Response, fa
 
     return { 'access_token': access_token, "user_id": user_id }
 
+# GET /api/auth/me: MS 로그인 데이터 저장
 @router.get("/me")
 async def get_my_info(request: Request):
     ms_user_id = request.headers.get("X-MS-CLIENT-PRINCIPAL-ID")
