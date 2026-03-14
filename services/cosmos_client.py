@@ -27,8 +27,8 @@ def get_cosmos_container(container_name: str):
         ContainerProxy: Azure Cosmos DB 컨테이너 클라이언트 객체
     """
     # 환경 변수 로드
-    endpoint = os.environ["AZURE_COSMOS_URL"]
-    key = os.environ["AZURE_COSMOS_KEY"]
+    endpoint = os.getenv("AZURE_COSMOS_URL")
+    key = os.getenv("AZURE_COSMOS_KEY")
     database_name = "BybaekDB"
 
     # 클라이언트 및 데이터베이스 연결
