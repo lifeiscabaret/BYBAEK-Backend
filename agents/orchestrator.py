@@ -228,7 +228,8 @@ async def run_pipeline(
 
     # STEP 6
     post_id = await _generate_post_id()
-    need_review = brand_settings.get("insta_review_bfr_upload_yn", True)
+    _val = brand_settings.get("insta_review_bfr_upload_yn", "Y")
+    need_review = str(_val).upper() != "N"
 
     await _save_draft(shop_id, post_id, post_draft, selected_photos)
 
@@ -466,7 +467,7 @@ async def _get_brand_settings(shop_id: str) -> dict:
         "photo_range": {"min": 1, "max": 5},
         "feed_style": shop.get("feed_style", {}),
         "brand_differentiation": shop.get("shop_intro", ""),
-        "insta_review_bfr_upload_yn": shop.get("insta_review_bfr_upload_yn", True)  # 기본값 True (검토 후 업로드)
+        "insta_review_bfr_upload_yn": str(shop.get("insta_review_bfr_upload_yn", "Y")).upper() != "N"  # DB값 "Y"/"N" 문자열 대응
     }
 
 
@@ -571,14 +572,9 @@ async def _send_push_notification(shop_id: str, post_id: str, post_draft: dict):
     shop_id로 사장님 이메일 조회 후 send_draft_notification() 호출.
     """
     try:
-        # TODO: from services.cosmos_db import get_auth
-        # shop_auth  = get_auth(shop_id) or {}
-        # owner_email = shop_auth.get("owner_email") or shop_auth.get("gmail")
-        # 목업: get_auth() 연동 전까지 사용
-        from services.cosmos_db import get_onboarding
-        shop_data   = get_onboarding(shop_id) or {}
-        shop_info   = shop_data.get("shop_info", shop_data)
-        owner_email = shop_info.get("owner_email") or shop_info.get("gmail")
+        from services.cosmos_db import get_auth
+        shop_auth   = get_auth(shop_id) or {}
+        owner_email = shop_auth.get("owner_email") or shop_auth.get("gmail")
 
         if not owner_email:
             print(f"[orchestrator] 이메일 없음 → 알림 스킵 (shop_id={shop_id})")
