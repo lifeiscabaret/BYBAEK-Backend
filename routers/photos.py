@@ -1,8 +1,3 @@
-"""
-역할: 사진 필터링 요청 및 상태 조회 라우터
-흐름: OneDrive 동기화 완료 후 호출 -> 백그라운드 필터링(1,2차) 실행 -> 프론트엔드 폴링으로 결과 확인
-"""
-
 import os
 from fastapi import APIRouter, HTTPException, BackgroundTasks
 from pydantic import BaseModel
@@ -147,8 +142,11 @@ async def get_filter_status(shop_id: str):
         # 1차 필터링 결과조차 없는 사진들을 대기 중으로 판단
         pending = sum(1 for p in all_photos if p.get("stage1_pass") is None)
 
-        # 1차 통과자 중 2차(is_usable)가 결정되지 않은게 없는지 확인하는 로직 추가 예정
-        # pending == 0 을 완료 기준으로 잡음.
+        # stage1_pass=None 이면서 is_usable=None → 아직 처리 안 된 사진
+        # stage1_pass=False or True 이고 is_usable=None → 1차 실패 or 2차 대기
+        # 완료 기준: is_usable이 결정된 사진 + stage1_pass=False 사진을 제외한 미처리가 없을 때
+        pending = sum(1 for p in all_photos
+                      if p.get("stage1_pass") is None and p.get("is_usable") is None)
         current_status = "done" if pending == 0 else "in_progress"
 
         return FilterStatusResponse(
@@ -170,7 +168,7 @@ async def get_filter_status(shop_id: str):
 async def _run_filter_process(shop_id: str, photo_list: list):
     print(f"DEBUG: 1. 프로세스 진입 (shop_id: {shop_id})")
     try:
-        from agents.photo_filter import run_stage2_filter
+        from agents.photo_filter import run_photo_filter
         print("DEBUG: 2. 에이전트 임포트 성공")
 
         prepared_list = [
@@ -179,8 +177,8 @@ async def _run_filter_process(shop_id: str, photo_list: list):
         ]
         print(f"DEBUG: 3. 사진 준비 완료 ({len(prepared_list)}장)")
 
-        result = await run_stage2_filter(shop_id=shop_id, stage1_pass_list=prepared_list)
-        print(f"DEBUG: 4. 결과: {result}")
+        result = await run_photo_filter(shop_id=shop_id, photo_list=prepared_list)
+        print(f"DEBUG: 4. 완료 → stage1={result['stage1_passed']}, stage2={result['stage2_passed']}")
 
     except Exception as e:
         print(f"❌ DEBUG ERROR: {str(e)}")
