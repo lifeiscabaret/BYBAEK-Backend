@@ -1,19 +1,20 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import logging
 
-# 내부 모듈 임포트 (cosmos db에 추가요청한 함수들)
 from services.cosmos_db import get_shop_info, update_schedule_settings
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
-# --- 요청 모델 ---
+KST = timezone(timedelta(hours=9))
+
+
 class ScheduleUpdate(BaseModel):
     upload_time: str      # 형식: "19:00"
     timezone: str = "Asia/Seoul"
 
-# --- 엔드포인트 ---
 
 @router.get("/{shop_id}")
 async def get_schedule(shop_id: str):
@@ -22,9 +23,8 @@ async def get_schedule(shop_id: str):
     """
     try:
         shop_info = get_shop_info(shop_id)
-        
+
         if not shop_info:
-            # 상점 정보가 아예 없을 경우 기본값 반환
             return {
                 "upload_time": "19:00",
                 "next_upload": _calculate_next_run("19:00"),
@@ -32,19 +32,18 @@ async def get_schedule(shop_id: str):
                 "message": "기본 설정값입니다."
             }
 
-        # DB 필드명 규격: insta_upload_time
         upload_time = shop_info.get("insta_upload_time", "19:00")
-        timezone = shop_info.get("insta_upload_time_slot", "Asia/Seoul")
-        
+
         return {
             "upload_time": upload_time,
             "next_upload": _calculate_next_run(upload_time),
-            "timezone": timezone
+            "timezone": "Asia/Seoul"
         }
-        
+
     except Exception as e:
-        logging.error(f"스케줄 조회 중 에러: {e}")
+        logger.error(f"스케줄 조회 중 에러: {e}")
         raise HTTPException(status_code=500, detail="스케줄 정보를 가져오지 못했습니다.")
+
 
 @router.post("/{shop_id}/update")
 async def update_schedule(shop_id: str, req: ScheduleUpdate):
@@ -52,44 +51,37 @@ async def update_schedule(shop_id: str, req: ScheduleUpdate):
     [수정] 사장님이 앱에서 업로드 예약 시간을 변경할 때 호출
     """
     try:
-        # 지연님 DB 함수 호출
         success = update_schedule_settings(
-            shop_id=shop_id, 
-            upload_time=req.upload_time, 
+            shop_id=shop_id,
+            upload_time=req.upload_time,
             timezone=req.timezone
         )
-        
+
         if not success:
             raise Exception("DB 업데이트 실패")
-            
+
         return {
-            "status": "success", 
-            "message": f"업로드 시간이 {req.upload_time}으로 성공적으로 변경되었습니다.",
+            "status": "success",
+            "message": f"업로드 시간이 {req.upload_time}으로 변경됐어요.",
             "next_upload": _calculate_next_run(req.upload_time)
         }
-        
+
     except Exception as e:
-        logging.error(f"스케줄 업데이트 중 에러: {e}")
+        logger.error(f"스케줄 업데이트 중 에러: {e}")
         raise HTTPException(status_code=500, detail=f"업데이트 실패: {str(e)}")
 
-# --- 내부 헬퍼 함수 ---
 
 def _calculate_next_run(upload_time_str: str) -> str:
-    """
-    '19:00' 같은 문자열을 받아 현재 시간 기준 다음 실행 시간을 ISO 포맷으로 계산합니다.
-    """
     try:
-        now = datetime.now()
+        now = datetime.now(KST)
         hour, minute = map(int, upload_time_str.split(":"))
-        
-        # 오늘 날짜에 시간 설정
+
         next_run = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-        
-        # 만약 설정한 시간이 이미 지났다면 내일로 넘김
+
         if next_run <= now:
             next_run += timedelta(days=1)
-            
+
         return next_run.isoformat()
+
     except Exception:
-        # 시간 형식이 잘못된 경우 내일 이 시간 반환 (방어 코드)
-        return (datetime.now() + timedelta(days=1)).isoformat()
+        return (datetime.now(KST) + timedelta(days=1)).isoformat()
