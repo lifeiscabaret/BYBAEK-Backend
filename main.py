@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import os
 from dotenv import load_dotenv
-from routers import auth, onboarding, agent, schedule, instagram, photos
+from routers import auth, onboarding, agent, schedule, instagram, photos, onedrive
 
 
 load_dotenv()
@@ -44,6 +44,7 @@ app.include_router(agent.router,       prefix="/api/agent",       tags=["Agent"]
 app.include_router(schedule.router,    prefix="/api/schedule",    tags=["Schedule"])
 app.include_router(instagram.router,   prefix="/api/instagram",   tags=["Instagram"])
 app.include_router(photos.router,      prefix="/api/photos",      tags=["Photos"])
+app.include_router(onedrive.router,      prefix="/api/onedrive",      tags=["Onedrive"])
 
 
 # ── 헬스체크 (Azure App Service 배포 확인용)

@@ -1,5 +1,5 @@
-import os
 import mimetypes
+import os
 from typing import Dict, Generator, List, Optional
 
 import msal
@@ -139,3 +139,76 @@ def stream_download_file(download_url: str) -> requests.Response:
     if response.status_code >= 400:
         raise RuntimeError(f"Download failed: {response.status_code} {response.text}")
     return response
+
+@router.post(
+    "/sync-photos",
+    response_model=SyncPhotosResponse,
+    status_code=status.HTTP_200_OK,
+)
+def sync_onedrive_photos(req: SyncPhotosRequest, request: Request) -> SyncPhotosResponse:
+    try:
+
+        aad_token = request.headers.get("x-ms-token-aad-access-token")
+        logger.info(aad_token)
+
+        token = get_graph_token(aad_token)
+        logger.info(token)
+
+        drive_id = get_user_drive_id(token)
+        logger.info(drive_id)
+
+        container_name = "photos"
+
+        account_url = "https://stctrla.blob.core.windows.net"
+        credential = DefaultAzureCredential()
+        blob_service_client = BlobServiceClient(account_url, credential=credential)
+        container_client = blob_service_client.get_container_client(container=container_name)
+
+        uploaded = 0
+        failed = 0
+        skipped = 0
+
+        for photo in walk_drive_for_photos(token, drive_id, req.root_folder_item_id):
+            name = photo["name"]
+            logger.info(name)
+
+            download_url = photo.get("@microsoft.graph.downloadUrl")
+
+            if not download_url:
+                skipped += 1
+                continue
+
+            try:
+                content_type = photo.get("file", {}).get("mimeType")
+                if not content_type:
+                    guessed, _ = mimetypes.guess_type(photo.get("name", ""))
+                    content_type = guessed
+
+                download_resp = stream_download_file(download_url)
+                content_settings = ContentSettings(content_type=content_type)
+
+                container_client.upload_blob(
+                    name="",
+                    data=download_resp.raw,
+                    content_settings=content_settings,
+                    overwrite=req.overwrite
+                )
+
+                uploaded += 1
+
+            except Exception:
+                failed += 1
+
+        return SyncPhotosResponse(
+            success=True,
+            uploaded=uploaded,
+            failed=failed,
+            skipped=skipped,
+            container=container_name,
+        )
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e),
+        )
