@@ -7,6 +7,7 @@ import requests
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
 from azure.storage.blob import BlobServiceClient, ContentSettings
+from utils.logging import logger
 
 
 router = APIRouter()
@@ -31,27 +32,29 @@ class SyncPhotosRequest(BaseModel):
     overwrite: bool = True
 
 
-def get_env(name: str) -> str:
-    value = os.getenv(name)
-    if not value:
-        raise RuntimeError(f"Missing environment variable: {name}")
-    return value
+def get_graph_token(easy_auth_token: str) -> str:
 
+    tenant_id = os.getenv("AZURE_TENANT_ID")
+    client_id = os.getenv("AZURE_CLIENT_ID")
+    client_secret = os.getenv("AZURE_CLIENT_SECRET")
 
-def get_graph_token() -> str:
-    tenant_id = get_env("TENANT_ID")
-    client_id = get_env("CLIENT_ID")
-    client_secret = get_env("CLIENT_SECRET")
+    authority = f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
 
-    authority = f"https://login.microsoftonline.com/{tenant_id}"
     app = msal.ConfidentialClientApplication(
         client_id=client_id,
         authority=authority,
         client_credential=client_secret,
     )
 
-    result = app.acquire_token_for_client(scopes=["https://graph.microsoft.com/.default"])
+    result = app.acquire_token_on_behalf_of(
+        user_assertion=easy_auth_token,
+        scopes=["https://graph.microsoft.com/User.Read"]
+    )
+    logger.info(result)
+
     access_token = result.get("access_token")
+    logger.info(access_token)
+
     if not access_token:
         raise RuntimeError(f"Failed to acquire Graph token: {result}")
 

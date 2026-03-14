@@ -1,14 +1,3 @@
-"""
-photo_select.py - 사진 선택 에이전트
-
-22년 경력 원장님 조합 패턴:
-- 페이드 그라데이션 (뒷면/측면) 2장
-- 스타일링 (앞모습) 1장
-- 분위기 (손님 포즈) 1장
-
-최대 20장까지 가능 시 위 기준 섞어서
-"""
-
 import os
 import json
 from datetime import datetime, timezone, timedelta
@@ -61,6 +50,9 @@ async def photo_select_agent(
         min_count=min_photos,
         max_count=max_photos
     )
+
+    # 선택된 사진 used_at 업데이트 (14일 재사용 방지)
+    await _update_used_at(shop_id, selected)
 
     print(f"[photo_select] 완료 → {len(selected)}장 선택")
     return selected
@@ -198,7 +190,9 @@ async def _gpt_expand_selection(
         p for p in categorized["back_side"] + categorized["front"] + categorized["vibe"]
         if p["id"] not in already_selected
     ][:10]  # GPT에 최대 10장만 전달
-    
+    rag_reference = brand_settings.get("rag_reference", "")
+    reference_line = f"\n[레퍼런스 샵 스타일]\n{rag_reference}\n이 샵의 피드 톤/구도를 참고해서 선택해줘." if rag_reference else ""
+
     prompt = f"""너는 22년 경력 바버샵 원장님이야.
 기본 조합 {len(base_selection)}장을 최대 {max_count}장으로 확장해줘.
 
@@ -207,7 +201,7 @@ async def _gpt_expand_selection(
 - 스타일링 (앞모습): 20%
 - 분위기 (손님 포즈): 20%
 - 트렌드 매칭: 20%
-
+{reference_line}
 [오늘 트렌드]
 {trend_data.get("trend", "정보 없음")}
 
@@ -262,8 +256,21 @@ async def _gpt_expand_selection(
         return base_selection
 
 
+async def _update_used_at(shop_id: str, selected: list):
+    from services.cosmos_db import save_photo_meta
+    now_kst = datetime.now(timezone(timedelta(hours=9))).isoformat()
+    for photo in selected:
+        try:
+            doc = {
+                "id":      photo.get("id") or photo.get("image_id"),
+                "used_at": now_kst
+            }
+            save_photo_meta(shop_id, doc)
+        except Exception as e:
+            print(f"[photo_select] used_at 업데이트 실패 ({photo.get('id')}): {e}")
+
+
 def _init_kernel() -> Kernel:
-    """Kernel 초기화 (mini 모델)"""
     deployment = os.getenv(
         "AZURE_OPENAI_DEPLOYMENT_MINI",
         os.getenv("AZURE_OPENAI_DEPLOYMENT")
