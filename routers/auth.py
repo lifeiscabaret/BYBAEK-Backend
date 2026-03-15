@@ -19,7 +19,7 @@ class InstagramLoginRequest(BaseModel):
 async def instagram_business_login(req: InstagramLoginRequest, res: Response, fast_req: Request) -> Response:
 
     access_token = fast_req.headers.get("x-ms-token-aad-access-token")
-    logger.info(access_token)
+    logger.info(f"access token = {access_token}")
 
     
     # # app service auth check
@@ -67,7 +67,7 @@ async def instagram_business_login(req: InstagramLoginRequest, res: Response, fa
         'access_token': short_access_token
     }
     
-    response = requests.get("https://graph.instagram.com/access_token", params=params)
+    response = requests.post("https://graph.instagram.com/access_token", params=params)
     response = response.json()
     
     # access token response error
