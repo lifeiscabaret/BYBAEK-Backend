@@ -4,6 +4,7 @@ from typing import Dict, Generator, List, Optional
 
 import msal
 import requests
+import traceback
 from fastapi import APIRouter, HTTPException, status, Request
 from pydantic import BaseModel
 from azure.identity import DefaultAzureCredential 
@@ -226,6 +227,8 @@ def sync_onedrive_photos(req: SyncPhotosRequest, request: Request) -> SyncPhotos
         )
 
     except Exception as e:
+        traceback.print_exc()  #추가
+        logger.error(f"OneDrive 동기화 전체 에러: {e}")  #추가
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e),
