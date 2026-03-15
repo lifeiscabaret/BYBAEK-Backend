@@ -22,8 +22,8 @@ async def instagram_business_login(req: InstagramLoginRequest, res: Response, fa
     logger.info(access_token)
 
     
-    # app service auth check
-    await appService_auth_check(fast_req)
+    # # app service auth check
+    # await appService_auth_check(fast_req)
 
     # instagram authentication redirect parameter
     code = req.code
