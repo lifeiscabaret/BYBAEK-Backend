@@ -496,7 +496,8 @@ async def _save_draft(shop_id: str, post_id: str, post_draft: dict, selected_pho
         caption=post_draft.get("caption", ""),
         hashtags=post_draft.get("hashtags", []),
         photo_ids=[p.get("id", p.get("photo_id")) for p in selected_photos],
-        cta=post_draft.get("cta", "")
+        cta=post_draft.get("cta", ""),
+        review_action="pending"
     )
 
 
