@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import os
 from dotenv import load_dotenv
-from routers import auth, onboarding, agent, schedule, instagram, photos, onedrive
+from routers import auth, onboarding, agent, schedule, instagram, photos, onedrive, custom_chat
 
 
 load_dotenv()
@@ -45,7 +45,7 @@ app.include_router(schedule.router,    prefix="/api/schedule",    tags=["Schedul
 app.include_router(instagram.router,   prefix="/api/instagram",   tags=["Instagram"])
 app.include_router(photos.router,      prefix="/api/photos",      tags=["Photos"])
 app.include_router(onedrive.router,      prefix="/api/onedrive",      tags=["Onedrive"])
-
+app.include_router(custom_chat.router, prefix="/api/custom_chat", tags=["CustomChat"])
 
 # ── 헬스체크 (Azure App Service 배포 확인용)
 @app.get("/", tags=["Health"])
