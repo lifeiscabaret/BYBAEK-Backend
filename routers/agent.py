@@ -203,6 +203,20 @@ async def _handle_upload(shop_id: str, post_id: str, edited_caption: str = None)
         }
     )
 
+    # RAG 플라이휠: 업로드 성공한 캡션을 Vector DB에 자동 저장
+    # → 쓸수록 RAG 품질이 올라가는 구조
+    if instagram_media_id:
+        try:
+            from agents.rag_tool import get_embedding
+            from services.vector_db import save_embedding
+            full_text = f"{caption} {' '.join(hashtags)} {cta}".strip()
+            embedding = await get_embedding(full_text)
+            if embedding:
+                save_embedding(shop_id, post_id, full_text, embedding)
+                print(f"[agent] RAG 플라이휠: 업로드 성공 캡션 Vector DB 저장 완료 → {post_id}")
+        except Exception as e:
+            print(f"[agent] RAG 플라이휠 저장 실패 (무시): {e}")
+
 
 async def _handle_cancel(shop_id: str, post_id: str):
     """취소 처리 → 이력에 cancel 저장"""

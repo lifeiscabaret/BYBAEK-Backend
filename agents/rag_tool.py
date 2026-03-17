@@ -67,8 +67,15 @@ async def search_rag_context(
         raw_results = search_similar_captions(
             shop_id=shop_id,
             query_vector=query_vector,
-            top_k=TOP_K
+            top_k=TOP_K,
+            query_text=query_text   # ← Hybrid Search: BM25 키워드도 함께 검색
         )
+        # 유사도 점수 로깅
+        if raw_results:
+            top_score = raw_results[0].get("@search.score", 0)
+            print(f"[rag_tool] 검색 성공 → {len(raw_results)}개, top score={round(top_score, 4)}")
+        else:
+            print(f"[rag_tool] 검색 결과 없음")
     except Exception as e:
         print(f"[rag_tool] Vector DB 검색 에러: {e}")
         raw_results = []
@@ -193,10 +200,7 @@ async def _compress_context(posts: list, brand_settings: dict) -> dict:
         print(f"[rag_tool] GPT 압축 실패 ({e}) → fallback 구조 반환")
         return _build_fallback(posts, brand_settings)
 
-
-# ─────────────────────────────────────────────
 # [헬퍼] Fallback 컨텍스트 (Vector DB 데이터 없을 때)
-# ─────────────────────────────────────────────
 def _build_fallback(recent_posts: list, brand_settings: dict) -> dict:
     """Vector DB 데이터 없을 때 최근 게시물 + 브랜드 설정으로 fallback"""
     examples = [
@@ -216,9 +220,7 @@ def _build_fallback(recent_posts: list, brand_settings: dict) -> dict:
     }
 
 
-# ─────────────────────────────────────────────
 # [헬퍼] Kernel 초기화
-# ─────────────────────────────────────────────
 def _init_kernel() -> Kernel:
     deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT_MINI") or os.getenv("AZURE_OPENAI_DEPLOYMENT")
     api_key = os.getenv("AZURE_OPENAI_KEY") or os.getenv("AZURE_OPENAI_API_KEY")

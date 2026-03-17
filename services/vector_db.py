@@ -1,16 +1,3 @@
-"""
-기능: Azure AI Search를 이용한 벡터 데이터 저장 및 유사도 검색
-작성자: jiyeon back
-최초 생성: 2026. 03. 04.
-버전: 1.1
-
-[Modification Information]
-DATE        AUTHOR          NOTE
------------------------------------------------------------
-2026.03.04  jiyeon back     최초 생성 및 벡터 검색 로직 구현
-2026.03.09  jiyeon back     select 필드 간소화 (id, caption만 반환)
-"""
-
 import os
 import logging
 from azure.core.credentials import AzureKeyCredential
@@ -24,18 +11,19 @@ ENDPOINT = os.getenv("AZURE_SEARCH_ENDPOINT")
 KEY = os.getenv("AZURE_SEARCH_KEY")
 INDEX_NAME = os.getenv("AZURE_SEARCH_INDEX_NAME")
 
-if not ENDPOINT or not KEY or not INDEX_NAME:
-    raise ValueError("Azure Search 환경변수가 설정되지 않았습니다.")
-
-search_client = SearchClient(
-    endpoint=ENDPOINT,
-    index_name=INDEX_NAME,
-    credential=AzureKeyCredential(KEY)
-)
+search_client = None
+if ENDPOINT and KEY and INDEX_NAME:
+    search_client = SearchClient(
+        endpoint=ENDPOINT,
+        index_name=INDEX_NAME,
+        credential=AzureKeyCredential(KEY)
+    )
+else:
+    logging.warning("[vector_db] Azure Search 환경변수 미설정 → search_client 비활성화")
 
 def save_embedding(shop_id: str, post_id: str, caption: str, embedding: list) -> bool:
     """
-    생성된 캡션과 해당 캡션의 벡터 데이터를 AI Search 인덱스에 업로드합니다.
+    생성된 캡션과 해당 캡션의 벡터 데이터를 AI Search 인덱스에 업로드.
 
     Args:
         shop_id (str): 상점 고유 식별자
@@ -60,32 +48,47 @@ def save_embedding(shop_id: str, post_id: str, caption: str, embedding: list) ->
         logging.error(f"Vector DB 저장 실패: {str(e)}")
         return False
 
-def search_similar_captions(shop_id: str, query_vector: list, top_k: int = 5) -> list:
+def search_similar_captions(shop_id: str, query_vector: list, top_k: int = 5, query_text: str = None) -> list:
     """
-    입력된 쿼리 벡터와 가장 유사한 기존 캡션들을 AI Search에서 검색합니다.
+    Hybrid Search (Vector + BM25 키워드) 로 유사 캡션 검색.
 
     Args:
         shop_id (str): 검색 범위를 제한할 상점 식별자
-        query_vector (list): 검색 기준이 되는 벡터 데이터
-        top_k (int): 검색 결과로 반환할 최상위 결과 수
+        query_vector (list): 검색 기준 벡터 데이터
+        top_k (int): 반환할 최상위 결과 수
+        query_text (str): BM25 키워드 검색 텍스트 (없으면 vector only)
 
     Returns:
-        list: 유사도가 높은 캡션 데이터 리스트 (id, caption만 포함)
+        list: 유사도 높은 캡션 리스트 (@search.score 포함)
     """
+    if not search_client:
+        logging.warning("[vector_db] search_client 없음 → 빈 리스트 반환")
+        return []
+
     vector_query = VectorizedQuery(
-        vector=query_vector, 
-        k_nearest_neighbors=top_k, 
+        vector=query_vector,
+        k_nearest_neighbors=top_k,
         fields="caption_vector"
     )
 
     try:
         results = search_client.search(
-            search_text=None,
+            search_text=query_text,       # ← Hybrid: BM25 키워드 검색 추가
             vector_queries=[vector_query],
             filter=f"shop_id eq '{shop_id}'",
             select=["id", "caption"]
         )
-        return list(results)
+        hits = list(results)
+
+        # 유사도 점수 로깅
+        if hits:
+            scores = [round(h.get("@search.score", 0), 4) for h in hits]
+            logging.info(f"[vector_db] Hybrid 검색 결과: {len(hits)}개, 유사도 점수: {scores}")
+        else:
+            logging.info(f"[vector_db] 검색 결과 없음 (shop_id={shop_id})")
+
+        return hits
+
     except Exception as e:
         logging.error(f"유사 캡션 검색 실패: {str(e)}")
         return []
