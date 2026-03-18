@@ -80,7 +80,6 @@ async def agent_run(req: AgentRunRequest):
 
     # 수정: manual도 photo_ids 선택사항
     # orchestrator가 None이면 자동으로 후보 선택
-    
     try:
         result = await run_pipeline(
             shop_id=req.shop_id,
@@ -235,3 +234,61 @@ async def _handle_cancel(shop_id: str, post_id: str):
                 "status": "cancel"
             }
         )
+
+@router.get("/metrics/{shop_id}")
+async def get_agent_metrics(shop_id: str):
+    """
+    에이전트 품질 지표 조회
+
+    Returns:
+        {
+            "total_posts": 10,
+            "avg_caption_score": 0.86,
+            "retry_rate": "12%",
+            "model_distribution": {"mini": 8, "full": 2}
+        }
+    """
+    try:
+        from services.cosmos_db import get_cosmos_container
+        container = get_cosmos_container("Post")
+        query = f"SELECT c.metrics FROM c WHERE c.shop_id = \'{shop_id}\' AND IS_DEFINED(c.metrics)"
+        items = list(container.query_items(query=query, enable_cross_partition_query=True))
+
+        if not items:
+            return {
+                "total_posts": 0,
+                "avg_caption_score": 0,
+                "retry_rate": "0%",
+                "model_distribution": {},
+                "message": "아직 데이터가 없습니다. 에이전트를 실행해주세요."
+            }
+
+        scores, retries, models = [], [], {}
+        for item in items:
+            m = item.get("metrics", {})
+            scores.append(m.get("caption_score", 0))
+            retries.append(m.get("retry_count", 0))
+            model = m.get("model_used", "unknown")
+            models[model] = models.get(model, 0) + 1
+
+        total = len(scores)
+        avg_score = round(sum(scores) / total, 2)
+        retry_rate = f"{round(len([r for r in retries if r > 0]) / total * 100)}%"
+        score_dist = {
+            "0.9+":    len([s for s in scores if s >= 0.9]),
+            "0.8~0.9": len([s for s in scores if 0.8 <= s < 0.9]),
+            "0.7~0.8": len([s for s in scores if 0.7 <= s < 0.8]),
+            "0.7미만":  len([s for s in scores if s < 0.7]),
+        }
+
+        return {
+            "total_posts": total,
+            "avg_caption_score": avg_score,
+            "avg_retry_count": round(sum(retries)/total, 2),
+            "retry_rate": retry_rate,
+            "model_distribution": models,
+            "score_distribution": score_dist
+        }
+
+    except Exception as e:
+        raise HTTPException(500, str(e))
