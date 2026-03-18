@@ -10,7 +10,6 @@ web_search.py - 웹 서치 에이전트 (파이프라인 시작점)
 - 고객 1순위: 페이드컷
 - 타겟: 20-40대 남성 (직장인/대학생)
 """
-
 import os
 import re
 import json
@@ -22,17 +21,121 @@ from semantic_kernel.contents import ChatHistory
 from tavily import TavilyClient
 
 
+def _get_trend_queries(year: int, month: int) -> list:
+    """
+    연도/월을 동적으로 반영한 트렌드 검색 쿼리 생성.
+    커뮤니티/후기 위주로 실제 사람 표현 수집.
+    """
+    return [
+        f"바버샵 페이드컷 후기 {year}",
+        f"남자 헤어스타일 {year} 페이드컷 디시 커뮤니티",
+        "남성 페이드컷 투블럭 인스타 후기 실제후기",
+        "barbershop fade cut korea men review",
+    ]
+
+
+
+# 신뢰도 낮은 도메인 블랙리스트
+BLOCKED_DOMAINS = [
+    "ad.", "ads.", "sponsored", "promo",     # 광고
+    "pinterest", "tiktok.com",               # 짧은 콘텐츠 플랫폼
+    "aliexpress", "coupang", "gmarket",      # 쇼핑몰
+]
+
+# 바버샵 무관 / 유해 키워드 필터
+IRRELEVANT_KEYWORDS = [
+    "여성헤어", "여자헤어", "펌", "염색", "네일", "속눈썹",   # 여성 헤어
+    "카지노", "도박", "성인", "불법",                          # 유해
+    "다이어트", "헬스", "운동",                                # 무관
+]
+
+# 바버샵 관련 키워드 (이 중 하나라도 있어야 통과)
+RELEVANT_KEYWORDS = [
+    "바버", "barber", "페이드", "fade", "투블럭", "헤어컷",
+    "남자머리", "남성헤어", "남자헤어", "사이드파트", "포마드",
+    "크롭컷", "슬릭백", "리젠트", "언더컷"
+]
+
+
+def _filter_search_results(results: list) -> list:
+    """
+    검색 결과에서 신뢰도 낮은 소스, 무관 콘텐츠 제거.
+    
+    필터링 기준:
+    1. 블랙리스트 도메인 차단
+    2. 유해/무관 키워드 포함 시 제거
+    3. 바버샵 관련 키워드 없으면 제거
+    4. 내용이 너무 짧으면 제거 (100자 미만)
+    
+    Returns:
+        필터링된 결과 리스트 (출처 URL 포함)
+    """
+    filtered = []
+    blocked_count = 0
+    irrelevant_count = 0
+
+    for r in results:
+        url     = r.get("url", "").lower()
+        content = r.get("content", "")
+        title   = r.get("title", "")
+        text    = (content + " " + title).lower()
+
+        # 1. 블랙리스트 도메인 차단
+        if any(blocked in url for blocked in BLOCKED_DOMAINS):
+            blocked_count += 1
+            continue
+
+        # 2. 유해/무관 키워드 필터
+        if any(kw in text for kw in IRRELEVANT_KEYWORDS):
+            irrelevant_count += 1
+            continue
+
+        # 3. 바버샵 관련성 체크
+        if not any(kw in text for kw in RELEVANT_KEYWORDS):
+            irrelevant_count += 1
+            continue
+
+        # 4. 너무 짧은 콘텐츠 제거
+        if len(content) < 100:
+            continue
+
+        filtered.append(r)
+
+    print(f"[web_search] 필터링 결과: {len(results)}개 → {len(filtered)}개 "
+          f"(차단도메인:{blocked_count}, 무관:{irrelevant_count})")
+    return filtered
+
+
+def _extract_sources(results: list) -> list:
+    """
+    검색 결과에서 출처 정보 추출.
+    도메인명도 함께 반환해서 신뢰도 파악 가능하게.
+    """
+    sources = []
+    for r in results:
+        url = r.get("url", "")
+        if not url:
+            continue
+        # 도메인 추출
+        try:
+            from urllib.parse import urlparse
+            domain = urlparse(url).netloc.replace("www.", "")
+        except Exception:
+            domain = url
+
+        sources.append({
+            "title":  r.get("title", ""),
+            "url":    url,
+            "domain": domain
+        })
+    return sources
+
 LOCALE_CONFIG = {
     "KR": {
         "language": "Korean",
         "timezone_offset": 9,
         "timezone_name": "KST",
         "weather_query": "{city} 오늘 날씨",
-        "trend_queries": [
-            "바버샵 페이드컷 인스타그램 후기 2026",
-            "남성 페이드컷 헤어 스타일 후기 커뮤니티",
-            "barbershop fade cut men hairstyle 2026 review",
-        ],
         "seasons": {
             (3, 4, 5): "봄",
             (6, 7, 8): "여름",
@@ -43,13 +146,12 @@ LOCALE_CONFIG = {
             "봄": "봄 시즌 새 학기 페이드컷으로 깔끔하게 변화 적기",
             "여름": "여름 시원한 스킨페이드, 크루컷 추천 시즌",
             "가을": "가을 분위기 슬릭백, 아이비리그컷 변화 시즌",
-            "겨울": "연말 특별한 포마드컷, 리젠트로 스타일 변화 시즌"
+            "겨울": "연말 포마드컷, 리젠트로 스타일 변화 시즌"
         },
         "weather_prompt": (
             "아래 날씨 정보를 '맑음, 6도, 봄바람' 형식으로 한 줄 요약해줘. "
             "요약만 출력해."
         ),
-        # AG-001: JSON 응답으로 변경 → 파싱 안정성 확보
         "trend_prompt": """아래는 바버샵 페이드컷 관련 실제 검색 결과야.
 
 검색 결과:
@@ -59,9 +161,9 @@ LOCALE_CONFIG = {
 {{
   "trend_summary": "지금 어떤 스타일이 인기인지 2줄 이내. 스타일명 구체적으로.",
   "target_analysis": "어떤 고객층이 찾는지 1줄.",
-  "marketing_strategy": "인스타 게시물에 쓸 수 있는 홍보 포인트 1줄.",
+  "marketing_strategy": "인스타 게시물에 쓸 수 있는 홍보 포인트 1줄. 긴박감 문구 금지.",
   "raw_snippets": [
-    "검색 결과에서 뽑은 자연스러운 실제 표현 1 (사람들이 실제로 쓴 말투)",
+    "검색 결과에서 뽑은 자연스러운 실제 표현 1 (사람이 직접 쓴 말투만)",
     "검색 결과에서 뽑은 자연스러운 실제 표현 2",
     "검색 결과에서 뽑은 자연스러운 실제 표현 3"
   ]
@@ -69,18 +171,20 @@ LOCALE_CONFIG = {
 
 raw_snippets 규칙:
 - 검색 결과에 실제로 등장한 표현만 뽑을 것
-- AI가 요약한 말 말고, 사람이 직접 쓴 것처럼 느껴지는 표현
+- "~선사합니다", "~완성해드립니다" 같은 AI/광고 말투 금지
+- 사람이 직접 후기 쓸 때 쓰는 자연스러운 말투만
 - 없으면 빈 배열 []
 - 바버샵/남성 헤어 무관한 내용 포함 금지
 """,
-        # AG-002: promo에 target/strategy 통합
+        # 할루시네이션 방지
         "promo_prompt": (
             "오늘은 {today}이고 계절은 {season}이야.\n"
             "트렌드 요약: {trend_summary}\n"
             "타겟 고객: {target_analysis}\n\n"
             "위 정보를 바탕으로 바버샵 인스타그램 게시물에 쓸 수 있는 "
-            "계절감 + 트렌드가 담긴 홍보 포인트를 1~2줄로 만들어줘. "
-            "페이드컷 중심, 예약 긴박감 포함. "
+            "계절감 + 트렌드가 담긴 홍보 포인트를 1~2줄로 만들어줘.\n"
+            "페이드컷 중심으로.\n"
+            "확인되지 않은 사실(예약 현황, 자리 수, 마감 임박 등) 절대 포함 금지.\n"
             "홍보 포인트만 출력해."
         )
     }
@@ -107,12 +211,8 @@ def _init_tavily() -> TavilyClient:
 
 
 def _parse_json_safe(text: str) -> dict:
-    """
-    AG-001: GPT JSON 응답 안전 파싱.
-    마크다운 코드블록 제거 후 파싱, 실패 시 빈 dict 반환.
-    """
+    """GPT JSON 응답 안전 파싱. 마크다운 코드블록 제거 후 파싱."""
     text = str(text).strip()
-    # ```json ... ``` 블록 제거
     match = re.search(r"```(?:json)?\s*([\s\S]+?)\s*```", text)
     if match:
         text = match.group(1)
@@ -159,7 +259,8 @@ async def web_search_agent(shop_id: str, force_refresh: bool = False) -> dict:
         "trend": "페이드컷과 사이드파트가...",
         "target": "깔끔한 이미지 원하는 직장인...",
         "strategy": "봄 이미지 변신 지금...",
-        "promo": "봄 트렌드 페이드컷 변화 적기, 이번 주 예약 마감 임박",
+        "promo": "봄 트렌드 페이드컷 변화 적기",
+        "raw_snippets": ["실제 표현1", "실제 표현2"],
         ...
     }
     """
@@ -187,10 +288,9 @@ async def web_search_agent(shop_id: str, force_refresh: bool = False) -> dict:
     # 날씨 + 트렌드 병렬 수집
     (weather, weather_sources), (trend_data, trend_sources) = await asyncio.gather(
         _get_weather(tavily, kernel, city, now, config),
-        _get_barbershop_trend(tavily, kernel, config)
+        _get_barbershop_trend(tavily, kernel, config, now)
     )
 
-    # AG-002: promo 생성 시 trend_data 반영
     promo = await _get_promo_info(kernel, now, config, trend_data)
 
     result = {
@@ -201,9 +301,14 @@ async def web_search_agent(shop_id: str, force_refresh: bool = False) -> dict:
         "strategy":        trend_data.get("marketing_strategy", ""),
         "trend_sources":   trend_sources,
         "promo":           promo,
+        "raw_snippets":    trend_data.get("raw_snippets", []),  # ← post_writer 말투 참고용
         "locale":          locale,
         "city":            city,
-        "collected_at":    now.isoformat()
+        "collected_at":    now.isoformat(),
+        "sources_summary": [           # 출처 요약 (포트폴리오/디버깅용)
+            f"{s['domain']}: {s['title'][:30]}"
+            for s in (trend_sources or [])[:3]
+        ]
     }
 
     await _save_cache(shop_id, result, today_str)
@@ -217,8 +322,7 @@ async def _get_weather(tavily, kernel, city, now, config) -> tuple:
         query    = config["weather_query"].format(city=city)
         results  = tavily.search(query=query, search_depth="basic", max_results=3)
         raw_list = results.get("results", [])
-        sources  = [{"title": r.get("title", ""), "url": r.get("url", "")}
-                    for r in raw_list if r.get("url")]
+        sources = _extract_sources(raw_list)
         raw_weather = "\n".join([r.get("content", "") for r in raw_list if r.get("content")])
 
         if not raw_weather:
@@ -239,25 +343,22 @@ async def _get_weather(tavily, kernel, city, now, config) -> tuple:
         return config["season_fallback"].get(season, ""), []
 
 
-async def _get_barbershop_trend(tavily, kernel, config) -> tuple:
+async def _get_barbershop_trend(tavily, kernel, config, now) -> tuple:
     """
-    AG-001: 트렌드 수집 + JSON 파싱으로 안정성 강화.
-
-    Returns:
-        (trend_data, sources)
-        trend_data = {
-            "trend_summary": str,
-            "target_analysis": str,
-            "marketing_strategy": str
-        }
+    트렌드 수집 + JSON 파싱.
+    연도/월 동적 반영, 커뮤니티/후기 위주 쿼리 사용.
     """
     fallback = {
         "trend_summary":      "페이드컷과 투블럭 스타일이 20-30대 남성 사이에서 인기",
         "target_analysis":    "깔끔한 이미지 원하는 직장인, 대학생",
-        "marketing_strategy": "기술력 강조 + 예약 긴박감 CTA"
+        "marketing_strategy": "기술력 강조 + 자연스러운 예약 유도",
+        "raw_snippets":       []
     }
 
     try:
+        # [수정] 동적 쿼리 생성
+        trend_queries = _get_trend_queries(now.year, now.month)
+
         search_tasks = [
             asyncio.to_thread(
                 tavily.search,
@@ -265,19 +366,22 @@ async def _get_barbershop_trend(tavily, kernel, config) -> tuple:
                 search_depth="advanced",
                 max_results=3
             )
-            for query in config["trend_queries"]
+            for query in trend_queries
         ]
         search_results = await asyncio.gather(*search_tasks)
 
-        sources = [
-            {"title": r.get("title", ""), "url": r.get("url", "")}
+        sources = _extract_sources(filtered_results)
+        # 전체 결과 수집 후 필터링
+        all_results = [
+            r
             for results in search_results
-            for r in results.get("results", []) if r.get("url")
+            for r in results.get("results", [])
         ]
+        filtered_results = _filter_search_results(all_results)
+
         raw_trend = "\n".join([
             r.get("content", "")
-            for results in search_results
-            for r in results.get("results", []) if r.get("content")
+            for r in filtered_results if r.get("content")
         ])
 
         if not raw_trend:
@@ -291,26 +395,21 @@ async def _get_barbershop_trend(tavily, kernel, config) -> tuple:
             settings=chat_service.instantiate_prompt_execution_settings()
         )
 
-        # AG-001: JSON 파싱으로 변경 (기존 줄바꿈 split 방식 제거)
         parsed = _parse_json_safe(str(response))
 
         trend_data = {
             "trend_summary":      parsed.get("trend_summary",      fallback["trend_summary"]),
             "target_analysis":    parsed.get("target_analysis",    fallback["target_analysis"]),
             "marketing_strategy": parsed.get("marketing_strategy", fallback["marketing_strategy"]),
-            "raw_snippets":       parsed.get("raw_snippets",       []),   # 실제 검색 표현 (post_writer 말투 참고용)
-            "sources":            sources                                  # 출처 URL
+            "raw_snippets":       parsed.get("raw_snippets",       []),
+            "sources":            sources
         }
-
-        if trend_data["raw_snippets"]:
-            print(f"  스니펫: {trend_data['raw_snippets'][0][:40]}...")
-        if sources:
-            print(f"  출처  : {sources[0]['url']}")
 
         print(f"[web_search] 트렌드 분석 완료:")
         print(f"  요약  : {trend_data['trend_summary'][:50]}...")
         print(f"  타겟  : {trend_data['target_analysis']}")
-        print(f"  전략  : {trend_data['marketing_strategy']}")
+        if trend_data["raw_snippets"]:
+            print(f"  스니펫: {trend_data['raw_snippets'][0][:40]}...")
 
         return trend_data, sources
 
@@ -321,9 +420,8 @@ async def _get_barbershop_trend(tavily, kernel, config) -> tuple:
 
 async def _get_promo_info(kernel, now, config, trend_data: dict) -> str:
     """
-    AG-002: promo 생성 시 trend_summary + target_analysis 반영.
-    기존: 계절 정보만
-    변경: 계절 + 트렌드 요약 + 타겟 고객 통합
+    promo 생성. 할루시네이션 방지 강화.
+    예약 현황, 자리 수, 마감 임박 등 확인 불가 정보 금지.
     """
     try:
         today  = now.strftime("%Y년 %m월 %d일") if config["language"] == "Korean" \
