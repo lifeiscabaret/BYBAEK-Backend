@@ -64,16 +64,28 @@ async def search_rag_context(
     # 3. Vector DB 검색
     from services.vector_db import search_similar_captions
     try:
-        raw_results = search_similar_captions(
-            shop_id=shop_id,
-            query_vector=query_vector,
-            top_k=TOP_K,
-            query_text=query_text   # ← Hybrid Search: BM25 키워드도 함께 검색
+        # 타입별 분리 검색
+        body_results     = search_similar_captions(shop_id, query_vector, top_k=3,
+                            query_text=query_text, content_type="caption_body")
+        hashtag_results  = search_similar_captions(shop_id, query_vector, top_k=2,
+                            query_text=query_text, content_type="hashtag_set")
+        cta_results      = search_similar_captions(shop_id, query_vector, top_k=2,
+                            query_text=query_text, content_type="cta")
+        structure_results= search_similar_captions(shop_id, query_vector, top_k=1,
+                            query_text=query_text, content_type="structure")
+
+        # 타입 정보 포함해서 합치기
+        raw_results = (
+            [{"content_type": "caption_body",  **r} for r in body_results] +
+            [{"content_type": "hashtag_set",   **r} for r in hashtag_results] +
+            [{"content_type": "cta",           **r} for r in cta_results] +
+            [{"content_type": "structure",     **r} for r in structure_results]
         )
+
         # 유사도 점수 로깅
         if raw_results:
             top_score = raw_results[0].get("@search.score", 0)
-            print(f"[rag_tool] 검색 성공 → {len(raw_results)}개, top score={round(top_score, 4)}")
+            print(f"[rag_tool] 타입별 검색 완료 → body:{len(body_results)} hashtag:{len(hashtag_results)} cta:{len(cta_results)} structure:{len(structure_results)}, top score={round(top_score, 4)}")
         else:
             print(f"[rag_tool] 검색 결과 없음")
     except Exception as e:
@@ -139,10 +151,28 @@ async def _compress_context(posts: list, brand_settings: dict) -> dict:
     chat = kernel.get_service("azure_openai")
 
     # 게시물 텍스트 정리
-    posts_text = "\n\n".join([
-        f"[게시물 {i+1}]\n캡션: {p.get('caption', '')}"
-        for i, p in enumerate(posts[:MAX_EXAMPLES * 2])
-    ])
+    # 타입별로 분리해서 GPT에 전달
+    bodies     = [p for p in posts if p.get("content_type") == "caption_body"]
+    hashtags   = [p for p in posts if p.get("content_type") == "hashtag_set"]
+    ctas       = [p for p in posts if p.get("content_type") == "cta"]
+    structures = [p for p in posts if p.get("content_type") == "structure"]
+
+    body_text = "\n".join([f"- {p.get('caption','')}" for p in bodies[:3]])
+    hashtag_text = "\n".join([f"- {p.get('caption','')}" for p in hashtags[:2]])
+    cta_text = "\n".join([f"- {p.get('caption','')}" for p in ctas[:2]])
+    structure_text = "\n".join([f"- {p.get('caption','')}" for p in structures[:1]])
+
+    posts_text = f"""[본문 스타일 예시]
+{body_text or "없음"}
+
+[해시태그 조합 예시]
+{hashtag_text or "없음"}
+
+[CTA 문구 예시]
+{cta_text or "없음"}
+
+[글 구조 패턴]
+{structure_text or "없음"}"""
 
     brand_tone = brand_settings.get("brand_tone", "")
     if isinstance(brand_tone, list):
@@ -200,7 +230,10 @@ async def _compress_context(posts: list, brand_settings: dict) -> dict:
         print(f"[rag_tool] GPT 압축 실패 ({e}) → fallback 구조 반환")
         return _build_fallback(posts, brand_settings)
 
+
+# ─────────────────────────────────────────────
 # [헬퍼] Fallback 컨텍스트 (Vector DB 데이터 없을 때)
+# ─────────────────────────────────────────────
 def _build_fallback(recent_posts: list, brand_settings: dict) -> dict:
     """Vector DB 데이터 없을 때 최근 게시물 + 브랜드 설정으로 fallback"""
     examples = [
@@ -220,7 +253,9 @@ def _build_fallback(recent_posts: list, brand_settings: dict) -> dict:
     }
 
 
+# ─────────────────────────────────────────────
 # [헬퍼] Kernel 초기화
+# ─────────────────────────────────────────────
 def _init_kernel() -> Kernel:
     deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT_MINI") or os.getenv("AZURE_OPENAI_DEPLOYMENT")
     api_key = os.getenv("AZURE_OPENAI_KEY") or os.getenv("AZURE_OPENAI_API_KEY")
