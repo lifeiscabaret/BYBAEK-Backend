@@ -49,7 +49,11 @@ def get_graph_token(easy_auth_token: str) -> str:
 
     result = app.acquire_token_on_behalf_of(
         user_assertion=easy_auth_token,
-        scopes=["https://graph.microsoft.com/User.Read"]
+        scopes=[
+            "https://graph.microsoft.com/Files.Read",
+            "https://graph.microsoft.com/Files.ReadWrite",
+            "https://graph.microsoft.com/User.Read"
+        ]
     )
     logger.info(result)
 
