@@ -48,9 +48,13 @@ async def post_writer_agent(
 
     try:
         chat_service = kernel.get_service("azure_openai")
+        settings = chat_service.instantiate_prompt_execution_settings()
+        settings.temperature = 0.85   # 자연스러운 말투 + 일관성 균형
+        settings.max_tokens = 600
+
         response = await chat_service.get_chat_message_content(
             chat_history=chat_history,
-            settings=chat_service.instantiate_prompt_execution_settings()
+            settings=settings
         )
 
         raw = str(response).strip()
@@ -137,35 +141,34 @@ def _build_prompt(
     exclude_str = ", ".join(exclude_conditions) if exclude_conditions else "없음"
 
     # 시스템 프롬프트 구성
-    system_prompt = f"""너는 한국 바버샵 인스타그램 게시물을 대신 써주는 마케터야.
-사장님은 시술로 바빠서 직접 홍보할 시간이 없어. 네가 대신 써줘야 해.
+    system_prompt = f"""너는 바버샵 사장님 대신 인스타 게시물을 써주는 사람이야.
+사장님이 바빠서 직접 못 쓰니까 네가 대신 쓰는 거야.
 
-[작성 원칙]
-1. 절대로 확인되지 않은 정보를 지어내지 마
-   - 경력 연수 (예: "22년 경력", "10년 경력") → 절대 금지. DB에 없으면 쓰지 마
-   - 예약 현황 (예: "오늘 3자리 남음", "마감 임박") → 절대 금지. 실제 현황 모름
-   - 수상 이력, 인증서, 특허 → 절대 금지
+[절대 금지]
+- 경력 연수 지어내기 ("22년 경력" 등) — DB에 없으면 절대 쓰지 마
+- 예약 현황 지어내기 ("오늘 3자리 남음" 등) — 실제 현황 모름
+- "정교한", "선사하는", "완성하는", "트렌디한" 같은 AI 냄새 나는 표현
+- 수상 이력, 인증, 특허 — 확인 안 된 거 절대 쓰지 마
 
-2. 자연스러운 사람 말투로 써
-   - AI티 나는 표현 금지: "정교한 그라데이션으로 완성하는", "트렌디한 스타일을 선사하는"
-   - 실제 바버샵 사장님이 쓸 법한 말투로: 짧고, 직접적으로
-   - 이모지: {emoji_usage}
-   - 길이: {caption_len}
+[말투]
+- 실제 바버샵 사장님이 인스타에 쓸 법한 말투로 — 짧고 편하게
+- 브랜드 톤: {brand_tone}
+- 이모지: {emoji_usage}
+- 길이: {caption_len}
 
-3. 이 샵 스타일 범위 안에서만 작성
-   - 전문 스타일: {preferred_str}
-   - 금칙어: {forbidden_str}
-   - 언급 금지 조건: {exclude_str}
+[내용 범위]
+- 전문 스타일: {preferred_str}
+- 금칙어: {forbidden_str}
+- 언급 금지: {exclude_str}
 
-4. 브랜드 톤: {brand_tone}
+[해시태그]
+- {hashtag_style} 스타일 / 총 {hashtag_count}개
 
-5. 해시태그: {hashtag_style} 스타일 / 총 {hashtag_count}개
-
-[출력 형식 - JSON만, 설명 없이]
+[출력 — JSON만, 다른 텍스트 없이]
 {{
-  "caption": "첫 문장에 페이드 스타일명 포함\\n2~3줄, 자연스러운 말투",
+  "caption": "첫 문장에 스타일명 포함, {caption_len}, 자연스러운 말투",
   "hashtags": ["#페이드컷", "#바버샵", ... 총 {hashtag_count}개],
-  "cta": "예약 유도 문구 (예: DM 주시면 바로 확인해드려요)"
+  "cta": "예약 유도 문구"
 }}"""
 
     # ── 유저 프롬프트 ──
@@ -214,15 +217,13 @@ def _build_prompt(
             parts.append(f"[이 샵의 말투 패턴]\n{tone_rules}")
 
         if examples:
-            ex_text = f"[과거 성과 좋은 게시물 분석 - {rag_source}]\n"
-            ex_text += "마케터 관점: 이 게시물들이 왜 문의율이 높았는지 분석하고 패턴을 재현하세요.\n\n"
+            ex_text = f"[이 샵의 과거 게시물 — 이 말투와 비슷하게 써줘]\n"
             for i, ex in enumerate(examples[:3], 1):
                 caption  = ex.get("caption", "")
                 hashtags = ex.get("hashtags", [])
                 ex_text += f"{i}. {caption[:80]}{'...' if len(caption) > 80 else ''}\n"
                 if hashtags:
                     ex_text += f"   해시태그: {' '.join(hashtags[:5])}\n"
-                ex_text += f"   → 분석: 첫 문장 키워드 여부 / CTA 강도 / 타겟팅 명확성 체크\n"
             parts.append(ex_text)
 
         if hashtag_patterns:
@@ -246,7 +247,7 @@ def _build_prompt(
         )
     else:
         parts.append(
-            "위 전략과 데이터를 바탕으로, 문의가 폭발하는 게시물을 작성하세요.\n"
+            "위 내용 참고해서 게시물 써줘.\n"
             "체크리스트:\n"
             "✅ 첫 문장에 메인 키워드 배치\n"
             "✅ 타겟 고객 니즈 자극\n"

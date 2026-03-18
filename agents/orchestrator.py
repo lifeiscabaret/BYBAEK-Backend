@@ -231,7 +231,12 @@ async def run_pipeline(
     _val = brand_settings.get("insta_review_bfr_upload_yn", "Y")
     need_review = str(_val).upper() != "N"
 
-    await _save_draft(shop_id, post_id, post_draft, selected_photos)
+    await _save_draft(
+        shop_id, post_id, post_draft, selected_photos,
+        caption_score=caption_score,
+        retry_count=total_retries,
+        model_used=tier
+    )
 
     if not need_review:
         # 자동 업로드: 검토 없이 바로 인스타 업로드
@@ -488,7 +493,15 @@ async def _get_photos_by_ids(shop_id: str, photo_ids: list) -> list:
     return [p for p in all_photos if p.get("id") in photo_ids]
 
 
-async def _save_draft(shop_id: str, post_id: str, post_draft: dict, selected_photos: list):
+async def _save_draft(
+    shop_id: str,
+    post_id: str,
+    post_draft: dict,
+    selected_photos: list,
+    caption_score: float = 0.0,
+    retry_count: int = 0,
+    model_used: str = "mini"
+):
     from services.cosmos_db import save_draft
     save_draft(
         shop_id=shop_id,
@@ -497,7 +510,10 @@ async def _save_draft(shop_id: str, post_id: str, post_draft: dict, selected_pho
         hashtags=post_draft.get("hashtags", []),
         photo_ids=[p.get("id", p.get("photo_id")) for p in selected_photos],
         cta=post_draft.get("cta", ""),
-        review_action="pending"
+        review_action="pending",
+        caption_score=round(caption_score, 2),
+        retry_count=retry_count,
+        model_used=model_used
     )
 
 
