@@ -44,8 +44,9 @@ def get_shop_location(shop_id: str) -> dict:
     container = get_cosmos_container("Shop")
     
     try:
-        query = f"SELECT c.location, c.city FROM c WHERE c.shop_id = '{shop_id}'"
-        items = list(container.query_items(query=query, enable_cross_partition_query=True))
+        query = "SELECT c.location, c.city FROM c WHERE c.shop_id = @shop_id"
+        parameters = [{"name": "@shop_id", "value": shop_id}]
+        items = list(container.query_items(query=query, parameters=parameters, enable_cross_partition_query=True))
         
         if items:
             city = items[0].get("city") or "서울"
@@ -215,10 +216,11 @@ def get_all_photos_by_shop(shop_id: str) -> list:
         list: 조회된 사진 객체 리스트
     """
     container = get_cosmos_container("Photo")
-    query = f"SELECT * FROM c WHERE c.shop_id = '{shop_id}'"
-    
+    query = "SELECT * FROM c WHERE c.shop_id = @shop_id"
+    parameters = [{"name": "@shop_id", "value": shop_id}]
+
     try:
-        photos = list(container.query_items(query=query, enable_cross_partition_query=True))
+        photos = list(container.query_items(query=query, parameters=parameters, enable_cross_partition_query=True))
         return photos
     except Exception as e:
         logging.error(f"Photo 조회 중 오류 발생: {str(e)}")
