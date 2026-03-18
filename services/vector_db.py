@@ -21,26 +21,38 @@ if ENDPOINT and KEY and INDEX_NAME:
 else:
     logging.warning("[vector_db] Azure Search 환경변수 미설정 → search_client 비활성화")
 
-def save_embedding(shop_id: str, post_id: str, caption: str, embedding: list) -> bool:
+def save_embedding(
+    shop_id: str,
+    post_id: str,
+    caption: str,
+    embedding: list,
+    content_type: str = "caption_body"
+) -> bool:
     """
-    생성된 캡션과 해당 캡션의 벡터 데이터를 AI Search 인덱스에 업로드.
+    캡션/해시태그/CTA/구조 패턴을 타입별로 Vector DB에 저장.
 
     Args:
-        shop_id (str): 상점 고유 식별자
-        post_id (str): 게시물 고유 식별자
-        caption (str): 벡터화된 원문 캡션
-        embedding (list): AI 모델을 통해 추출된 수치 벡터 리스트
+        shop_id: 상점 고유 식별자
+        post_id: 게시물 고유 식별자
+        caption: 저장할 텍스트
+        embedding: 벡터 리스트
+        content_type: "caption_body" | "hashtag_set" | "cta" | "structure"
 
     Returns:
         bool: 저장 성공 여부
     """
+    if not search_client:
+        logging.warning("[vector_db] search_client 없음 → 저장 스킵")
+        return False
+
     document = {
         "id": post_id,
         "shop_id": shop_id,
         "caption": caption,
-        "caption_vector": embedding  
+        "caption_vector": embedding,
+        "content_type": content_type   
     }
-    
+
     try:
         search_client.upload_documents(documents=[document])
         return True
@@ -48,7 +60,7 @@ def save_embedding(shop_id: str, post_id: str, caption: str, embedding: list) ->
         logging.error(f"Vector DB 저장 실패: {str(e)}")
         return False
 
-def search_similar_captions(shop_id: str, query_vector: list, top_k: int = 5, query_text: str = None) -> list:
+def search_similar_captions(shop_id: str, query_vector: list, top_k: int = 5, query_text: str = None, content_type: str = None) -> list:
     """
     Hybrid Search (Vector + BM25 키워드) 로 유사 캡션 검색.
 
@@ -72,11 +84,18 @@ def search_similar_captions(shop_id: str, query_vector: list, top_k: int = 5, qu
     )
 
     try:
+        # content_type 필터 조합
+        base_filter = f"shop_id eq '{shop_id}'"
+        if content_type:
+            search_filter = f"{base_filter} and content_type eq '{content_type}'"
+        else:
+            search_filter = base_filter
+
         results = search_client.search(
-            search_text=query_text,       # ← Hybrid: BM25 키워드 검색 추가
+            search_text=query_text,
             vector_queries=[vector_query],
-            filter=f"shop_id eq '{shop_id}'",
-            select=["id", "caption"]
+            filter=search_filter,
+            select=["id", "caption", "content_type"]
         )
         hits = list(results)
 
