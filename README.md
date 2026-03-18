@@ -5,7 +5,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.11-blue)](https://python.org)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115-green)](https://fastapi.tiangolo.com)
-[![Azure](https://img.shields.io/badge/Azure-OpenAI%20%7C%20Functions%20%7C%20CosmosDB-0078D4)](https://azure.microsoft.com)
+[![Azure](https://img.shields.io/badge/Azure-OpenAI%20%7C%20CosmosDB-0078D4)](https://azure.microsoft.com)
 [![Semantic Kernel](https://img.shields.io/badge/Semantic%20Kernel-AI%20Orchestration-purple)](https://github.com/microsoft/semantic-kernel)
 [![License](https://img.shields.io/badge/License-MIT-yellow)](LICENSE)
 
