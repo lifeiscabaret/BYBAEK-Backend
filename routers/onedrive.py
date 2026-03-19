@@ -2,7 +2,6 @@ import mimetypes
 import os
 from typing import Dict, Generator, List, Optional
 
-import msal
 import requests
 import traceback
 from fastapi import APIRouter, HTTPException, status, Request
@@ -33,39 +32,6 @@ class SyncPhotosRequest(BaseModel):
     overwrite: bool = True
 
 
-def get_graph_token(easy_auth_token: str) -> str:
-
-    tenant_id = os.getenv("AZURE_TENANT_ID")
-    client_id = os.getenv("AZURE_CLIENT_ID")
-    client_secret = os.getenv("AZURE_CLIENT_SECRET")
-
-    authority = f"https://login.microsoftonline.com/{tenant_id}"
-
-    app = msal.ConfidentialClientApplication(
-        client_id=client_id,
-        authority=authority,
-        client_credential=client_secret,
-    )
-
-    result = app.acquire_token_on_behalf_of(
-        user_assertion=easy_auth_token,
-        scopes=[
-            "https://graph.microsoft.com/Files.Read",
-            "https://graph.microsoft.com/Files.ReadWrite",
-            "https://graph.microsoft.com/User.Read"
-        ]
-    )
-    logger.info(result)
-
-    access_token = result.get("access_token")
-    logger.info(access_token)
-
-    if not access_token:
-        raise RuntimeError(f"Failed to acquire Graph token: {result}")
-
-    return access_token
-
-
 def graph_get(url: str, token: str, params: Optional[Dict] = None) -> Dict:
     headers = {
         "Authorization": f"Bearer {token}"
@@ -84,7 +50,6 @@ def get_user_drive_id(token: str) -> str:
         token,
         params={"$select": "id"}
     )
-
     logger.info(data)
     return data["id"]
 
@@ -153,23 +118,26 @@ def stream_download_file(download_url: str) -> requests.Response:
 )
 def sync_onedrive_photos(req: SyncPhotosRequest, request: Request) -> SyncPhotosResponse:
     try:
-
-        aad_token = request.headers.get("x-ms-token-aad-access-token")
-        logger.info(aad_token)
-
-        token = get_graph_token(aad_token)
-        logger.info(token)
+        # ✅ Easy Auth가 주는 토큰은 이미 Microsoft Graph 토큰 (aud=Graph)
+        # OBO 불필요 - 바로 Graph API에 사용
+        token = request.headers.get("x-ms-token-aad-access-token")
+        if not token:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="MS 로그인 필요. x-ms-token-aad-access-token 헤더 없음."
+            )
+        logger.info(f"[onedrive] Graph 토큰 직접 사용 (OBO 없음)")
 
         drive_id = get_user_drive_id(token)
-        logger.info(drive_id)
+        logger.info(f"[onedrive] drive_id: {drive_id}")
 
-        # ✅ 수정: DefaultAzureCredential 제거 → connection_string 방식 사용
         connection_string = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
         container_name = os.getenv("AZURE_BLOB_CONTAINER_NAME", "photos")
         blob_service_client = BlobServiceClient.from_connection_string(connection_string)
         container_client = blob_service_client.get_container_client(container=container_name)
 
         shop_id = request.headers.get("X-MS-CLIENT-PRINCIPAL-ID", "unknown")
+        logger.info(f"[onedrive] shop_id: {shop_id}")
 
         uploaded = 0
         failed = 0
@@ -178,8 +146,6 @@ def sync_onedrive_photos(req: SyncPhotosRequest, request: Request) -> SyncPhotos
         for photo in walk_drive_for_photos(token, drive_id, req.root_folder_item_id):
             name = photo["name"]
             relative_path = sanitize_blob_path(photo.get("_relative_path", name))
-            logger.info(name)
-
             download_url = photo.get("@microsoft.graph.downloadUrl")
 
             if not download_url:
@@ -213,11 +179,14 @@ def sync_onedrive_photos(req: SyncPhotosRequest, request: Request) -> SyncPhotos
                     "last_modified": photo.get("lastModifiedDateTime", "")
                 })
 
+                logger.info(f"[onedrive] ✅ 업로드 성공: {name}")
                 uploaded += 1
 
             except Exception as e:
-                logger.error(f"업로드 실패 ({name}): {e}")
+                logger.error(f"[onedrive] ❌ 업로드 실패 ({name}): {e}")
                 failed += 1
+
+        logger.info(f"[onedrive] 동기화 완료 | uploaded={uploaded} failed={failed} skipped={skipped}")
 
         return SyncPhotosResponse(
             success=True,
@@ -227,9 +196,11 @@ def sync_onedrive_photos(req: SyncPhotosRequest, request: Request) -> SyncPhotos
             container=container_name,
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
         traceback.print_exc()
-        logger.error(f"OneDrive 동기화 전체 에러: {e}")
+        logger.error(f"[onedrive] 동기화 전체 에러: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e),
