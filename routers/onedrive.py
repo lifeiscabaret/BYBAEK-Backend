@@ -7,9 +7,9 @@ import requests
 import traceback
 from fastapi import APIRouter, HTTPException, status, Request
 from pydantic import BaseModel
-from azure.identity import DefaultAzureCredential 
 from azure.storage.blob import BlobServiceClient, ContentSettings
 from utils.logging import logger
+from services.cosmos_db import save_photo
 
 
 router = APIRouter()
@@ -145,6 +145,7 @@ def stream_download_file(download_url: str) -> requests.Response:
         raise RuntimeError(f"Download failed: {response.status_code} {response.text}")
     return response
 
+
 @router.post(
     "/sync-photos",
     response_model=SyncPhotosResponse,
@@ -162,14 +163,12 @@ def sync_onedrive_photos(req: SyncPhotosRequest, request: Request) -> SyncPhotos
         drive_id = get_user_drive_id(token)
         logger.info(drive_id)
 
-        container_name = "photos"
-
-        account_url = "https://stctrla.blob.core.windows.net"
-        credential = DefaultAzureCredential()
-        blob_service_client = BlobServiceClient(account_url, credential=credential)
+        # ✅ 수정: DefaultAzureCredential 제거 → connection_string 방식 사용
+        connection_string = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
+        container_name = os.getenv("AZURE_BLOB_CONTAINER_NAME", "photos")
+        blob_service_client = BlobServiceClient.from_connection_string(connection_string)
         container_client = blob_service_client.get_container_client(container=container_name)
 
-        # shop_id: MS 로그인 유저 ID (CosmosDB Photo 저장에 사용)
         shop_id = request.headers.get("X-MS-CLIENT-PRINCIPAL-ID", "unknown")
 
         uploaded = 0
@@ -177,7 +176,7 @@ def sync_onedrive_photos(req: SyncPhotosRequest, request: Request) -> SyncPhotos
         skipped = 0
 
         for photo in walk_drive_for_photos(token, drive_id, req.root_folder_item_id):
-            name         = photo["name"]
+            name = photo["name"]
             relative_path = sanitize_blob_path(photo.get("_relative_path", name))
             logger.info(name)
 
@@ -196,7 +195,6 @@ def sync_onedrive_photos(req: SyncPhotosRequest, request: Request) -> SyncPhotos
                 download_resp = stream_download_file(download_url)
                 content_settings = ContentSettings(content_type=content_type)
 
-                # 1. Blob Storage에 저장 (실제 파일명 사용)
                 container_client.upload_blob(
                     name=relative_path,
                     data=download_resp.raw,
@@ -204,10 +202,9 @@ def sync_onedrive_photos(req: SyncPhotosRequest, request: Request) -> SyncPhotos
                     overwrite=req.overwrite
                 )
 
-                # 2. CosmosDB Photo 컨테이너에 메타데이터 저장
-                blob_url  = f"https://stctrla.blob.core.windows.net/{container_name}/{relative_path}"
-                photo_id  = f"photo_{shop_id}_{relative_path.replace('/', '_').replace(' ', '_')}"
-                from services.cosmos_db import save_photo
+                blob_url = f"https://stctrla.blob.core.windows.net/{container_name}/{relative_path}"
+                photo_id = f"photo_{shop_id}_{relative_path.replace('/', '_').replace(' ', '_')}"
+
                 save_photo(shop_id, {
                     "photo_id":      photo_id,
                     "blob_url":      blob_url,
@@ -231,8 +228,8 @@ def sync_onedrive_photos(req: SyncPhotosRequest, request: Request) -> SyncPhotos
         )
 
     except Exception as e:
-        traceback.print_exc()  #추가
-        logger.error(f"OneDrive 동기화 전체 에러: {e}")  #추가
+        traceback.print_exc()
+        logger.error(f"OneDrive 동기화 전체 에러: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e),
