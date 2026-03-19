@@ -39,7 +39,7 @@ def get_graph_token(easy_auth_token: str) -> str:
     client_id = os.getenv("AZURE_CLIENT_ID")
     client_secret = os.getenv("AZURE_CLIENT_SECRET")
 
-    authority = f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
+    authority = f"https://login.microsoftonline.com/{tenant_id}"
 
     app = msal.ConfidentialClientApplication(
         client_id=client_id,
