@@ -16,12 +16,8 @@ from services.cosmos_db import save_draft
 from services.cosmos_db import save_post_data
 from services.cosmos_db import get_post_detail_data
 from agents.orchestrator import run_pipeline
-from routers.custom_chat import router as custom_chat_router  # 추가
 
 router = APIRouter()
-
-# 커스텀 라우터 결합
-router.include_router(custom_chat_router)
 
 # Request / Response 모델
 class AgentRunRequest(BaseModel):
