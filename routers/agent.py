@@ -125,11 +125,18 @@ async def get_posts(shop_id: str):
 # 3. 게시물 최종 확정 및 저장
 @router.post("/save")
 async def save_post(req: PostSaveRequest):
-    success = save_post_data(req.shop_id, req.dict())
-    if not success:
-        raise HTTPException(status_code=500, detail="게시물 저장 실패")
-    return {"status": "success", "message": "게시물이 저장되었습니다."}
-
+    import uuid
+    post_id = f"post_{uuid.uuid4().hex[:8]}"
+    save_draft(
+        shop_id=req.shop_id,
+        post_id=post_id,
+        caption=req.caption,
+        hashtags=req.hashtags,
+        photo_ids=req.photo_ids,
+        cta=req.cta,
+        review_action="pending"
+    )
+    return {"status": "success", "post_id": post_id}  # ← post_id 반환!
 
 # 4. 게시물 상세 조회
 @router.get("/post/detail/{post_id}")
