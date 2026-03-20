@@ -556,13 +556,8 @@ async def _auto_upload_instagram(
             return False
 
         # 4. Instagram 업로드 호출
-        from routers.instagram import create_image_container, create_carousel_container, publish_container
-        container_ids = [
-            create_image_container(insta_user_id, insta_access_token, url)
-            for url in image_urls
-        ]
-        creation_id = create_carousel_container(insta_user_id, insta_access_token, container_ids, full_caption)
-        media_id    = publish_container(insta_user_id, creation_id, insta_access_token)
+        from routers.instagram import publish_photos
+        media_id = publish_photos(insta_user_id, insta_access_token, image_urls, full_caption)
 
         # 5. 업로드 결과 저장
         save_post_data(shop_id, {

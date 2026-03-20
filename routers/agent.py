@@ -184,10 +184,8 @@ async def _handle_upload(shop_id: str, post_id: str, edited_caption: str = None)
     instagram_media_id = None
     if insta_user_id and access_token and image_urls:
         try:
-            from routers.instagram import create_image_container, create_carousel_container, publish_container
-            container_ids  = [create_image_container(insta_user_id, access_token, url) for url in image_urls]
-            creation_id    = create_carousel_container(insta_user_id, access_token, container_ids, full_caption)
-            instagram_media_id = publish_container(insta_user_id, creation_id, access_token)
+            from routers.instagram import publish_photos
+            instagram_media_id = publish_photos(insta_user_id, access_token, image_urls, full_caption)
             print(f"[agent] 인스타 업로드 성공 → media_id={instagram_media_id}")
         except Exception as e:
             print(f"[agent] 인스타 업로드 실패: {e} → status=fail 로 저장")
