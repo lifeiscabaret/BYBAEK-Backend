@@ -38,7 +38,7 @@ async def instagram_business_login(req: InstagramLoginRequest, res: Response, fa
         logger.error(f'단기 토큰 발급 실패: {response}')
         raise HTTPException(status_code=400, detail=str(response))  # ← datail → detail 수정
 
-    user_id = response['user_id']
+    user_id = response.get('user_id') or response.get('id')
     short_access_token = response['access_token']
 
     # 2. 장기 토큰 교환 (GET 방식 — 인스타그램 API 스펙)
