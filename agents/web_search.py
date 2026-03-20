@@ -370,14 +370,14 @@ async def _get_barbershop_trend(tavily, kernel, config, now) -> tuple:
         ]
         search_results = await asyncio.gather(*search_tasks)
 
-        sources = _extract_sources(filtered_results)
-        # 전체 결과 수집 후 필터링
         all_results = [
             r
             for results in search_results
             for r in results.get("results", [])
         ]
         filtered_results = _filter_search_results(all_results)
+        sources = _extract_sources(filtered_results)  
+
 
         raw_trend = "\n".join([
             r.get("content", "")
