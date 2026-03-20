@@ -4,6 +4,7 @@ from typing import Dict, Generator, List, Optional
 
 import requests
 import traceback
+from urllib.parse import quote
 from fastapi import APIRouter, HTTPException, status, Request
 from pydantic import BaseModel
 from azure.storage.blob import BlobServiceClient, ContentSettings
@@ -15,6 +16,8 @@ router = APIRouter()
 
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 PHOTO_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".heic", ".heif", ".tiff"}
+# Instagram API가 지원하는 포맷만 Cosmos DB에 저장
+INSTAGRAM_SUPPORTED = {".jpg", ".jpeg", ".png"}
 PAGE_SIZE = 200
 
 
@@ -160,8 +163,15 @@ def sync_onedrive_photos(req: SyncPhotosRequest, request: Request) -> SyncPhotos
                     overwrite=req.overwrite
                 )
 
-                blob_url = f"https://stctrla.blob.core.windows.net/{container_name}/{relative_path}"
+                blob_url = f"https://stctrla.blob.core.windows.net/{container_name}/{quote(relative_path)}"
                 photo_id = f"photo_{shop_id}_{relative_path.replace('/', '_').replace(' ', '_')}"
+
+                # Instagram 미지원 포맷(HEIC 등)은 Cosmos DB 저장 스킵
+                ext = os.path.splitext(name)[1].lower()
+                if ext not in INSTAGRAM_SUPPORTED:
+                    logger.info(f"[onedrive] ⏭️ Instagram 미지원 포맷 스킵 (Cosmos DB): {name}")
+                    uploaded += 1
+                    continue
 
                 save_photo(shop_id, {
                     "photo_id":      photo_id,
