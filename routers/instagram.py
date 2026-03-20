@@ -68,6 +68,7 @@ def create_image_container(
     ig_user_id: str,
     access_token: str,
     image_url: HttpUrl,
+    is_carousel_item: bool = False,  # ✅ 추가: carousel 아이템 여부
 ) -> str:
         
     headers = {
@@ -78,6 +79,10 @@ def create_image_container(
     data = {
         "image_url": f'{image_url}',
     }
+
+    # ✅ carousel 아이템일 때만 추가
+    if is_carousel_item:
+        data["is_carousel_item"] = "true"
 
     result = graph_post(f"/{ig_user_id}/media", headers=headers, data=data)
 
@@ -153,24 +158,49 @@ def publish_container(
         )
     return media_id
 
+
+def publish_photos(
+    ig_user_id: str,
+    access_token: str,
+    image_urls: list,
+    caption: str,
+) -> str:
+    """
+    ✅ 사진 수에 따라 단일/캐러셀 자동 분기
+    - 1장: 단일 이미지 게시물
+    - 2장 이상: CAROUSEL 게시물
+    """
+    if len(image_urls) == 1:
+        # 단일 이미지
+        creation_id = create_image_container(ig_user_id, access_token, image_urls[0], is_carousel_item=False)
+        media_id = publish_container(ig_user_id, creation_id, access_token)
+        logger.info(f"[instagram] 단일 이미지 업로드 성공 → media_id={media_id}")
+    else:
+        # CAROUSEL (2장 이상)
+        container_ids = [
+            create_image_container(ig_user_id, access_token, url, is_carousel_item=True)
+            for url in image_urls
+        ]
+        creation_id = create_carousel_container(ig_user_id, access_token, container_ids, caption)
+        media_id = publish_container(ig_user_id, creation_id, access_token)
+        logger.info(f"[instagram] 캐러셀 업로드 성공 ({len(image_urls)}장) → media_id={media_id}")
+
+    return media_id
+
+
 @router.post("/upload", response_model=InstagramPhotoPublishResponse, status_code=status.HTTP_201_CREATED)
 async def upload(req: InstagramPhotoPublishRequest):
-
-    container_ids = []
-    
-    for url in req.image_urls:
-        container_ids.append(create_image_container(req.user_id, req.access_token, url))
-
-    creation_id = create_carousel_container(req.user_id, req.access_token, container_ids, req.caption)
-
-    media_id = publish_container(req.user_id, creation_id, req.access_token)
+    media_id = publish_photos(
+        ig_user_id=req.user_id,
+        access_token=req.access_token,
+        image_urls=req.image_urls,
+        caption=req.caption,
+    )
     
     if not media_id:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={
-                "message": "media_id not returned from Instagram publish"
-            },
+            detail={"message": "media_id not returned from Instagram publish"}
         )
     
     return {"media_id": media_id}
