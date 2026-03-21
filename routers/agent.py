@@ -5,7 +5,6 @@
 - GET /api/agent/posts/{shop_id}: 게시물 목록 조회
 - POST /api/agent/save: 게시물 저장
 - GET /api/agent/post/detail/{post_id}: 게시물 상세
-- POST /api/agent/manual_chat: 사장님 GPT 실시간 대화 (스트리밍)
 """
 
 from fastapi import APIRouter, HTTPException
@@ -24,7 +23,7 @@ class AgentRunRequest(BaseModel):
     shop_id: str
     trigger: str
     photo_ids: Optional[List[str]] = None
-    
+
     class Config:
         json_schema_extra = {
             "example": {
@@ -35,11 +34,11 @@ class AgentRunRequest(BaseModel):
         }
 
 class AgentReviewRequest(BaseModel):
-    shop_id: str                        # get_draft에 필수
+    shop_id: str
     post_id: str
-    action: str                         # "ok" | "edit" | "cancel"
-    edited_caption: Optional[str] = None  # action이 "edit"일 때만
-    
+    action: str                          # "ok" | "edit" | "cancel"
+    edited_caption: Optional[str] = None # action이 "edit"일 때만
+
     class Config:
         json_schema_extra = {
             "example": {
@@ -62,25 +61,13 @@ class PostSaveRequest(BaseModel):
 # POST /api/agent/run
 @router.post("/run")
 async def agent_run(req: AgentRunRequest):
-    """
-    에이전트 파이프라인 실행
-    
-    트리거 타입:
-    - auto: 예약 시간 자동 실행 (photo_ids 없으면 자동 선택)
-    - manual: 사장님 직접 실행 (photo_ids 있으면 해당 사진 사용, 없으면 자동 선택)
-    
-    photo_ids가 없으면 orchestrator가 get_top_photos로 자동 선택합니다.
-    """
     if req.trigger not in ("auto", "manual"):
         raise HTTPException(400, "trigger는 'auto' 또는 'manual'이어야 합니다.")
-
-    # 수정: manual도 photo_ids 선택사항
-    # orchestrator가 None이면 자동으로 후보 선택
     try:
         result = await run_pipeline(
             shop_id=req.shop_id,
             trigger=req.trigger,
-            photo_ids=req.photo_ids  # None이어도 OK
+            photo_ids=req.photo_ids
         )
         return result
     except Exception as e:
@@ -90,12 +77,6 @@ async def agent_run(req: AgentRunRequest):
 # POST /api/agent/review
 @router.post("/review")
 async def agent_review(req: AgentReviewRequest):
-    """
-    사장님 검토 결과 처리
-    - ok: 즉시 인스타 업로드
-    - edit: 수정된 캡션으로 업로드
-    - cancel: 업로드 중단
-    """
     if req.action not in ("ok", "edit", "cancel"):
         raise HTTPException(400, "action은 'ok', 'edit', 'cancel' 중 하나여야 합니다.")
 
@@ -115,14 +96,14 @@ async def agent_review(req: AgentReviewRequest):
         raise HTTPException(500, f"검토 처리 실패: {str(e)}")
 
 
-# 1. 게시물 목록 조회 (대시보드용)
+# GET /api/agent/posts/{shop_id}
 @router.get("/posts/{shop_id}")
 async def get_posts(shop_id: str):
     posts = get_post_by_shop(shop_id)
     return {"posts": posts}
 
 
-# 3. 게시물 최종 확정 및 저장
+# POST /api/agent/save
 @router.post("/save")
 async def save_post(req: PostSaveRequest):
     import uuid
@@ -136,9 +117,10 @@ async def save_post(req: PostSaveRequest):
         cta=req.cta,
         review_action="pending"
     )
-    return {"status": "success", "post_id": post_id}  # ← post_id 반환!
+    return {"status": "success", "post_id": post_id}
 
-# 4. 게시물 상세 조회
+
+# GET /api/agent/post/detail/{post_id}
 @router.get("/post/detail/{post_id}")
 async def get_post_detail(post_id: str, shop_id: str):
     post = get_post_detail_data(post_id, shop_id)
@@ -153,34 +135,37 @@ async def _handle_upload(shop_id: str, post_id: str, edited_caption: str = None)
     from services.cosmos_db import get_draft, save_post_data
 
     draft = get_draft(shop_id=shop_id, post_id=post_id)
+    print(f"[DEBUG] draft 조회 결과: {draft}")
     if not draft:
         raise ValueError(f"초안을 찾을 수 없습니다: {post_id}")
 
     if edited_caption:
         draft["caption"] = edited_caption
 
-    # 인스타 인증 정보 조회
     from services.cosmos_db import get_auth
-    shop_auth      = get_auth(shop_id) or {}
-    insta_user_id  = shop_auth.get("insta_user_id")
-    access_token   = shop_auth.get("insta_access_token")
+    shop_auth     = get_auth(shop_id) or {}
+    insta_user_id = shop_auth.get("insta_user_id")
+    access_token  = shop_auth.get("insta_access_token")
+    print(f"[DEBUG] insta_user_id={insta_user_id}, token_exists={bool(access_token)}")
 
-    # 캡션 구성 (caption + hashtags + cta)
-    caption  = draft["caption"]
-    hashtags = draft.get("hashtags", [])
-    cta      = draft.get("cta", "")
+    caption      = draft["caption"]
+    hashtags     = draft.get("hashtags", [])
+    cta          = draft.get("cta", "")
     full_caption = f"{caption}\n\n{' '.join(hashtags)}\n{cta}".strip()
 
-    # blob_url 리스트 조회
     from services.cosmos_db import get_photo_by_id
     photo_ids  = draft.get("photo_ids", [])
     image_urls = []
     for pid in photo_ids:
         photo = get_photo_by_id(shop_id, pid)
+        print(f"[DEBUG] photo_id={pid}, photo={photo}")
         if photo and photo.get("blob_url"):
             image_urls.append(photo["blob_url"])
 
-    # Instagram 업로드
+    print(f"[DEBUG] 최종 image_urls={image_urls}")
+    print(f"[DEBUG] 업로드 조건: user={bool(insta_user_id)}, token={bool(access_token)}, urls={bool(image_urls)}")
+
+    # Instagram 업로드 (1장: 단일, 2장+: CAROUSEL 자동 분기)
     instagram_media_id = None
     if insta_user_id and access_token and image_urls:
         try:
@@ -193,18 +178,17 @@ async def _handle_upload(shop_id: str, post_id: str, edited_caption: str = None)
     save_post_data(
         shop_id=shop_id,
         post_data={
-            "id":                  post_id,
-            "caption":             caption,
-            "hashtags":            hashtags,
-            "photo_ids":           photo_ids,
-            "cta":                 cta,
-            "status":              "success" if instagram_media_id else "fail",
-            "instagram_media_id":  instagram_media_id
+            "id":                 post_id,
+            "caption":            caption,
+            "hashtags":           hashtags,
+            "photo_ids":          photo_ids,
+            "cta":                cta,
+            "status":             "success" if instagram_media_id else "fail",
+            "instagram_media_id": instagram_media_id
         }
     )
 
-    # RAG 플라이휠: 업로드 성공한 캡션을 Vector DB에 자동 저장
-    # → 쓸수록 RAG 품질이 올라가는 구조
+    # RAG 플라이휠: 업로드 성공한 캡션 Vector DB 저장
     if instagram_media_id:
         try:
             from agents.rag_tool import get_embedding
@@ -213,7 +197,7 @@ async def _handle_upload(shop_id: str, post_id: str, edited_caption: str = None)
             embedding = await get_embedding(full_text)
             if embedding:
                 save_embedding(shop_id, post_id, full_text, embedding)
-                print(f"[agent] RAG 플라이휠: 업로드 성공 캡션 Vector DB 저장 완료 → {post_id}")
+                print(f"[agent] RAG 플라이휠: Vector DB 저장 완료 → {post_id}")
         except Exception as e:
             print(f"[agent] RAG 플라이휠 저장 실패 (무시): {e}")
 
@@ -227,32 +211,22 @@ async def _handle_cancel(shop_id: str, post_id: str):
         save_post_data(
             shop_id=shop_id,
             post_data={
-                "id": post_id,
-                "caption": draft.get("caption", ""),
+                "id":       post_id,
+                "caption":  draft.get("caption", ""),
                 "hashtags": draft.get("hashtags", []),
-                "photo_ids": draft.get("photo_ids", []),
-                "cta": draft.get("cta", ""),
-                "status": "cancel"
+                "photo_ids":draft.get("photo_ids", []),
+                "cta":      draft.get("cta", ""),
+                "status":   "cancel"
             }
         )
 
+
 @router.get("/metrics/{shop_id}")
 async def get_agent_metrics(shop_id: str):
-    """
-    에이전트 품질 지표 조회
-
-    Returns:
-        {
-            "total_posts": 10,
-            "avg_caption_score": 0.86,
-            "retry_rate": "12%",
-            "model_distribution": {"mini": 8, "full": 2}
-        }
-    """
     try:
         from services.cosmos_db import get_cosmos_container
         container = get_cosmos_container("Post")
-        query = f"SELECT c.metrics FROM c WHERE c.shop_id = \'{shop_id}\' AND IS_DEFINED(c.metrics)"
+        query = f"SELECT c.metrics FROM c WHERE c.shop_id = '{shop_id}' AND IS_DEFINED(c.metrics)"
         items = list(container.query_items(query=query, enable_cross_partition_query=True))
 
         if not items:
@@ -272,8 +246,8 @@ async def get_agent_metrics(shop_id: str):
             model = m.get("model_used", "unknown")
             models[model] = models.get(model, 0) + 1
 
-        total = len(scores)
-        avg_score = round(sum(scores) / total, 2)
+        total      = len(scores)
+        avg_score  = round(sum(scores) / total, 2)
         retry_rate = f"{round(len([r for r in retries if r > 0]) / total * 100)}%"
         score_dist = {
             "0.9+":    len([s for s in scores if s >= 0.9]),
@@ -283,12 +257,12 @@ async def get_agent_metrics(shop_id: str):
         }
 
         return {
-            "total_posts": total,
+            "total_posts":       total,
             "avg_caption_score": avg_score,
-            "avg_retry_count": round(sum(retries)/total, 2),
-            "retry_rate": retry_rate,
-            "model_distribution": models,
-            "score_distribution": score_dist
+            "avg_retry_count":   round(sum(retries) / total, 2),
+            "retry_rate":        retry_rate,
+            "model_distribution":models,
+            "score_distribution":score_dist
         }
 
     except Exception as e:
