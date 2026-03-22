@@ -15,6 +15,7 @@ from services.cosmos_db import save_draft
 from services.cosmos_db import save_post_data
 from services.cosmos_db import get_post_detail_data
 from agents.orchestrator import run_pipeline
+from urllib.parse import quote
 
 router = APIRouter()
 
@@ -129,6 +130,22 @@ async def get_post_detail(post_id: str, shop_id: str):
     return post
 
 
+def _encode_blob_url(url: str) -> str:
+    """
+    Blob URL의 한글/특수문자를 URL 인코딩.
+    Instagram API는 완전히 인코딩된 URL만 허용.
+    https:// 와 도메인은 유지하고 경로 부분만 인코딩.
+    """
+    if not url:
+        return url
+    prefix = "https://stctrla.blob.core.windows.net/"
+    if url.startswith(prefix):
+        path = url[len(prefix):]
+        encoded_path = quote(path, safe='/:@!$&\'()*+,;=%-.')
+        return prefix + encoded_path
+    return quote(url, safe=':/?=&#%-.')
+
+
 # 내부 헬퍼
 async def _handle_upload(shop_id: str, post_id: str, edited_caption: str = None):
     """초안 조회 → (캡션 수정) → Instagram 업로드 → 이력 저장"""
@@ -160,7 +177,9 @@ async def _handle_upload(shop_id: str, post_id: str, edited_caption: str = None)
         photo = get_photo_by_id(shop_id, pid)
         print(f"[DEBUG] photo_id={pid}, photo={photo}")
         if photo and photo.get("blob_url"):
-            image_urls.append(photo["blob_url"])
+            encoded_url = _encode_blob_url(photo["blob_url"])  # ← URL 인코딩 추가
+            print(f"[DEBUG] encoded_url={encoded_url}")
+            image_urls.append(encoded_url)
 
     print(f"[DEBUG] 최종 image_urls={image_urls}")
     print(f"[DEBUG] 업로드 조건: user={bool(insta_user_id)}, token={bool(access_token)}, urls={bool(image_urls)}")
@@ -210,12 +229,12 @@ async def _handle_cancel(shop_id: str, post_id: str):
         save_post_data(
             shop_id=shop_id,
             post_data={
-                "id":       post_id,
-                "caption":  draft.get("caption", ""),
-                "hashtags": draft.get("hashtags", []),
-                "photo_ids":draft.get("photo_ids", []),
-                "cta":      draft.get("cta", ""),
-                "status":   "cancel"
+                "id":        post_id,
+                "caption":   draft.get("caption", ""),
+                "hashtags":  draft.get("hashtags", []),
+                "photo_ids": draft.get("photo_ids", []),
+                "cta":       draft.get("cta", ""),
+                "status":    "cancel"
             }
         )
 
@@ -256,12 +275,12 @@ async def get_agent_metrics(shop_id: str):
         }
 
         return {
-            "total_posts":       total,
-            "avg_caption_score": avg_score,
-            "avg_retry_count":   round(sum(retries) / total, 2),
-            "retry_rate":        retry_rate,
-            "model_distribution":models,
-            "score_distribution":score_dist
+            "total_posts":        total,
+            "avg_caption_score":  avg_score,
+            "avg_retry_count":    round(sum(retries) / total, 2),
+            "retry_rate":         retry_rate,
+            "model_distribution": models,
+            "score_distribution": score_dist
         }
 
     except Exception as e:
