@@ -168,12 +168,11 @@ async def _handle_upload(shop_id: str, post_id: str, edited_caption: str = None)
     # Instagram 업로드 (1장: 단일, 2장+: CAROUSEL 자동 분기)
     instagram_media_id = None
     if insta_user_id and access_token and image_urls:
-        try:
-            from routers.instagram import publish_photos
-            instagram_media_id = publish_photos(insta_user_id, access_token, image_urls, full_caption)
-            print(f"[agent] 인스타 업로드 성공 → media_id={instagram_media_id}")
-        except Exception as e:
-            print(f"[agent] 인스타 업로드 실패: {e} → status=fail 로 저장")
+        from routers.instagram import publish_photos
+        instagram_media_id = publish_photos(insta_user_id, access_token, image_urls, full_caption)
+        print(f"[agent] 인스타 업로드 성공 → media_id={instagram_media_id}")
+    else:
+        raise ValueError(f"업로드 조건 미충족: user={bool(insta_user_id)}, token={bool(access_token)}, urls={bool(image_urls)}")
 
     save_post_data(
         shop_id=shop_id,
