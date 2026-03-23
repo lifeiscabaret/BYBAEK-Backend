@@ -1,3 +1,4 @@
+import asyncio
 import mimetypes
 import os
 from typing import Dict, Generator, List, Optional
@@ -26,6 +27,7 @@ class SyncPhotosResponse(BaseModel):
     uploaded: int
     failed: int
     skipped: int
+    filtered: int   # 필터링 결과 추가
     container: str
 
 
@@ -91,7 +93,7 @@ def walk_drive_for_photos(token: str, drive_id: str, root_item_id: str = "root")
                 stack.append((item["id"], rel_path))
             elif is_photo(item):
                 item["_relative_path"] = rel_path
-                item["_drive_id"] = drive_id  # drive_id 함께 전달
+                item["_drive_id"] = drive_id
                 yield item
 
 
@@ -138,6 +140,7 @@ def sync_onedrive_photos(req: SyncPhotosRequest, request: Request) -> SyncPhotos
         uploaded = 0
         failed = 0
         skipped = 0
+        photo_list_for_filter = []  # 필터링 대상 수집
 
         for photo in walk_drive_for_photos(token, drive_id, req.root_folder_item_id):
             name = photo["name"]
@@ -151,7 +154,6 @@ def sync_onedrive_photos(req: SyncPhotosRequest, request: Request) -> SyncPhotos
                     guessed, _ = mimetypes.guess_type(name)
                     content_type = guessed
 
-                # ✅ downloadUrl 대신 Graph API content 엔드포인트 사용 (항상 작동)
                 download_url = f"{GRAPH_BASE}/drives/{item_drive_id}/items/{item_id}/content"
                 download_resp = stream_download_file(download_url, token=token)
 
@@ -181,6 +183,12 @@ def sync_onedrive_photos(req: SyncPhotosRequest, request: Request) -> SyncPhotos
                     "last_modified": photo.get("lastModifiedDateTime", "")
                 })
 
+                # 필터링 대상 목록에 추가
+                photo_list_for_filter.append({
+                    "image_id": photo_id,
+                    "blob_url": blob_url
+                })
+
                 logger.info(f"[onedrive] ✅ 업로드 성공: {name}")
                 uploaded += 1
 
@@ -190,11 +198,29 @@ def sync_onedrive_photos(req: SyncPhotosRequest, request: Request) -> SyncPhotos
 
         logger.info(f"[onedrive] 동기화 완료 | uploaded={uploaded} failed={failed} skipped={skipped}")
 
+        # 1차 + 2차 필터링 실행 (백그라운드)
+        filtered = 0
+        if photo_list_for_filter:
+            try:
+                from agents.photo_filter import run_photo_filter
+                logger.info(f"[onedrive] 필터링 시작 → {len(photo_list_for_filter)}장")
+                filter_result = asyncio.run(run_photo_filter(shop_id, photo_list_for_filter))
+                filtered = filter_result.get("stage2_passed", 0)
+                logger.info(
+                    f"[onedrive] 필터링 완료 → "
+                    f"1차 PASS {filter_result.get('stage1_passed', 0)} / "
+                    f"2차 PASS {filtered} / "
+                    f"전체 {filter_result.get('total', 0)}"
+                )
+            except Exception as e:
+                logger.error(f"[onedrive] 필터링 실패 (업로드는 정상 완료): {e}")
+
         return SyncPhotosResponse(
             success=True,
             uploaded=uploaded,
             failed=failed,
             skipped=skipped,
+            filtered=filtered,
             container=container_name,
         )
 
