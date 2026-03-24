@@ -47,7 +47,7 @@ class AlbumCreateRequest(BaseModel):
 @router.get("/all/{shop_id}")
 async def read_all_photos(shop_id: str):
     all_photos = get_all_photos_by_shop(shop_id)
-    photos = [p for p in all_photos if p.get("is_usable") is True]
+    photos = [p for p in all_photos if p.get("is_usable") is not False]
     return {"photos": photos}
 
 # 2. 앨범 목록 조회 (프론트엔드 Album 화면용)

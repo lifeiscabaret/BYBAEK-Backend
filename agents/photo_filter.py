@@ -12,10 +12,12 @@ from openai import AsyncAzureOpenAI
 # [설정값]
 
 # 1차 기준
-STAGE1_LAPLACIAN_MIN  = 80      # 흔들림 임계값 (클수록 엄격)
-STAGE1_BRIGHTNESS_MIN = 40      # 최소 밝기
-STAGE1_BRIGHTNESS_MAX = 230     # 최대 밝기
-STAGE1_SKIN_RATIO_MIN = 5.0     # 피부색 비중 최소 (%)
+STAGE1_LAPLACIAN_MIN  = 40    # 흔들림 기준 완화 (스마트폰 사진 통과)
+STAGE1_BRIGHTNESS_MIN = 30    # 최소 밝기 완화
+STAGE1_BRIGHTNESS_MAX = 240   # 최대 밝기 완화
+STAGE1_SKIN_RATIO_MIN = 2.0   # 뒷머리/측면 사진 통과
+
+
 
 # 2차 기준
 STAGE2_PASS_THRESHOLD = 15      # 25점 중 15점 이상 PASS
