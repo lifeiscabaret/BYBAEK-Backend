@@ -767,7 +767,7 @@ def delete_photo_data(shop_id: str, photo_id: str) -> bool:
         # 3. Cosmos DB에서 사진 데이터 삭제
         photo_container.delete_item(item=photo_id, partition_key=shop_id)
         
-        # 4. (추가 로직) 모든 앨범을 돌며 해당 photo_id가 들어있다면 리스트에서 제거
+        # 4. 해당 photo_id가 들어있다면 리스트에서 제거
         remove_photo_from_all_albums(shop_id, photo_id)
         
         return True
@@ -906,3 +906,22 @@ def update_schedule_settings(shop_id: str, upload_time: str, timezone: str = "As
     except Exception as e:
         logging.error(f"스케줄 설정 저장 실패 (shop_id: {shop_id}): {str(e)}")
         return False
+def get_all_shops() -> list:
+    """
+    스케줄러가 자동 업로드 대상 샵을 찾기 위해
+    Shop 컨테이너의 전체 샵 목록을 조회합니다.
+
+    Returns:
+        list: 전체 샵 데이터 리스트
+    """
+    container = get_cosmos_container("Shop")
+    query = "SELECT c.id, c.shop_id, c.insta_upload_time, c.insta_auto_upload_yn FROM c"
+    try:
+        items = list(container.query_items(
+            query=query,
+            enable_cross_partition_query=True
+        ))
+        return items
+    except Exception as e:
+        logging.error(f"전체 샵 목록 조회 실패: {str(e)}")
+        return []
