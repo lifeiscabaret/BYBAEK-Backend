@@ -1,4 +1,3 @@
-import asyncio
 import mimetypes
 import os
 from typing import Dict, Generator, List, Optional
@@ -117,7 +116,7 @@ def stream_download_file(download_url: str, token: str = None) -> requests.Respo
     response_model=SyncPhotosResponse,
     status_code=status.HTTP_200_OK,
 )
-def sync_onedrive_photos(req: SyncPhotosRequest, request: Request) -> SyncPhotosResponse:
+async def sync_onedrive_photos(req: SyncPhotosRequest, request: Request) -> SyncPhotosResponse:
     try:
         # Easy Auth 토큰 = 이미 Graph 토큰, OBO 불필요
         token = request.headers.get("x-ms-token-aad-access-token")
@@ -204,7 +203,7 @@ def sync_onedrive_photos(req: SyncPhotosRequest, request: Request) -> SyncPhotos
             try:
                 from agents.photo_filter import run_photo_filter
                 logger.info(f"[onedrive] 필터링 시작 → {len(photo_list_for_filter)}장")
-                filter_result = asyncio.run(run_photo_filter(shop_id, photo_list_for_filter))
+                filter_result = await run_photo_filter(shop_id, photo_list_for_filter)
                 filtered = filter_result.get("stage2_passed", 0)
                 logger.info(
                     f"[onedrive] 필터링 완료 → "
