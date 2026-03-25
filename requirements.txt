@@ -17,3 +17,4 @@ pydantic[email]>=2.10,<3
 opencv-python
 numpy
 apscheduler
+opencv-python-headless
