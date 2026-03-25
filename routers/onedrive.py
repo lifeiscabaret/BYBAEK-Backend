@@ -386,6 +386,35 @@ async def _run_sync(
 
 # ── 엔드포인트
 
+def _get_token_from_auth_me(request: Request) -> Optional[str]:
+    """
+    Azure EasyAuth /.auth/me 엔드포인트에서 액세스 토큰 조회.
+    x-ms-token-aad-access-token 헤더가 없을 때 fallback으로 사용.
+    """
+    try:
+        # 백엔드 자체 /.auth/me 호출
+        base_url = str(request.base_url).rstrip("/")
+        auth_url = f"{base_url}/.auth/me"
+        cookies = dict(request.cookies)
+        resp = requests.get(auth_url, cookies=cookies, timeout=10)
+        if resp.status_code != 200:
+            return None
+        data = resp.json()
+        if not data:
+            return None
+        # access_token 필드 직접 확인
+        token = data[0].get("access_token")
+        if token:
+            return token
+        # user_claims에서 찾기
+        for claim in data[0].get("user_claims", []):
+            if claim.get("typ") in ("access_token", "aio"):
+                return claim.get("val")
+    except Exception as e:
+        logger.error(f"[onedrive] /.auth/me 조회 실패: {e}")
+    return None
+
+
 @router.post(
     "/sync-photos",
     response_model=SyncPhotosResponse,
@@ -400,11 +429,17 @@ async def sync_onedrive_photos(
     OneDrive 동기화 시작 (즉시 응답, 백그라운드 처리).
     프론트는 GET /onedrive/sync-status/{shop_id} 로 진행상황 폴링.
     """
+    # 1. 헤더에서 토큰 조회
     token = request.headers.get("x-ms-token-aad-access-token")
+
+    # 2. 없으면 /.auth/me로 fallback
+    if not token:
+        token = _get_token_from_auth_me(request)
+
     if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="MS 로그인 필요."
+            detail="MS 로그인 필요. 토큰을 가져올 수 없어요."
         )
 
     shop_id = request.headers.get("X-MS-CLIENT-PRINCIPAL-ID", "unknown")
