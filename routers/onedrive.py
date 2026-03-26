@@ -388,28 +388,45 @@ async def _run_sync(
 
 def _get_token_from_auth_me(request: Request) -> Optional[str]:
     """
-    Azure EasyAuth /.auth/me 엔드포인트에서 액세스 토큰 조회.
+    프론트엔드 EasyAuth /.auth/me 에서 액세스 토큰 조회.
     x-ms-token-aad-access-token 헤더가 없을 때 fallback으로 사용.
+    쿠키를 그대로 전달해서 프론트엔드 세션에서 토큰을 가져옴.
     """
     try:
-        # 백엔드 자체 /.auth/me 호출
-        base_url = str(request.base_url).rstrip("/")
-        auth_url = f"{base_url}/.auth/me"
-        cookies = dict(request.cookies)
-        resp = requests.get(auth_url, cookies=cookies, timeout=10)
+        frontend_url = os.getenv(
+            "FRONTEND_URL",
+            "https://bybaek-frontend-dcctbxfhdnhge4ap.koreacentral-01.azurewebsites.net"
+        )
+        auth_url = f"{frontend_url}/.auth/me"
+
+        # 요청의 쿠키를 그대로 전달
+        cookie_header = request.headers.get("cookie", "")
+        headers = {}
+        if cookie_header:
+            headers["Cookie"] = cookie_header
+
+        resp = requests.get(auth_url, headers=headers, timeout=15)
         if resp.status_code != 200:
+            logger.warning(f"[onedrive] /.auth/me 응답 {resp.status_code}")
             return None
+
         data = resp.json()
         if not data:
             return None
+
         # access_token 필드 직접 확인
         token = data[0].get("access_token")
         if token:
+            logger.info("[onedrive] /.auth/me에서 토큰 획득 성공")
             return token
+
         # user_claims에서 찾기
         for claim in data[0].get("user_claims", []):
-            if claim.get("typ") in ("access_token", "aio"):
+            if claim.get("typ") == "access_token":
+                logger.info("[onedrive] user_claims에서 토큰 획득 성공")
                 return claim.get("val")
+
+        logger.warning("[onedrive] /.auth/me 응답에 토큰 없음")
     except Exception as e:
         logger.error(f"[onedrive] /.auth/me 조회 실패: {e}")
     return None
@@ -442,7 +459,12 @@ async def sync_onedrive_photos(
             detail="MS 로그인 필요. 토큰을 가져올 수 없어요."
         )
 
-    shop_id = request.headers.get("X-MS-CLIENT-PRINCIPAL-ID", "unknown")
+    shop_id = (
+        request.headers.get("X-MS-CLIENT-PRINCIPAL-ID") or
+        request.cookies.get("shop_id") or
+        request.cookies.get("user_id") or
+        "unknown"
+    )
 
     if _sync_progress.get(shop_id, {}).get("status") == "running":
         return SyncPhotosResponse(
