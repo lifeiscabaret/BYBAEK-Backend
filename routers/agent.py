@@ -14,7 +14,7 @@ from services.cosmos_db import get_post_by_shop
 from services.cosmos_db import save_draft
 from services.cosmos_db import save_post_data
 from services.cosmos_db import get_post_detail_data
-from agents.orchestrator import run_pipeline
+from orchestrator_v2 import run_pipeline
 from urllib.parse import quote
 
 router = APIRouter()
