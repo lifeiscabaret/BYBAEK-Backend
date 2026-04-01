@@ -906,3 +906,53 @@ def update_schedule_settings(shop_id: str, upload_time: str, timezone: str = "As
     except Exception as e:
         logging.error(f"스케줄 설정 저장 실패 (shop_id: {shop_id}): {str(e)}")
         return False
+def get_all_shops() -> list:
+    """
+    스케줄러가 자동 업로드 대상 샵을 찾기 위해
+    Shop 컨테이너의 전체 샵 목록을 조회합니다.
+
+    Returns:
+        list: 전체 샵 데이터 리스트
+    """
+    container = get_cosmos_container("Shop")
+    query = "SELECT c.id, c.shop_id, c.insta_upload_time, c.insta_auto_upload_yn FROM c"
+    try:
+        items = list(container.query_items(
+            query=query,
+            enable_cross_partition_query=True
+        ))
+        return items
+    except Exception as e:
+        logging.error(f"전체 샵 목록 조회 실패: {str(e)}")
+        return []
+    
+def get_recent_drafts_with_scores(shop_id: str, limit: int = 20) -> list:
+    """caption_score가 기록된 최근 게시물 초안 조회"""
+    container = get_cosmos_container("Post")
+    query = f"""
+        SELECT c.id, c.caption, c.hashtags, c.metrics.caption_score AS caption_score, c.model_used, c.created_at
+        FROM c
+        WHERE c.shop_id = '{shop_id}'
+        AND IS_DEFINED(c.metrics.caption_score)
+        ORDER BY c._ts DESC
+        OFFSET 0 LIMIT {limit}
+    """
+    return list(container.query_items(query=query, enable_cross_partition_query=True))
+
+
+def save_rejection_log(shop_id: str, doc: dict) -> None:
+    """사진 탈락 로그 저장"""
+    container = get_cosmos_container("RejectionLog")
+    container.upsert_item(doc)
+
+
+def get_rejection_logs(shop_id: str, limit: int = 50) -> list:
+    """샵별 탈락 로그 조회"""
+    container = get_cosmos_container("RejectionLog")
+    query = f"""
+        SELECT * FROM c
+        WHERE c.shop_id = '{shop_id}'
+        ORDER BY c._ts DESC
+        OFFSET 0 LIMIT {limit}
+    """
+    return list(container.query_items(query=query, enable_cross_partition_query=True))
