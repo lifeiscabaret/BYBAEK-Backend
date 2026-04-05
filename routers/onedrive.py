@@ -165,7 +165,7 @@ def sync_onedrive_photos(req: SyncPhotosRequest, request: Request) -> SyncPhotos
                     overwrite=req.overwrite
                 )
 
-                blob_url = f"https://stctrla.blob.core.windows.net/{container_name}/{quote(relative_path)}"
+                blob_url = f"https://bybaekstorage.blob.core.windows.net/{container_name}/{quote(relative_path)}"
                 photo_id = f"photo_{shop_id}_{relative_path.replace('/', '_').replace(' ', '_')}"
 
                 # Instagram 미지원 포맷(HEIC 등)은 Cosmos DB 저장 스킵

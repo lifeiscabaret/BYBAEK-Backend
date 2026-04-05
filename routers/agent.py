@@ -138,7 +138,7 @@ def _encode_blob_url(url: str) -> str:
     """
     if not url:
         return url
-    prefix = "https://stctrla.blob.core.windows.net/"
+    prefix = "https://bybaekstorage.blob.core.windows.net/"
     if url.startswith(prefix):
         path = url[len(prefix):]
         encoded_path = quote(path, safe='/:@!$&\'()*+,;=%-.')
