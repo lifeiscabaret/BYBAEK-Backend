@@ -5,9 +5,7 @@ web_search_agent() 반환값에 competitor_insights 키가 추가됨
 
 import asyncio
 from semantic_kernel.contents import ChatHistory
-from agents.web_search import _init_kernel, _init_tavily, _parse_json_safe
 
-# 경쟁샵 모니터링
 COMPETITOR_QUERIES = [
     "서울 바버샵 인스타그램 최근 게시물 페이드컷",
     "강남 홍대 바버샵 인스타 업로드 스타일",
@@ -15,33 +13,16 @@ COMPETITOR_QUERIES = [
 ]
 
 async def competitor_analysis(shop_id: str, city: str = "서울") -> dict:
-    """
-    경쟁샵 최근 인스타그램 게시물 패턴 분석.
+    from agents.web_search import _init_kernel, _init_tavily, _parse_json_safe  # ← 함수 안에서 import
 
-    web_search_agent()에서 병렬로 호출됨.
-
-    Returns:
-        {
-            "competitor_styles": ["투블럭+포마드", "스킨페이드"],  # 경쟁샵이 주로 올리는 스타일
-            "competitor_hashtags": ["#바버샵", "#페이드컷"],       # 경쟁샵이 쓰는 해시태그
-            "gap_opportunity": "직장인 타겟 콘텐츠가 적음",        # 우리가 파고들 틈새
-            "avoid_overlap": "스킨페이드는 이미 포화 상태",        # 겹치면 안 되는 것
-        }
-    """
     print(f"[competitor_analysis] 경쟁샵 분석 시작 → city={city}")
 
-    tavily  = _init_tavily()
-    kernel  = _init_kernel()
+    tavily = _init_tavily()
+    kernel = _init_kernel()
 
     try:
-        # 경쟁샵 관련 검색 병렬 실행
         search_tasks = [
-            asyncio.to_thread(
-                tavily.search,
-                query=q,
-                search_depth="basic",
-                max_results=3
-            )
+            asyncio.to_thread(tavily.search, query=q, search_depth="basic", max_results=3)
             for q in COMPETITOR_QUERIES
         ]
         results = await asyncio.gather(*search_tasks, return_exceptions=True)
@@ -56,11 +37,9 @@ async def competitor_analysis(shop_id: str, city: str = "서울") -> dict:
                     all_snippets.append(content[:300])
 
         if not all_snippets:
-            print("[competitor_analysis] 검색 결과 없음 → fallback")
             return _competitor_fallback()
 
         raw_text = "\n---\n".join(all_snippets[:6])
-
         prompt = f"""아래는 서울 바버샵들의 최근 인스타그램 관련 검색 결과야.
 
 [검색 결과]
