@@ -18,3 +18,4 @@ opencv-python
 numpy
 langgraph
 apscheduler
+azure-storage-queue>=12.0.0
