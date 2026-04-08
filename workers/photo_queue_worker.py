@@ -26,10 +26,10 @@ from urllib.parse import quote
 import requests
 from azure.core.exceptions import ResourceExistsError
 from azure.storage.blob import BlobServiceClient, ContentSettings
-from azure.storage.queue import QueueClient, BinaryTransferEncoding
+from azure.storage.queue import QueueClient
 
 from utils.logging import logger
-from services.cosmos_db import save_photo, update_shop_onedrive_info
+from services.cosmos_db import save_photo
 
 
 QUEUE_NAME = "bybaek-photo-sync"
@@ -47,8 +47,7 @@ VISIBILITY_TIMEOUT = 300        # 메시지 처리 시간 여유 (초)
 def get_queue_client() -> QueueClient:
     return QueueClient.from_connection_string(
         os.getenv("AZURE_STORAGE_CONNECTION_STRING"),
-        queue_name=QUEUE_NAME,
-        message_encode_policy=BinaryTransferEncoding()
+        queue_name=QUEUE_NAME
     )
 
 
@@ -207,7 +206,7 @@ def polling_loop():
 
             for msg in messages:
                 try:
-                    body = json.loads(msg.content.decode("utf-8"))
+                    body = json.loads(msg.content)
                     result = process_message(body)
 
                     shop_id = result["shop_id"]
