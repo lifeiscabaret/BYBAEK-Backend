@@ -206,17 +206,8 @@ def get_onboarding(shop_id: str) -> dict:
         return None
 
 def get_all_photos_by_shop(shop_id: str) -> list:
-    """
-    특정 상점에 등록된 모든 사진 데이터를 조회합니다.
-
-    Args:
-        shop_id (str): 상점 고유 식별자
-
-    Returns:
-        list: 조회된 사진 객체 리스트
-    """
     container = get_cosmos_container("Photo")
-    query = "SELECT * FROM c WHERE c.shop_id = @shop_id"
+    query = "SELECT * FROM c WHERE c.shop_id = @shop_id AND c.is_usable = true"
     parameters = [{"name": "@shop_id", "value": shop_id}]
 
     try:

@@ -5,6 +5,7 @@ from typing import Dict, Generator, List, Optional
 
 import requests
 import traceback
+import concurrent.futures
 from urllib.parse import quote
 from fastapi import APIRouter, HTTPException, status, Request
 from pydantic import BaseModel
@@ -204,7 +205,9 @@ def sync_onedrive_photos(req: SyncPhotosRequest, request: Request) -> SyncPhotos
             try:
                 from agents.photo_filter import run_photo_filter
                 logger.info(f"[onedrive] 필터링 시작 → {len(photo_list_for_filter)}장")
-                filter_result = asyncio.run(run_photo_filter(shop_id, photo_list_for_filter))
+                with concurrent.futures.ThreadPoolExecutor() as pool:
+                    future = pool.submit(asyncio.run, run_photo_filter(shop_id, photo_list_for_filter))
+                    filter_result = future.result()
                 filtered = filter_result.get("stage2_passed", 0)
                 logger.info(
                     f"[onedrive] 필터링 완료 → "
