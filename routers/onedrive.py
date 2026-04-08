@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from utils.logging import logger
-from services.cosmos_db import get_shop, update_shop_onedrive_info
+from services.cosmos_db import get_auth, update_shop_onedrive_info
 
 
 router = APIRouter()
@@ -194,8 +194,8 @@ def sync_onedrive_photos(req: SyncPhotosRequest, request: Request) -> SyncPhotos
 
         drive_id = get_user_drive_id(access_token)
 
-        # DB에서 delta_link 조회 (지연님 연동 완료)
-        shop_info = get_shop(shop_id)
+        # DB에서 delta_link 조회 
+        shop_info = get_auth(shop_id)
         delta_link = shop_info.get("one_delta_link") if shop_info else None
 
         photos, next_delta_link = collect_delta_photos(access_token, drive_id, delta_link)
@@ -213,7 +213,7 @@ def sync_onedrive_photos(req: SyncPhotosRequest, request: Request) -> SyncPhotos
 
         if next_delta_link:
             try:
-                update_shop_onedrive_info(shop_id, {"one_delta_link": next_delta_link})
+                update_shop_onedrive_info(shop_id, {"delta_link": next_delta_link})
                 logger.info("[onedrive] Delta Link 저장 완료")
             except Exception as e:
                 logger.error(f"[onedrive] Delta Link 저장 실패: {e}")
