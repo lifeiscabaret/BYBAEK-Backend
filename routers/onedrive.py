@@ -21,7 +21,7 @@ import traceback
 from typing import Dict, List, Optional
 
 import requests
-from azure.storage.queue import QueueClient, BinaryTransferEncoding
+from azure.storage.queue import QueueClient
 from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel
 
@@ -132,8 +132,7 @@ def get_queue_client() -> QueueClient:
     connection_string = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
     client = QueueClient.from_connection_string(
         connection_string,
-        queue_name=QUEUE_NAME,
-        message_encode_policy=BinaryTransferEncoding()
+        queue_name=QUEUE_NAME
     )
     try:
         client.create_queue()
@@ -183,7 +182,7 @@ def enqueue_photo_batches(
             "container_name": container_name,
             "photos": message_items,
         })
-        queue_client.send_message(message.encode("utf-8"))
+        queue_client.send_message(message)
         batches += 1
 
     return batches
