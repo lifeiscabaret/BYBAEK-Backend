@@ -41,6 +41,7 @@ async def post_writer_agent(
         previous_draft=previous_draft,
         feedback=feedback
     )
+    
 
     chat_history = ChatHistory()
     chat_history.add_system_message(system_prompt)
@@ -185,7 +186,7 @@ def _build_prompt(
     if promo:
         parts.append(f"[바버샵 홍보 포인트]\n{promo}")
 
-    # 샵 차별점 - shop_intro 있을 때만 반영 (없으면 GPT가 지어내므로 금지)
+    # 샵 차별점 - shop_intro 있을 때만 반영 
     brand_diff = brand_settings.get("brand_differentiation", "").strip()
     if brand_diff:
         parts.append(f"[우리 샵 차별점 - 첫 문장에 자연스럽게 녹여줘]\n{brand_diff}")
@@ -211,8 +212,14 @@ def _build_prompt(
         tone_rules       = rag_context.get("tone_rules", "")
         examples         = rag_context.get("examples", [])
         hashtag_patterns = rag_context.get("hashtag_patterns", [])
-        rag_source       = rag_context.get("source", "fallback")
+        
+        if hashtag_patterns:
+            parts.append(f"[자주 쓰는 해시태그]\n{' '.join(hashtag_patterns[:10])}")
 
+        # 성과 인사이트 
+        if rag_context.get("performance_insights"):
+            parts.append(f"[과거 성과 패턴 - 이 패턴대로 써줘]\n{rag_context['performance_insights']}")
+            
         if tone_rules:
             parts.append(f"[이 샵의 말투 패턴]\n{tone_rules}")
 
@@ -224,10 +231,7 @@ def _build_prompt(
                 ex_text += f"{i}. {caption[:80]}{'...' if len(caption) > 80 else ''}\n"
                 if hashtags:
                     ex_text += f"   해시태그: {' '.join(hashtags[:5])}\n"
-            parts.append(ex_text)
-
-        if hashtag_patterns:
-            parts.append(f"[자주 쓰는 해시태그]\n{' '.join(hashtag_patterns[:10])}")
+            parts.append(ex_text) 
 
     # 4. 최근 게시물 말투 참고
     if recent_posts:
@@ -259,13 +263,13 @@ def _build_prompt(
     return system_prompt, user_prompt
 
 
-# AG-042: 할루시네이션 방지 - 바버샵 무관 주제 키워드
+# 할루시네이션 방지 - 바버샵 무관 주제 키워드
 _FORBIDDEN_TOPICS = [
     "레이어컷", "펌", "염색", "여성", "헤어숍", "미용실",
     "네일", "왁싱", "속눈썹", "피부", "스킨케어",
 ]
 
-# AG-042: 과장 표현 금지
+# 과장 표현 금지
 _FORBIDDEN_EXAGGERATIONS = [
     "최고의", "완벽한", "세계 최초", "혁신적인", "압도적인",
     "독보적인", "전국 1위", "업계 최고",

@@ -19,6 +19,7 @@ from semantic_kernel import Kernel
 from semantic_kernel.connectors.ai.open_ai import AzureChatCompletion
 from semantic_kernel.contents import ChatHistory
 from tavily import TavilyClient
+from agents.competitor_analysis import competitor_analysis
 
 
 def _get_trend_queries(year: int, month: int) -> list:
@@ -286,9 +287,10 @@ async def web_search_agent(shop_id: str, force_refresh: bool = False) -> dict:
     tavily = _init_tavily()
 
     # 날씨 + 트렌드 병렬 수집
-    (weather, weather_sources), (trend_data, trend_sources) = await asyncio.gather(
+    (weather, weather_sources), (trend_data, trend_sources), competitor_insights = await asyncio.gather(
         _get_weather(tavily, kernel, city, now, config),
-        _get_barbershop_trend(tavily, kernel, config, now)
+        _get_barbershop_trend(tavily, kernel, config, now),
+        competitor_analysis(shop_id, city)
     )
 
     promo = await _get_promo_info(kernel, now, config, trend_data)
@@ -304,6 +306,7 @@ async def web_search_agent(shop_id: str, force_refresh: bool = False) -> dict:
         "raw_snippets":    trend_data.get("raw_snippets", []),  # ← post_writer 말투 참고용
         "locale":          locale,
         "city":            city,
+        "competitor_insights": competitor_insights,
         "collected_at":    now.isoformat(),
         "sources_summary": [           # 출처 요약 (포트폴리오/디버깅용)
             f"{s['domain']}: {s['title'][:30]}"

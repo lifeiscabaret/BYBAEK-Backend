@@ -34,7 +34,7 @@ class FilterStatusResponse(BaseModel):
     pending: int                    # is_usable == None
     status: str                     # "done" | "in_progress" | "no_photos"
 
-# --- 엔드포인트 ---
+#엔드포인트
 # --- Pydantic 모델 (새 앨범 만들 때 사용) ---
 class AlbumCreateRequest(BaseModel):
     shop_id: str
@@ -46,7 +46,8 @@ class AlbumCreateRequest(BaseModel):
 # 1. 전체 사진 조회 (프론트엔드 Photos 화면용)
 @router.get("/all/{shop_id}")
 async def read_all_photos(shop_id: str):
-    photos = get_all_photos_by_shop(shop_id) # 함수 호출
+    all_photos = get_all_photos_by_shop(shop_id)
+    photos = [p for p in all_photos if p.get("is_usable") is not False]
     return {"photos": photos}
 
 # 2. 앨범 목록 조회 (프론트엔드 Album 화면용)
@@ -67,7 +68,7 @@ async def create_album(req: AlbumCreateRequest):
     # photo_ids 리스트를 함수 형식에 맞게 변환 (dict 형태의 list)
     photo_list = [{"photo_id": pid} for pid in req.photo_ids]
     
-    # 🚨 [수정] album_id가 "new"이거나 없으면 새로 생성
+    # [수정] album_id가 "new"이거나 없으면 새로 생성
     actual_album_id = req.album_id
     if not actual_album_id or actual_album_id == "new":
         actual_album_id = str(uuid.uuid4()) # 새 UUID 생성

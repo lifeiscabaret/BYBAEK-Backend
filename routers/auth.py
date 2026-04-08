@@ -6,11 +6,17 @@ import requests
 from services.cosmos_db import save_auth, get_auth
 import logging
 from datetime import datetime
+from fastapi.responses import RedirectResponse
 
 router = APIRouter()
 
 class InstagramLoginRequest(BaseModel):
     code: str
+
+@router.get("/ms/callback")
+async def ms_callback():
+    frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
+    return RedirectResponse(url=f"{frontend_url}/auth/callback")
 
 @router.post("/instagram", status_code=status.HTTP_201_CREATED)
 async def instagram_business_login(req: InstagramLoginRequest, res: Response, fast_req: Request) -> Response:

@@ -34,11 +34,22 @@ async def photo_select_agent(
 
     # STEP 1: 14일 중복 방지 + 각도별 분류
     categorized = _categorize_by_angle(photo_candidates)
+
+    # 원장님 피드백 학습 적용 ← 추가
+    from agents.photo_feedback import get_shop_weakness_profile, apply_weakness_to_selection
+    weakness_profile = await get_shop_weakness_profile(shop_id)
+    categorized["back_side"] = await apply_weakness_to_selection(
+        categorized["back_side"], weakness_profile
+    )
+    categorized["front"] = await apply_weakness_to_selection(
+        categorized["front"], weakness_profile
+    )
     
     print(f"[photo_select] 각도별 분류 완료:")
     print(f"  - 뒷면/측면 (페이드): {len(categorized['back_side'])}장")
     print(f"  - 앞면 (스타일링): {len(categorized['front'])}장")
     print(f"  - 분위기: {len(categorized['vibe'])}장")
+    print(f"  - 약점 프로파일: {weakness_profile.get('top_weakness', '없음')}")  # ← 추가
 
     # STEP 2: 원장님 조합 패턴 적용
     kernel = _init_kernel()
