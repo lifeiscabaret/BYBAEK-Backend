@@ -42,7 +42,7 @@ async def instagram_business_login(req: InstagramLoginRequest, res: Response, fa
 
     if 'error' in response:
         logger.error(f'단기 토큰 발급 실패: {response}')
-        raise HTTPException(status_code=400, detail=str(response))  # ← datail → detail 수정
+        raise HTTPException(status_code=400, detail=str(response))
 
     user_id = response.get('user_id') or response.get('id')
     short_access_token = response['access_token']
@@ -54,12 +54,12 @@ async def instagram_business_login(req: InstagramLoginRequest, res: Response, fa
         'access_token':  short_access_token
     }
 
-    response = requests.get("https://graph.instagram.com/access_token", params=params)  # ← POST → GET
+    response = requests.get("https://graph.instagram.com/access_token", params=params)
     response = response.json()
 
     if 'error' in response:
         logger.error(f'장기 토큰 교환 실패: {response}')
-        raise HTTPException(status_code=400, detail=str(response))  # ← datail → detail 수정
+        raise HTTPException(status_code=400, detail=str(response))
 
     access_token = response['access_token']
     expires_in   = response['expires_in']
@@ -103,6 +103,13 @@ async def get_my_info(request: Request):
         "name":          ms_user_name,
         "last_login_at": current_time,
     }
+
+    # ── refresh_token 저장 (추가된 부분) ──
+    # Worker가 OneDrive 파일 다운로드 시 토큰 만료 문제 해결용
+    # Easy Auth 설정에서 offline_access 스코프 추가 필수
+    refresh_token = request.headers.get("x-ms-token-aad-refresh-token")
+    if refresh_token:
+        auth_data["refresh_token"] = refresh_token
 
     if not existing_user:
         auth_data["created_at"] = current_time
