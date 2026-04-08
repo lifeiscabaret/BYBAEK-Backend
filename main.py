@@ -63,7 +63,8 @@ async def lifespan(app: FastAPI):
         replace_existing=True
     )
     scheduler.start()
-    print("[BYBAEK] 서버 시작 + 스케줄러 ON")
+    start_worker()  # ✅ lifespan 안으로 이동 (on_event 대체)
+    print("[BYBAEK] 서버 시작 + 스케줄러 ON + 큐 워커 ON")
     yield
     scheduler.shutdown()
     print("[BYBAEK] 서버 종료")
@@ -102,7 +103,3 @@ app.include_router(custom_chat.router, prefix="/api/custom_chat", tags=["CustomC
 @app.get("/", tags=["Health"])
 async def health_check():
     return {"status": "ok", "service": "BYBAEK API"}
-
-@app.on_event("startup")
-async def startup():
-    start_worker()
