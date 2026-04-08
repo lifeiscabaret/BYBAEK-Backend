@@ -13,7 +13,7 @@ from azure.storage.blob import BlobServiceClient, ContentSettings
 from azure.storage.queue import QueueClient
 
 from utils.logging import logger
-from services.cosmos_db import get_shop, save_photo
+from services.cosmos_db import get_auth, save_photo
 
 
 QUEUE_NAME = "bybaek-photo-sync"
@@ -57,7 +57,7 @@ def get_access_token(shop_id: str) -> str:
         return cached["access_token"]
 
     # DB에서 refresh_token 조회
-    shop_info = get_shop(shop_id)
+    shop_info = get_auth(shop_id)
     if not shop_info:
         raise RuntimeError(f"[worker] shop_id {shop_id} 없음")
 
