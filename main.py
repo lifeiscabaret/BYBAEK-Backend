@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from routers import auth, onboarding, agent, schedule, instagram, photos, onedrive, custom_chat
+from workers.photo_queue_worker import start_worker
 
 load_dotenv()
 
@@ -101,3 +102,7 @@ app.include_router(custom_chat.router, prefix="/api/custom_chat", tags=["CustomC
 @app.get("/", tags=["Health"])
 async def health_check():
     return {"status": "ok", "service": "BYBAEK API"}
+
+@app.on_event("startup")
+async def startup():
+    start_worker()
