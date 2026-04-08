@@ -11,6 +11,15 @@
 
 ---
 
+## 🔗 배포 URL
+
+| 서비스 | URL |
+|---|---|
+| **Frontend** | https://bybaek-f-f2d2ara8b9bua8f6.koreacentral-01.azurewebsites.net |
+| **Backend** | https://bybaek-b-bzhhgzh8d2gthpb3.koreacentral-01.azurewebsites.net |
+
+---
+
 ## 📌 서비스 한 줄 소개
 
 > 사장님이 OneDrive에 사진을 올리면, 실시간 트렌드를 반영한 인스타그램 게시물이  

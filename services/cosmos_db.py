@@ -767,7 +767,7 @@ def delete_photo_data(shop_id: str, photo_id: str) -> bool:
         # 3. Cosmos DB에서 사진 데이터 삭제
         photo_container.delete_item(item=photo_id, partition_key=shop_id)
         
-        # 4. 해당 photo_id가 들어있다면 리스트에서 제거
+        # 4. (추가 로직) 모든 앨범을 돌며 해당 photo_id가 들어있다면 리스트에서 제거
         remove_photo_from_all_albums(shop_id, photo_id)
         
         return True
