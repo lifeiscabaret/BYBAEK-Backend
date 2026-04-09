@@ -8,6 +8,8 @@ from datetime import datetime, timezone, timedelta
 import cv2
 import numpy as np
 from openai import AsyncAzureOpenAI
+from datetime import datetime, timedelta, timezone
+from azure.storage.blob import BlobSasPermissions, generate_blob_sas
 
 # [설정값]
 
@@ -235,7 +237,8 @@ async def _evaluate_photo(
     """
     print(f"[photo_filter] 2차 평가 중 -> {image_id}")
 
-    messages = _build_vision_prompt(blob_url, good_refs, bad_refs)
+    sas_url = _generate_sas_url(blob_url)
+    messages = _build_vision_prompt(sas_url, good_refs, bad_refs)
 
     api_key     = os.getenv("AZURE_OPENAI_API_KEY") or os.getenv("AZURE_OPENAI_KEY")
     endpoint    = os.getenv("AZURE_OPENAI_ENDPOINT")
@@ -295,6 +298,29 @@ async def _evaluate_photo(
     except Exception as e:
         print(f"[photo_filter] GPT 평가 실패 ({image_id}): {e}")
         return _make_fail_result(image_id, str(e))
+
+def _generate_sas_url(blob_url: str, hours: int = 1) -> str:
+    """
+    blob_url → 임시 SAS URL 변환.
+    Blob 공개 접근 비활성화 후 GPT Vision에서 이미지 접근 시 사용.
+ 
+    입력: https://bybaekstorage.blob.core.windows.net/photos/{shop_id}/{hash}.jpg
+    출력: 동일 URL + ?sv=...&sig=... (1시간 유효)
+    """
+    path = blob_url.replace("https://bybaekstorage.blob.core.windows.net/", "")
+    parts = path.split("/", 1)
+    container = parts[0]
+    blob_name = parts[1]
+ 
+    sas_token = generate_blob_sas(
+        account_name="bybaekstorage",
+        container_name=container,
+        blob_name=blob_name,
+        account_key=os.getenv("AZURE_STORAGE_KEY"),
+        permission=BlobSasPermissions(read=True),
+        expiry=datetime.now(timezone.utc) + timedelta(hours=hours),
+    )
+    return f"{blob_url}?{sas_token}"
 
 
 def _build_vision_prompt(blob_url: str, good_refs: list, bad_refs: list) -> list:
