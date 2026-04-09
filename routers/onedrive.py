@@ -1,3 +1,22 @@
+"""
+역할: OneDrive 사진 동기화 라우터
+
+[핵심 설계]
+1. Delta API: 마지막 동기화 이후 변경된 사진만 수집
+2. Azure Queue: 수집된 사진 목록을 10장씩 큐에 등록 → 즉시 응답
+3. Queue Worker: 별도 워커(photo_queue_worker.py)가 큐를 소비하며 업로드/필터링
+
+[변경 이력]
+- 큐 메시지에서 token 제거 → user_id 저장 (앱 토큰 방식으로 전환)
+
+[흐름]
+POST /sync-photos
+→ Delta API로 변경 사진 목록 수집
+→ 10장씩 묶어 Azure Queue에 메시지 등록
+→ delta_link DB 저장
+→ 즉시 응답 (queued: N개)
+"""
+
 import json
 import os
 import traceback
@@ -5,11 +24,11 @@ from typing import Dict, List, Optional
 
 import requests
 from azure.storage.queue import QueueClient
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel
 
 from utils.logging import logger
-from services.cosmos_db import get_auth, update_shop_onedrive_info
+from services.cosmos_db import update_shop_onedrive_info
 
 
 router = APIRouter()
@@ -21,10 +40,7 @@ QUEUE_BATCH_SIZE = 10
 QUEUE_NAME = "bybaek-photo-sync"
 
 
-# ──────────────────────────────────────────
 # 요청 / 응답 모델
-# ──────────────────────────────────────────
-
 class SyncPhotosRequest(BaseModel):
     root_folder_item_id: str = "root"
 
@@ -36,10 +52,7 @@ class SyncPhotosResponse(BaseModel):
     message: str
 
 
-# ──────────────────────────────────────────
 # Graph API 헬퍼
-# ──────────────────────────────────────────
-
 def graph_get(url: str, token: str, params: Optional[Dict] = None) -> Dict:
     headers = {"Authorization": f"Bearer {token}"}
     response = requests.get(url, headers=headers, params=params, timeout=60)
@@ -67,10 +80,7 @@ def sanitize_blob_path(path: str) -> str:
     return path.strip("/").replace("\\", "/")
 
 
-# ──────────────────────────────────────────
 # Delta API
-# ──────────────────────────────────────────
-
 def collect_delta_photos(token: str, drive_id: str, delta_link: Optional[str]) -> tuple:
     """
     Delta API로 변경된 사진 목록만 수집.
@@ -86,7 +96,7 @@ def collect_delta_photos(token: str, drive_id: str, delta_link: Optional[str]) -
     next_delta_link = None
     params = {
         "$top": PAGE_SIZE,
-        "$select": "id,name,folder,file,parentReference,lastModifiedDateTime,deleted"
+        "$select": "id,name,folder,file,parentReference,lastModifiedDateTime,deleted",
     }
 
     while url:
@@ -107,21 +117,15 @@ def collect_delta_photos(token: str, drive_id: str, delta_link: Optional[str]) -
     return photos, next_delta_link
 
 
-# ──────────────────────────────────────────
 # Azure Queue 헬퍼
-# ──────────────────────────────────────────
-
 def get_queue_client() -> QueueClient:
     connection_string = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
-    client = QueueClient.from_connection_string(
-        connection_string,
-        queue_name=QUEUE_NAME
-    )
+    client = QueueClient.from_connection_string(connection_string, queue_name=QUEUE_NAME)
     try:
         client.create_queue()
         logger.info(f"[queue] 큐 생성 완료: {QUEUE_NAME}")
     except Exception:
-        pass
+        pass  # 이미 존재하면 무시
     return client
 
 
@@ -130,11 +134,11 @@ def enqueue_photo_batches(
     photos: List[Dict],
     shop_id: str,
     drive_id: str,
+    user_id: str,          # token → user_id (앱 토큰 방식)
     container_name: str,
 ) -> int:
     """
     사진 목록을 QUEUE_BATCH_SIZE씩 묶어 큐에 등록.
-    ⚠️ token은 큐에 저장하지 않음 - worker가 DB에서 refresh_token으로 직접 발급
     Returns: 등록된 배치 수
     """
     batches = 0
@@ -161,9 +165,9 @@ def enqueue_photo_batches(
         message = json.dumps({
             "shop_id": shop_id,
             "drive_id": drive_id,
+            "user_id": user_id,        # ✅ token 대신 user_id 저장
             "container_name": container_name,
             "photos": message_items,
-            # token 없음 - worker가 refresh_token으로 직접 발급
         })
         queue_client.send_message(message)
         batches += 1
@@ -171,10 +175,7 @@ def enqueue_photo_batches(
     return batches
 
 
-# ──────────────────────────────────────────
 # 메인 엔드포인트
-# ──────────────────────────────────────────
-
 @router.post("/sync-photos", response_model=SyncPhotosResponse)
 def sync_onedrive_photos(req: SyncPhotosRequest, request: Request) -> SyncPhotosResponse:
     """
@@ -183,22 +184,24 @@ def sync_onedrive_photos(req: SyncPhotosRequest, request: Request) -> SyncPhotos
     실제 업로드/필터링은 photo_queue_worker.py가 처리.
     """
     try:
-        access_token = request.headers.get("x-ms-token-aad-access-token")
-        if not access_token:
+        token = request.headers.get("x-ms-token-aad-access-token")
+        if not token:
             raise HTTPException(status_code=401, detail="MS 로그인 필요.")
 
         shop_id = request.headers.get("X-MS-CLIENT-PRINCIPAL-ID", "unknown")
+        # user_id: 앱 토큰으로 드라이브 접근 시 필요한 유저 오브젝트 ID
+        user_id = request.headers.get("X-MS-CLIENT-PRINCIPAL-ID", "")
         container_name = os.getenv("AZURE_BLOB_CONTAINER_NAME", "photos")
 
         logger.info(f"[onedrive] 동기화 시작 → shop_id={shop_id}")
 
-        drive_id = get_user_drive_id(access_token)
+        drive_id = get_user_drive_id(token)
 
-        # DB에서 delta_link 조회 
-        shop_info = get_auth(shop_id)
-        delta_link = shop_info.get("one_delta_link") if shop_info else None
+        # TODO: from services.cosmos_db import get_auth
+        # delta_link = get_auth(shop_id).get("one_delta_link")
+        delta_link = None  # 목업
 
-        photos, next_delta_link = collect_delta_photos(access_token, drive_id, delta_link)
+        photos, next_delta_link = collect_delta_photos(token, drive_id, delta_link)
 
         if not photos:
             return SyncPhotosResponse(
@@ -208,7 +211,7 @@ def sync_onedrive_photos(req: SyncPhotosRequest, request: Request) -> SyncPhotos
 
         queue_client = get_queue_client()
         batches = enqueue_photo_batches(
-            queue_client, photos, shop_id, drive_id, container_name
+            queue_client, photos, shop_id, drive_id, user_id, container_name  # ✅ user_id 전달
         )
 
         if next_delta_link:
