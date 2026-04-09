@@ -1,136 +1,144 @@
+"""
+역할: Azure Queue에서 사진 배치를 꺼내 업로드 + 필터링 처리하는 워커
+
+[주요 흐름]
+30초마다 폴링 → 큐에서 배치 메시지 꺼내기
+→ 사진별 DB 중복 체크
+→ HEIC → JPG 자동 변환
+→ shop_id 기준 경로 격리 후 Blob Storage 업로드
+→ Cosmos DB 저장
+→ 필터링 트리거
+
+[변경 이력]
+- 앱 수준 Client Credentials 토큰으로 교체 (1시간 만료 문제 해결)
+- photo_id에 hashlib.md5 해시 적용 (Cosmos DB illegal chars 해결)
+- shop_id 기준 경로 격리 (photos/{shop_id}/{hash}.jpg)
+- HEIC/HEIF → JPG 자동 변환 (pillow-heif)
+- SAS URL 기반 프라이빗 Blob 접근
+
+[실행 방법]
+main.py lifespan에서 백그라운드 스레드로 실행:
+    from workers.photo_queue_worker import start_worker
+    start_worker()
+"""
+
+import hashlib
+import io
 import json
 import mimetypes
 import os
 import threading
 import time
 import traceback
-import hashlib
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 
+import msal
 import requests
 from azure.core.exceptions import ResourceExistsError
-from azure.storage.blob import BlobServiceClient, ContentSettings
+from azure.storage.blob import (
+    BlobSasPermissions,
+    BlobServiceClient,
+    ContentSettings,
+    generate_blob_sas,
+)
 from azure.storage.queue import QueueClient
 
 from utils.logging import logger
-from services.cosmos_db import get_auth, save_photo
+from services.cosmos_db import save_photo, get_photo_by_id
 
 
+# 상수
 QUEUE_NAME = "bybaek-photo-sync"
 INSTAGRAM_SUPPORTED = {".jpg", ".jpeg", ".png"}
+HEIC_FORMATS = {".heic", ".heif"}
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
-MS_TOKEN_URL = "https://login.microsoftonline.com/common/oauth2/v2.0/token"
 POLL_INTERVAL_SECONDS = 30
 MAX_MESSAGES_PER_POLL = 10
 VISIBILITY_TIMEOUT = 300
 
-# 토큰 캐시: shop_id → {"access_token": ..., "expires_at": datetime}
-_token_cache: dict = {}
+
+# 토큰 발급 (앱 수준 - 만료 없음)
+def _get_app_token() -> str:
+    """
+    Client Credentials로 앱 수준 Graph 토큰 발급.
+    Azure 앱 등록에 Files.Read.All (Application) 권한 + 관리자 동의 필요.
+    """
+    app = msal.ConfidentialClientApplication(
+        client_id=os.getenv("AZURE_CLIENT_ID"),
+        authority=f"https://login.microsoftonline.com/{os.getenv('AZURE_TENANT_ID')}",
+        client_credential=os.getenv("AZURE_CLIENT_SECRET"),
+    )
+    result = app.acquire_token_for_client(
+        scopes=["https://graph.microsoft.com/.default"]
+    )
+    if not result.get("access_token"):
+        raise RuntimeError(f"[worker] 앱 토큰 발급 실패: {result}")
+    return result["access_token"]
 
 
-# ──────────────────────────────────────────
+
+# SAS URL 생성 (프라이빗 Blob 접근용)
+def _generate_sas_url(blob_url: str, hours: int = 1) -> str:
+    """
+    blob_url → 임시 SAS URL 변환.
+    photo_filter.py에서 GPT Vision 호출 시 사용.
+    """
+    # https://bybaekstorage.blob.core.windows.net/photos/shop_id/hash.jpg
+    path = blob_url.replace("https://bybaekstorage.blob.core.windows.net/", "")
+    parts = path.split("/", 1)
+    container = parts[0]
+    blob_name = parts[1]
+
+    sas_token = generate_blob_sas(
+        account_name="bybaekstorage",
+        container_name=container,
+        blob_name=blob_name,
+        account_key=os.getenv("AZURE_STORAGE_KEY"),
+        permission=BlobSasPermissions(read=True),
+        expiry=datetime.now(timezone.utc) + timedelta(hours=hours),
+    )
+    return f"{blob_url}?{sas_token}"
+
+
+# HEIC → JPG 변환
+def _convert_heic_to_jpg(raw_bytes: bytes) -> bytes:
+    try:
+        import pillow_heif
+        from PIL import Image
+
+        pillow_heif.register_heif_opener()
+        img = Image.open(io.BytesIO(raw_bytes))
+        output = io.BytesIO()
+        img.convert("RGB").save(output, format="JPEG", quality=95)
+        return output.getvalue()
+    except Exception as e:
+        raise RuntimeError(f"HEIC 변환 실패: {e}")
+
+
 # Queue Client
-# ──────────────────────────────────────────
-
 def get_queue_client() -> QueueClient:
     return QueueClient.from_connection_string(
         os.getenv("AZURE_STORAGE_CONNECTION_STRING"),
-        queue_name=QUEUE_NAME
+        queue_name=QUEUE_NAME,
     )
 
 
-# ──────────────────────────────────────────
-# 토큰 관리
-# ──────────────────────────────────────────
-
-def get_access_token(shop_id: str) -> str:
-    """
-    shop_id로 유효한 access_token 반환.
-    캐시된 토큰이 있고 만료 5분 전이면 재사용,
-    없거나 만료되면 refresh_token으로 새로 발급.
-    """
-    now = datetime.now(timezone.utc)
-
-    # 캐시 확인
-    cached = _token_cache.get(shop_id)
-    if cached and cached["expires_at"] > now + timedelta(minutes=5):
-        return cached["access_token"]
-
-    # DB에서 refresh_token 조회
-    shop_info = get_auth(shop_id)
-    if not shop_info:
-        raise RuntimeError(f"[worker] shop_id {shop_id} 없음")
-
-    refresh_token = shop_info.get("refresh_token")
-    if not refresh_token:
-        raise RuntimeError(
-            f"[worker] shop_id {shop_id}의 refresh_token 없음. "
-            "재로그인 필요 (offline_access 스코프 확인)"
-        )
-
-    # Microsoft Token Endpoint로 새 access_token 발급
-    client_id = os.getenv("ONEDRIVE_CLIENT_ID")
-    client_secret = os.getenv("AZURE_CLIENT_SECRET")
-
-    resp = requests.post(
-        MS_TOKEN_URL,
-        data={
-            "grant_type": "refresh_token",
-            "refresh_token": refresh_token,
-            "client_id": client_id,
-            "client_secret": client_secret,
-            "scope": "https://graph.microsoft.com/Files.ReadWrite.All offline_access",
-        },
-        timeout=15
-    )
-
-    if resp.status_code >= 400:
-        raise RuntimeError(
-            f"[worker] 토큰 갱신 실패 ({shop_id}): {resp.status_code} {resp.text[:200]}"
-        )
-
-    token_data = resp.json()
-    new_access_token = token_data["access_token"]
-    expires_in = token_data.get("expires_in", 3600)
-
-    # 캐시 저장
-    _token_cache[shop_id] = {
-        "access_token": new_access_token,
-        "expires_at": now + timedelta(seconds=expires_in)
-    }
-
-    # 새 refresh_token이 발급됐으면 DB 업데이트 (rolling refresh_token)
-    new_refresh_token = token_data.get("refresh_token")
-    if new_refresh_token and new_refresh_token != refresh_token:
-        try:
-            from services.cosmos_db import save_auth
-            save_auth(shop_id, {"refresh_token": new_refresh_token})
-        except Exception as e:
-            logger.warning(f"[worker] refresh_token DB 업데이트 실패 (무시): {e}")
-
-    logger.info(f"[worker] 토큰 갱신 완료 → shop_id={shop_id}")
-    return new_access_token
-
-
-# ──────────────────────────────────────────
 # 단일 메시지 처리
-# ──────────────────────────────────────────
-
 def process_message(message_body: dict) -> dict:
     """
     큐 메시지 1개(10장 배치) 처리.
-    Returns: {"uploaded": N, "skipped": N, "failed": N, "filter_list": [...], "shop_id": str}
+
+    입력: {shop_id, drive_id, user_id, container_name, photos}
+    출력: {uploaded, skipped, failed, filter_list, shop_id}
     """
     shop_id = message_body["shop_id"]
     drive_id = message_body["drive_id"]
+    user_id = message_body.get("user_id", "")   # token 대신 user_id
     container_name = message_body["container_name"]
     photos = message_body["photos"]
+    token = _get_app_token()
 
-    # DB에서 refresh_token으로 access_token 발급
-    token = get_access_token(shop_id)
-
-    # Blob 클라이언트 초기화
     blob_service = BlobServiceClient.from_connection_string(
         os.getenv("AZURE_STORAGE_CONNECTION_STRING")
     )
@@ -147,50 +155,71 @@ def process_message(message_body: dict) -> dict:
         relative_path = photo["relative_path"]
         ext = os.path.splitext(name)[1].lower()
 
-        photo_id = (
-            f"photo_{shop_id}_"
-            f"{hashlib.md5(relative_path.encode()).hexdigest()}"
-        )
+        # photo_id: md5 해시로 Cosmos DB illegal chars 방지
+        photo_id = f"photo_{shop_id}_{hashlib.md5(relative_path.encode()).hexdigest()}"
+
+        # Blob 경로: shop_id 기준 격리
+        path_hash = hashlib.md5(relative_path.encode()).hexdigest()
+        # HEIC는 변환 후 .jpg로 저장
+        target_ext = ".jpg" if ext in HEIC_FORMATS else ext
+        isolated_path = f"{shop_id}/{path_hash}{target_ext}"
 
         try:
-            from services.cosmos_db import get_photo_by_id
-            existing = get_photo_by_id(shop_id, photo_id)
+            try:
+                existing = get_photo_by_id(shop_id, photo_id)
+            except Exception:
+                existing = None
 
             if existing:
                 logger.info(f"[worker] ⏭️ 중복 스킵: {name}")
                 skipped += 1
                 continue
 
-            # ── 토큰 만료 시 자동 재발급 ──
-            # 배치 처리 중간에 만료될 수 있으므로 매 파일마다 유효성 확인
-            token = get_access_token(shop_id)
+            # ── Graph API 다운로드 (user_id 기준 경로) ──
+            if user_id:
+                download_url = (
+                    f"{GRAPH_BASE}/users/{user_id}/drives/{drive_id}"
+                    f"/items/{item_id}/content"
+                )
+            else:
+                # fallback: /me (로컬 테스트용)
+                download_url = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/content"
 
-            # ── Blob 업로드 ──
-            content_type = photo.get("mime_type") or ""
-            if not content_type:
-                content_type, _ = mimetypes.guess_type(name)
-
-            download_url = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/content"
             download_resp = requests.get(
                 download_url,
                 headers={"Authorization": f"Bearer {token}"},
-                stream=True,
-                timeout=300
+                timeout=300,
+                # stream=True 제거 → content로 받아야 HEIC 변환 가능
             )
             if download_resp.status_code >= 400:
                 raise RuntimeError(f"Download failed: {download_resp.status_code}")
 
+            raw = download_resp.content
+            content_type = photo.get("mime_type") or ""
+
+            # HEIC → JPG 자동 변환
+            if ext in HEIC_FORMATS:
+                logger.info(f"[worker] 🔄 HEIC 변환 중: {name}")
+                raw = _convert_heic_to_jpg(raw)
+                name = os.path.splitext(name)[0] + ".jpg"
+                content_type = "image/jpeg"
+                ext = ".jpg"
+
+            if not content_type:
+                content_type, _ = mimetypes.guess_type(name)
+
+            # ── Blob 업로드 (격리 경로) ──
             content_settings = ContentSettings(content_type=content_type)
             container_client.upload_blob(
-                name=relative_path,
-                data=download_resp.raw,
+                name=isolated_path,   # 격리된 경로 사용
+                data=raw,
                 content_settings=content_settings,
-                overwrite=False
+                overwrite=False,
             )
 
             blob_url = (
                 f"https://bybaekstorage.blob.core.windows.net"
-                f"/{container_name}/{quote(relative_path)}"
+                f"/{container_name}/{quote(isolated_path)}"
             )
 
             # ── Cosmos DB 저장 (Instagram 지원 포맷만) ──
@@ -198,15 +227,16 @@ def process_message(message_body: dict) -> dict:
                 save_photo(shop_id, {
                     "photo_id": photo_id,
                     "blob_url": blob_url,
-                    "onedrive_url": f"https://graph.microsoft.com/v1.0/drives/{drive_id}/items/{item_id}",
                     "name": name,
                     "last_modified": photo.get("last_modified", ""),
                     "is_usable": False,
-                    "filter_status": "pending"
+                    "filter_status": "pending",
                 })
-                filter_list.append({"image_id": photo_id, "blob_url": blob_url})
+                # SAS URL로 필터링 목록 등록 (프라이빗 Blob 접근)
+                sas_url = _generate_sas_url(blob_url, hours=2)
+                filter_list.append({"image_id": photo_id, "blob_url": sas_url})
 
-            logger.info(f"[worker] ✅ 업로드 성공: {name}")
+            logger.info(f"[worker] ✅ 업로드 성공: {name} → {isolated_path}")
             uploaded += 1
 
         except ResourceExistsError:
@@ -226,10 +256,7 @@ def process_message(message_body: dict) -> dict:
     }
 
 
-# ──────────────────────────────────────────
 # 필터링 트리거
-# ──────────────────────────────────────────
-
 async def trigger_filter(shop_id: str, filter_list: list):
     if not filter_list:
         return
@@ -246,10 +273,8 @@ async def trigger_filter(shop_id: str, filter_list: list):
         logger.error(f"[worker] 필터링 실패: {e}")
 
 
-# ──────────────────────────────────────────
-# 폴링 루프
-# ──────────────────────────────────────────
 
+# 폴링 루프
 def polling_loop():
     """30초마다 큐를 폴링하며 메시지 처리. 별도 스레드에서 실행."""
     import asyncio
@@ -261,7 +286,7 @@ def polling_loop():
         try:
             messages = queue_client.receive_messages(
                 max_messages=MAX_MESSAGES_PER_POLL,
-                visibility_timeout=VISIBILITY_TIMEOUT
+                visibility_timeout=VISIBILITY_TIMEOUT,
             )
 
             processed = 0
@@ -307,19 +332,9 @@ def polling_loop():
         time.sleep(POLL_INTERVAL_SECONDS)
 
 
-# ──────────────────────────────────────────
 # 워커 시작
-# ──────────────────────────────────────────
-
 def start_worker():
-    """
-    main.py startup 이벤트에서 호출:
-        from workers.photo_queue_worker import start_worker
-
-        @app.on_event("startup")
-        async def startup():
-            start_worker()
-    """
+    """main.py lifespan에서 호출."""
     thread = threading.Thread(target=polling_loop, daemon=True)
     thread.start()
     logger.info("[worker] 큐 워커 스레드 시작 완료")
