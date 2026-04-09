@@ -4,6 +4,7 @@ import os
 import threading
 import time
 import traceback
+import hashlib
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 
@@ -148,7 +149,7 @@ def process_message(message_body: dict) -> dict:
 
         photo_id = (
             f"photo_{shop_id}_"
-            f"{relative_path.replace('/', '_').replace(' ', '_')}"
+            f"{hashlib.md5(relative_path.encode()).hexdigest()}"
         )
 
         try:
