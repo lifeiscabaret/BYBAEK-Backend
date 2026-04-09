@@ -103,8 +103,8 @@ def get_access_token(shop_id: str) -> str:
     new_refresh_token = token_data.get("refresh_token")
     if new_refresh_token and new_refresh_token != refresh_token:
         try:
-            from services.cosmos_db import update_shop_onedrive_info
-            update_shop_onedrive_info(shop_id, {"refresh_token": new_refresh_token})
+            from services.cosmos_db import save_auth
+            save_auth(shop_id, {"refresh_token": new_refresh_token})
         except Exception as e:
             logger.warning(f"[worker] refresh_token DB 업데이트 실패 (무시): {e}")
 
@@ -152,10 +152,8 @@ def process_message(message_body: dict) -> dict:
         )
 
         try:
-            # ── DB 중복 체크 ──
-            # TODO: from services.cosmos_db import get_photo_by_id
-            # existing = get_photo_by_id(shop_id, photo_id)
-            existing = None  # 목업
+            from services.cosmos_db import get_photo_by_id
+            existing = get_photo_by_id(shop_id, photo_id)
 
             if existing:
                 logger.info(f"[worker] ⏭️ 중복 스킵: {name}")
@@ -199,6 +197,7 @@ def process_message(message_body: dict) -> dict:
                 save_photo(shop_id, {
                     "photo_id": photo_id,
                     "blob_url": blob_url,
+                    "onedrive_url": f"https://graph.microsoft.com/v1.0/drives/{drive_id}/items/{item_id}",
                     "name": name,
                     "last_modified": photo.get("last_modified", ""),
                     "is_usable": False,

@@ -154,10 +154,12 @@ def save_photo(shop_id: str, photo_data: dict) -> bool:
     item = {
         "id": photo_data['photo_id'],
         "shop_id": shop_id,
-        "blob_url": photo_data['blob_url'], 
+        "blob_url": photo_data['blob_url'],
         "onedrive_url": photo_data['onedrive_url'],
         "original_name": photo_data['name'],
         "used_yn": False,
+        "is_usable": photo_data.get('is_usable', False),
+        "filter_status": photo_data.get('filter_status', 'pending'),  # 추가
         "created_at": photo_data['last_modified']
     }
     
