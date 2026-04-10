@@ -65,6 +65,7 @@ def _to_sas_url(blob_url: str, hours: int = 2) -> str:
 @router.get("/all/{shop_id}")
 async def read_all_photos(shop_id: str):
     all_photos = get_all_photos_by_shop(shop_id)
+    # ✅ is_usable=False(탈락)만 제외, None(대기)과 True(통과)는 표시
     photos = [p for p in all_photos if p.get("is_usable") is not False]
     for p in photos:
         if p.get("blob_url"):

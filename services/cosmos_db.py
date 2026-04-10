@@ -155,7 +155,7 @@ def save_photo(shop_id: str, photo_data: dict) -> bool:
         "id": photo_data['photo_id'],
         "shop_id": shop_id,
         "blob_url": photo_data['blob_url'],
-        "onedrive_url": photo_data['onedrive_url'],
+        "onedrive_url": photo_data.get('onedrive_url', ''),
         "original_name": photo_data['name'],
         "used_yn": False,
         "is_usable": photo_data.get('is_usable', False),
@@ -209,7 +209,7 @@ def get_onboarding(shop_id: str) -> dict:
 
 def get_all_photos_by_shop(shop_id: str) -> list:
     container = get_cosmos_container("Photo")
-    query = "SELECT * FROM c WHERE c.shop_id = @shop_id AND c.is_usable = true"
+    query = "SELECT * FROM c WHERE c.shop_id = @shop_id AND (c.is_usable = true OR NOT IS_DEFINED(c.is_usable) OR IS_NULL(c.is_usable))"
     parameters = [{"name": "@shop_id", "value": shop_id}]
 
     try:
