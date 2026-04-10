@@ -225,7 +225,7 @@ def process_message(message_body: dict) -> dict:
                     "blob_url": blob_url,
                     "name": name,
                     "last_modified": photo.get("last_modified", ""),
-                    "is_usable": False,
+                    "is_usable": None,
                     "filter_status": "pending",
                 })
                 # ✅ SAS URL로 필터링 목록 등록 (프라이빗 Blob 접근)

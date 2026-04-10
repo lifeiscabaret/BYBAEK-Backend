@@ -211,9 +211,9 @@ def sync_onedrive_photos(req: SyncPhotosRequest, request: Request) -> SyncPhotos
 
         drive_id = get_user_drive_id(token)
 
-        # TODO: from services.cosmos_db import get_auth
-        # delta_link = get_auth(shop_id).get("one_delta_link")
-        delta_link = None  # 목업
+        from services.cosmos_db import get_auth
+        shop_data = get_auth(shop_id)
+        delta_link = shop_data.get("one_delta_link") if shop_data else None
 
         photos, next_delta_link = collect_delta_photos(token, drive_id, delta_link)
 
