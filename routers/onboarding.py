@@ -201,11 +201,15 @@ async def save_onboarding_api(shop_id: str, data: OnboardingRequest):
 @router.get("/{shop_id}")
 async def get_onboarding_api(shop_id: str):
     """
-    온보딩 데이터 조회
+    온보딩 데이터 조회.
+    shop_info 래퍼를 제거하고 필드를 최상위 레벨로 반환합니다.
+    프론트엔드가 data.is_gmail_connected, data.owner_email 등으로 직접 접근합니다.
     """
     result = get_onboarding_db(shop_id)
 
     if not result:
         raise HTTPException(status_code=404, detail="온보딩 데이터 없음")
 
-    return result
+    # get_onboarding_db가 {"shop_info": {...}} 형태로 반환하므로 최상위로 평탄화
+    shop_info = result.get("shop_info", result)
+    return shop_info

@@ -463,30 +463,73 @@ def get_post_detail_data(post_id: str, shop_id: str) -> dict:
         post = post_container.read_item(item=post_id, partition_key=shop_id)
         photo_ids = post.get("photo_ids", [])
         
-        # 2. photo_ids에 해당하는 실제 blob_url 정보들을 수집
-        photo_details = []
+        # 2. photo_ids에 해당하는 실제 blob_url + original_name 정보들을 수집
+        photos = []
         for pid in photo_ids:
             try:
-                # 각 사진 ID로 Photo 컨테이너 조회
                 photo_item = photo_container.read_item(item=pid, partition_key=shop_id)
-                photo_details.append({
+                photos.append({
                     "id": pid,
-                    "blob_url": photo_item.get("blob_url")
+                    "original_name": photo_item.get("original_name", ""),
+                    "blob_url": photo_item.get("blob_url", "")
                 })
             except Exception:
                 # 사진이 삭제되었거나 없는 경우 건너뜀
                 continue
-        
-        # 3. 게시물 데이터에 상세 사진 정보 포함 (기존 photo_ids는 유지하거나 대체)
-        post["photo_details"] = photo_details
-        # 프론트 편의를 위해 URL만 모은 리스트도 넣어주면 좋음
-        post["photo_urls"] = [p["blob_url"] for p in photo_details]
-        
-        return post
+
+        # 3. 프론트엔드 요구 형식으로 응답 구성
+        status_raw = post.get("status", "pending")
+        return {
+            "post_id": post.get("id", post_id),
+            "shop_id": shop_id,
+            "caption": post.get("caption", ""),
+            "photos": photos,
+            "status": "pending_review" if status_raw == "pending" else status_raw,
+            # 하위 호환용 추가 필드
+            "hashtags": post.get("hashtags", []),
+            "cta": post.get("cta", ""),
+            "metrics": post.get("metrics", {}),
+        }
         
     except Exception as e:
         logging.error(f"게시물 상세 조회 실패 (post_id: {post_id}): {str(e)}")
         return None
+
+
+def save_gmail_token(shop_id: str, email: str, access_token: str, refresh_token: str) -> bool:
+    """
+    Gmail OAuth 완료 후 토큰과 이메일을 Shop 컨테이너에 저장합니다.
+
+    Args:
+        shop_id (str): 상점 고유 식별자
+        email (str): Google 계정 이메일 (owner_email로 저장)
+        access_token (str): Gmail access token
+        refresh_token (str): Gmail refresh token (장기 갱신용)
+
+    Returns:
+        bool: 저장 성공 여부
+    """
+    container = get_cosmos_container("Shop")
+    try:
+        try:
+            shop_item = container.read_item(item=shop_id, partition_key=shop_id)
+        except Exception:
+            shop_item = {"id": shop_id, "shop_id": shop_id, "created_at": datetime.utcnow().isoformat()}
+
+        shop_item["owner_email"] = email
+        shop_item["is_gmail_connected"] = True
+        shop_item["gmail_access_token"] = access_token
+        shop_item["gmail_refresh_token"] = refresh_token
+        shop_item["gmail_connected_at"] = datetime.utcnow().isoformat()
+        shop_item["updated_at"] = datetime.utcnow().isoformat()
+
+        container.upsert_item(body=shop_item)
+        logging.info(f"Gmail 토큰 저장 완료 → shop_id={shop_id}, email={email}")
+        return True
+    except Exception as e:
+        logging.error(f"Gmail 토큰 저장 실패 (shop_id: {shop_id}): {str(e)}")
+        return False
+
 
 def save_post_data(shop_id: str, post_data: dict) -> bool:
     """

@@ -594,11 +594,14 @@ async def _auto_upload_instagram(shop_id, post_id, post_draft, selected_photos):
 
 async def _send_push_notification(shop_id, post_id, post_draft):
     try:
-        from services.cosmos_db import get_auth
-        shop_auth   = get_auth(shop_id) or {}
-        owner_email = shop_auth.get("owner_email") or shop_auth.get("gmail")
-        if not owner_email: return
+        from services.cosmos_db import get_onboarding
+        onboarding  = get_onboarding(shop_id) or {}
+        shop_info   = onboarding.get("shop_info") or onboarding
+        owner_email = shop_info.get("owner_email")
+        if not owner_email:
+            print(f"[orchestrator_v2] owner_email 없음 → 이메일 생략 (shop_id={shop_id})")
+            return
         from services.email_service import send_draft_notification
-        await send_draft_notification(owner_email, post_id, post_draft.get("caption", ""))
+        await send_draft_notification(owner_email, post_id, post_draft.get("caption", ""), shop_id=shop_id)
     except Exception as e:
         print(f"[orchestrator_v2] 알림 에러 (무시): {e}")

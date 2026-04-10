@@ -6,7 +6,7 @@ import requests
 from services.cosmos_db import save_auth, get_auth
 import logging
 from datetime import datetime
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, HTMLResponse
 
 router = APIRouter()
 
@@ -120,3 +120,119 @@ async def get_my_info(request: Request):
     save_auth(ms_user_id, auth_data)
 
     return {"shop_id": ms_user_id, "is_new": not existing_user}
+
+
+# ── Gmail OAuth ──────────────────────────────────────────────────────────────
+
+GMAIL_SCOPES = [
+    "https://www.googleapis.com/auth/gmail.send",
+    "https://www.googleapis.com/auth/userinfo.email",
+    "openid",
+]
+
+
+@router.get("/gmail")
+async def gmail_oauth_start(shop_id: str):
+    """
+    Gmail OAuth 시작 — Google 로그인 페이지로 리다이렉트.
+    프론트엔드는 이 URL을 팝업으로 열면 됩니다:
+        window.open(`/api/auth/gmail?shop_id=${shopId}`)
+    """
+    client_id = os.getenv("GMAIL_CLIENT_ID")
+    redirect_uri = os.getenv("GMAIL_REDIRECT_URI")
+    if not client_id or not redirect_uri:
+        raise HTTPException(status_code=500, detail="Gmail OAuth 환경변수(GMAIL_CLIENT_ID, GMAIL_REDIRECT_URI) 미설정")
+
+    try:
+        from google_auth_oauthlib.flow import Flow
+
+        client_config = {
+            "web": {
+                "client_id": client_id,
+                "client_secret": os.getenv("GMAIL_CLIENT_SECRET"),
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token",
+                "redirect_uris": [redirect_uri],
+            }
+        }
+        flow = Flow.from_client_config(client_config, scopes=GMAIL_SCOPES, redirect_uri=redirect_uri)
+        auth_url, _ = flow.authorization_url(
+            access_type="offline",
+            state=shop_id,
+            prompt="consent",
+            include_granted_scopes="true",
+        )
+        return RedirectResponse(url=auth_url)
+    except Exception as e:
+        logging.error(f"Gmail OAuth 시작 실패: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/gmail/callback")
+async def gmail_oauth_callback(code: str, state: str):
+    """
+    Gmail OAuth 콜백 — Google로부터 code 수신 후:
+    1. access_token + refresh_token 교환
+    2. 사용자 이메일 조회
+    3. CosmosDB Shop 컨테이너에 토큰 + owner_email + is_gmail_connected 저장
+    4. 팝업 창에 GMAIL_LOGIN_SUCCESS 메시지 전송 후 창 닫기
+    """
+    shop_id = state
+    redirect_uri = os.getenv("GMAIL_REDIRECT_URI")
+    frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
+
+    try:
+        from google_auth_oauthlib.flow import Flow
+        from services.cosmos_db import save_gmail_token
+
+        client_config = {
+            "web": {
+                "client_id": os.getenv("GMAIL_CLIENT_ID"),
+                "client_secret": os.getenv("GMAIL_CLIENT_SECRET"),
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token",
+                "redirect_uris": [redirect_uri],
+            }
+        }
+        flow = Flow.from_client_config(client_config, scopes=GMAIL_SCOPES, redirect_uri=redirect_uri)
+        flow.fetch_token(code=code)
+        credentials = flow.credentials
+
+        # Google userinfo로 이메일 조회
+        userinfo_resp = requests.get(
+            "https://www.googleapis.com/oauth2/v2/userinfo",
+            headers={"Authorization": f"Bearer {credentials.token}"},
+            timeout=10,
+        )
+        userinfo_resp.raise_for_status()
+        email = userinfo_resp.json().get("email", "")
+
+        # CosmosDB 저장
+        save_gmail_token(
+            shop_id=shop_id,
+            email=email,
+            access_token=credentials.token,
+            refresh_token=credentials.refresh_token or "",
+        )
+        logging.info(f"Gmail 연동 완료 → shop_id={shop_id}, email={email}")
+
+    except Exception as e:
+        logging.error(f"Gmail OAuth 콜백 실패: {e}")
+        # 실패해도 팝업은 닫되, 실패 메시지 전송
+        return HTMLResponse(content=f"""
+<html><body><script>
+  if (window.opener) {{
+    window.opener.postMessage('GMAIL_LOGIN_FAIL', '{frontend_url}');
+    window.close();
+  }}
+</script><p>Gmail 연동 실패: {e}</p></body></html>
+""")
+
+    return HTMLResponse(content=f"""
+<html><body><script>
+  if (window.opener) {{
+    window.opener.postMessage('GMAIL_LOGIN_SUCCESS', '{frontend_url}');
+    window.close();
+  }}
+</script><p>Gmail 연동 완료. 이 창을 닫아주세요.</p></body></html>
+""")
