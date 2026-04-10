@@ -1,5 +1,4 @@
 """
-파일명: routers/onedrive.py
 역할: OneDrive 사진 동기화 라우터
 
 [핵심 설계]
@@ -8,7 +7,7 @@
 3. Queue Worker: 별도 워커(photo_queue_worker.py)가 큐를 소비하며 업로드/필터링
 
 [변경 이력]
-- refresh_token 저장 방식으로 전환 (개인 MS 계정 지원, 토큰 만료 문제 해결)
+- access_token 직접 저장 (개인 MS 계정 포함, Worker 즉시 처리로 만료 무관)
 
 [흐름]
 POST /sync-photos
@@ -147,7 +146,7 @@ def enqueue_photo_batches(
     photos: List[Dict],
     shop_id: str,
     drive_id: str,
-    refresh_token: str,    # refresh_token 저장 (Worker에서 갱신)
+    token: str,             # access_token (Worker에서 직접 사용)
     container_name: str,
 ) -> int:
     """
@@ -178,7 +177,7 @@ def enqueue_photo_batches(
         message = json.dumps({
             "shop_id": shop_id,
             "drive_id": drive_id,
-            "refresh_token": refresh_token,  # Worker에서 토큰 갱신용
+            "token": token,  # access_token 직접 저장
             "container_name": container_name,
             "photos": message_items,
         })
@@ -206,7 +205,6 @@ def sync_onedrive_photos(req: SyncPhotosRequest, request: Request) -> SyncPhotos
 
         shop_id = request.headers.get("X-MS-CLIENT-PRINCIPAL-ID", "unknown")
         # refresh_token: Worker에서 토큰 만료 시 갱신용 (개인 MS 계정 포함)
-        refresh_token = request.headers.get("X-MS-TOKEN-AAD-REFRESH-TOKEN", "")
         container_name = os.getenv("AZURE_BLOB_CONTAINER_NAME", "photos")
 
         logger.info(f"[onedrive] 동기화 시작 → shop_id={shop_id}")
@@ -227,7 +225,7 @@ def sync_onedrive_photos(req: SyncPhotosRequest, request: Request) -> SyncPhotos
 
         queue_client = get_queue_client()
         batches = enqueue_photo_batches(
-            queue_client, photos, shop_id, drive_id, refresh_token, container_name
+            queue_client, photos, shop_id, drive_id, token, container_name
         )
 
         if next_delta_link:

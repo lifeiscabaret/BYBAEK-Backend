@@ -1,4 +1,5 @@
 """
+파일명: workers/photo_queue_worker.py
 역할: Azure Queue에서 사진 배치를 꺼내 업로드 + 필터링 처리하는 워커
 
 [주요 흐름]
@@ -10,7 +11,7 @@
 → 필터링 트리거
 
 [변경 이력]
-- refresh_token 방식으로 위임 토큰 갱신 (개인 MS 계정 지원, 만료 문제 해결)
+- access_token 직접 사용 (개인 MS 계정 포함, Worker 즉시 처리로 만료 무관)
 - photo_id에 hashlib.md5 해시 적용 (Cosmos DB illegal chars 해결)
 - shop_id 기준 경로 격리 (photos/{shop_id}/{hash}.jpg)
 - HEIC/HEIF → JPG 자동 변환 (pillow-heif)
@@ -33,7 +34,6 @@ import traceback
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 
-import msal
 import requests
 from azure.core.exceptions import ResourceExistsError
 from azure.storage.blob import (
@@ -48,7 +48,10 @@ from utils.logging import logger
 from services.cosmos_db import save_photo, get_photo_by_id
 
 
+# ──────────────────────────────────────────
 # 상수
+# ──────────────────────────────────────────
+
 QUEUE_NAME = "bybaek-photo-sync"
 INSTAGRAM_SUPPORTED = {".jpg", ".jpeg", ".png"}
 HEIC_FORMATS = {".heic", ".heif"}
@@ -57,29 +60,12 @@ POLL_INTERVAL_SECONDS = 30
 MAX_MESSAGES_PER_POLL = 10
 VISIBILITY_TIMEOUT = 300
 
-# 토큰 발급 (앱 수준 - 만료 없음)
-def _get_delegated_token(refresh_token: str) -> str:
-    """
-    refresh_token으로 위임 토큰 갱신.
-    개인 MS 계정 + 회사 계정 모두 지원.
-    Files.Read.All Delegated 권한 필요.
-    """
-    app = msal.ConfidentialClientApplication(
-        client_id=os.getenv("AZURE_CLIENT_ID"),
-        authority="https://login.microsoftonline.com/common",
-        client_credential=os.getenv("AZURE_CLIENT_SECRET"),
-    )
-    result = app.acquire_token_by_refresh_token(
-        refresh_token=refresh_token,
-        scopes=["https://graph.microsoft.com/Files.Read.All"]
-    )
-    if not result.get("access_token"):
-        raise RuntimeError(f"[worker] 토큰 갱신 실패: {result.get('error_description', result)}")
-    return result["access_token"]
 
-
-
+# ──────────────────────────────────────────
+# ──────────────────────────────────────────
 # SAS URL 생성 (프라이빗 Blob 접근용)
+# ──────────────────────────────────────────
+
 def _generate_sas_url(blob_url: str, hours: int = 1) -> str:
     """
     blob_url → 임시 SAS URL 변환.
@@ -101,7 +87,11 @@ def _generate_sas_url(blob_url: str, hours: int = 1) -> str:
     )
     return f"{blob_url}?{sas_token}"
 
+
+# ──────────────────────────────────────────
 # HEIC → JPG 변환
+# ──────────────────────────────────────────
+
 def _convert_heic_to_jpg(raw_bytes: bytes) -> bytes:
     """HEIC/HEIF 바이트 → JPEG 바이트 변환. pillow-heif 필요."""
     try:
@@ -117,7 +107,10 @@ def _convert_heic_to_jpg(raw_bytes: bytes) -> bytes:
         raise RuntimeError(f"HEIC 변환 실패: {e}")
 
 
+# ──────────────────────────────────────────
 # Queue Client
+# ──────────────────────────────────────────
+
 def get_queue_client() -> QueueClient:
     return QueueClient.from_connection_string(
         os.getenv("AZURE_STORAGE_CONNECTION_STRING"),
@@ -125,22 +118,25 @@ def get_queue_client() -> QueueClient:
     )
 
 
+# ──────────────────────────────────────────
 # 단일 메시지 처리
+# ──────────────────────────────────────────
+
 def process_message(message_body: dict) -> dict:
     """
     큐 메시지 1개(10장 배치) 처리.
 
-    입력: {shop_id, drive_id, refresh_token, container_name, photos}
+    입력: {shop_id, drive_id, token, container_name, photos}
     출력: {uploaded, skipped, failed, filter_list, shop_id}
     """
     shop_id = message_body["shop_id"]
     drive_id = message_body["drive_id"]
-    refresh_token = message_body.get("refresh_token", "")
+    token = message_body.get("token", "") or message_body.get("refresh_token", "")
     container_name = message_body["container_name"]
     photos = message_body["photos"]
 
-    # refresh_token으로 위임 토큰 갱신 (개인/회사 계정 모두 지원)
-    token = _get_delegated_token(refresh_token)
+    if not token:
+        raise RuntimeError("[worker] token 없음 → OneDrive 재연동 필요")
 
     blob_service = BlobServiceClient.from_connection_string(
         os.getenv("AZURE_STORAGE_CONNECTION_STRING")
@@ -255,7 +251,11 @@ def process_message(message_body: dict) -> dict:
         "shop_id": shop_id,
     }
 
+
+# ──────────────────────────────────────────
 # 필터링 트리거
+# ──────────────────────────────────────────
+
 async def trigger_filter(shop_id: str, filter_list: list):
     if not filter_list:
         return
@@ -333,7 +333,10 @@ def polling_loop():
         time.sleep(POLL_INTERVAL_SECONDS)
 
 
+# ──────────────────────────────────────────
 # 워커 시작
+# ──────────────────────────────────────────
+
 def start_worker():
     """main.py lifespan에서 호출."""
     thread = threading.Thread(target=polling_loop, daemon=True)
