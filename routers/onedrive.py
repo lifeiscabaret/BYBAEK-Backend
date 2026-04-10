@@ -103,7 +103,7 @@ def collect_delta_photos(token: str, drive_id: str, delta_link: Optional[str]) -
 
     photos = []
     next_delta_link = None
-    params = {
+    params = None if delta_link else {
         "$top": PAGE_SIZE,
         "$select": "id,name,folder,file,parentReference,lastModifiedDateTime,deleted",
     }
