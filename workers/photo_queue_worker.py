@@ -182,8 +182,9 @@ def process_message(message_body: dict) -> dict:
                     f"/items/{item_id}/content"
                 )
             else:
-                # fallback: /me (로컬 테스트용)
                 download_url = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/content"
+
+            logger.info(f"[worker] 다운로드 URL: {download_url}")
 
             download_resp = requests.get(
                 download_url,
@@ -314,6 +315,7 @@ def polling_loop():
                 except Exception as e:
                     logger.error(f"[worker] 메시지 처리 실패 (재시도 대기): {e}")
                     traceback.print_exc()
+                    
 
             if filter_map:
                 loop = asyncio.new_event_loop()
