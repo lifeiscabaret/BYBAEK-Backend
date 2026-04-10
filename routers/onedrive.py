@@ -1,4 +1,5 @@
 """
+파일명: routers/onedrive.py
 역할: OneDrive 사진 동기화 라우터
 
 [핵심 설계]
@@ -7,7 +8,7 @@
 3. Queue Worker: 별도 워커(photo_queue_worker.py)가 큐를 소비하며 업로드/필터링
 
 [변경 이력]
-- 큐 메시지에서 token 제거 → user_id 저장 (앱 토큰 방식으로 전환)
+- refresh_token 저장 방식으로 전환 (개인 MS 계정 지원, 토큰 만료 문제 해결)
 
 [흐름]
 POST /sync-photos
@@ -40,7 +41,10 @@ QUEUE_BATCH_SIZE = 10
 QUEUE_NAME = "bybaek-photo-sync"
 
 
+# ──────────────────────────────────────────
 # 요청 / 응답 모델
+# ──────────────────────────────────────────
+
 class SyncPhotosRequest(BaseModel):
     root_folder_item_id: str = "root"
 
@@ -52,7 +56,10 @@ class SyncPhotosResponse(BaseModel):
     message: str
 
 
+# ──────────────────────────────────────────
 # Graph API 헬퍼
+# ──────────────────────────────────────────
+
 def graph_get(url: str, token: str, params: Optional[Dict] = None) -> Dict:
     headers = {"Authorization": f"Bearer {token}"}
     response = requests.get(url, headers=headers, params=params, timeout=60)
@@ -80,7 +87,10 @@ def sanitize_blob_path(path: str) -> str:
     return path.strip("/").replace("\\", "/")
 
 
+# ──────────────────────────────────────────
 # Delta API
+# ──────────────────────────────────────────
+
 def collect_delta_photos(token: str, drive_id: str, delta_link: Optional[str]) -> tuple:
     """
     Delta API로 변경된 사진 목록만 수집.
@@ -117,7 +127,10 @@ def collect_delta_photos(token: str, drive_id: str, delta_link: Optional[str]) -
     return photos, next_delta_link
 
 
+# ──────────────────────────────────────────
 # Azure Queue 헬퍼
+# ──────────────────────────────────────────
+
 def get_queue_client() -> QueueClient:
     connection_string = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
     client = QueueClient.from_connection_string(connection_string, queue_name=QUEUE_NAME)
@@ -134,7 +147,7 @@ def enqueue_photo_batches(
     photos: List[Dict],
     shop_id: str,
     drive_id: str,
-    user_id: str,          # token → user_id (앱 토큰 방식)
+    refresh_token: str,    # refresh_token 저장 (Worker에서 갱신)
     container_name: str,
 ) -> int:
     """
@@ -165,7 +178,7 @@ def enqueue_photo_batches(
         message = json.dumps({
             "shop_id": shop_id,
             "drive_id": drive_id,
-            "user_id": user_id,        # ✅ token 대신 user_id 저장
+            "refresh_token": refresh_token,  # Worker에서 토큰 갱신용
             "container_name": container_name,
             "photos": message_items,
         })
@@ -175,7 +188,10 @@ def enqueue_photo_batches(
     return batches
 
 
+# ──────────────────────────────────────────
 # 메인 엔드포인트
+# ──────────────────────────────────────────
+
 @router.post("/sync-photos", response_model=SyncPhotosResponse)
 def sync_onedrive_photos(req: SyncPhotosRequest, request: Request) -> SyncPhotosResponse:
     """
@@ -189,8 +205,8 @@ def sync_onedrive_photos(req: SyncPhotosRequest, request: Request) -> SyncPhotos
             raise HTTPException(status_code=401, detail="MS 로그인 필요.")
 
         shop_id = request.headers.get("X-MS-CLIENT-PRINCIPAL-ID", "unknown")
-        # user_id: 앱 토큰으로 드라이브 접근 시 필요한 유저 오브젝트 ID
-        user_id = request.headers.get("X-MS-CLIENT-PRINCIPAL-ID", "")
+        # refresh_token: Worker에서 토큰 만료 시 갱신용 (개인 MS 계정 포함)
+        refresh_token = request.headers.get("X-MS-TOKEN-AAD-REFRESH-TOKEN", "")
         container_name = os.getenv("AZURE_BLOB_CONTAINER_NAME", "photos")
 
         logger.info(f"[onedrive] 동기화 시작 → shop_id={shop_id}")
@@ -211,7 +227,7 @@ def sync_onedrive_photos(req: SyncPhotosRequest, request: Request) -> SyncPhotos
 
         queue_client = get_queue_client()
         batches = enqueue_photo_batches(
-            queue_client, photos, shop_id, drive_id, user_id, container_name  # ✅ user_id 전달
+            queue_client, photos, shop_id, drive_id, refresh_token, container_name
         )
 
         if next_delta_link:
