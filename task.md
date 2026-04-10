@@ -3,7 +3,7 @@
 브랜치: `feat/email`
 작업 근거: `featemail.md`
 작업 일자: 2026-04-10
-최종 업데이트: 2026-04-10 (이메일 액션 버튼 추가)
+최종 업데이트: 2026-04-10 (Gmail OAuth 제거)
 
 ---
 
@@ -21,6 +21,7 @@
 | 8 | `email_service.py` 환경변수 기반 리팩토링 | `services/email_service.py` | ✅ 완료 |
 | 9 | 이메일 발송 로컬 테스트 스크립트 작성 | `services/test_email.py` | ✅ 완료 |
 | 10 | 이메일 내 승인/수정/거절 버튼 추가 | `services/email_service.py`, `routers/agent.py` | ✅ 완료 |
+| 11 | Gmail OAuth 제거 (개인정보 침해 우려) | `routers/auth.py`, `services/cosmos_db.py` | ✅ 완료 |
 
 ---
 
@@ -292,6 +293,7 @@ python services/test_email.py
 | 🔧 인프라 | email_service.py 환경변수 기반 리팩토링 | ✅ 완료 |
 | 🔧 인프라 | Azure 환경변수 `GMAIL_TOKEN_JSON` 등록 | ✅ 완료 (인프라 작업) |
 | ✨ 개선 | 이메일 내 승인/수정/거절 버튼 (1-click 처리) | ✅ 완료 |
+| 🔒 보안 | Gmail OAuth 제거 — 과도한 권한 수집 방지 | ✅ 완료 |
 
 ## Azure 등록 환경변수 현황
 
@@ -371,6 +373,34 @@ python services/test_email.py
 EMAIL_ACTION_SECRET=랜덤_비밀키_문자열  # 토큰 서명 키 (미등록 시 기본값 사용)
 BACKEND_URL=https://bybaek-b-bzhhgzh8d2gthpb3.koreacentral-01.azurewebsites.net
 ```
+
+#### 완료 시각
+✅ 2026-04-10
+
+---
+
+### 작업 11 — Gmail OAuth 제거 (개인정보 보호)
+
+- **파일:** `routers/auth.py`, `services/cosmos_db.py`
+
+#### 제거 이유
+Gmail OAuth는 사용자 이메일 수집 목적으로 추가했으나, 분석 결과 불필요하고 위험한 기능임이 확인됨.
+
+| 문제 | 내용 |
+|------|------|
+| 과도한 권한 | `gmail.send` 스코프 — 사장님 계정으로 이메일 발송 가능 |
+| 토큰 저장 | `gmail_access_token`, `gmail_refresh_token`을 DB에 저장 → 보안 위험 |
+| 불필요 | 이메일 수신자(owner_email)는 텍스트 입력으로도 충분히 수집 가능 |
+| 발신 구조 | 발신은 우리 앱 Gmail 계정(GMAIL_TOKEN_JSON)이 하므로 사장님 OAuth 불필요 |
+
+#### 제거 내용
+- `GET /api/auth/gmail` 엔드포인트 삭제
+- `GET /api/auth/gmail/callback` 엔드포인트 삭제
+- `save_gmail_token()` 함수 삭제 (`services/cosmos_db.py`)
+- 불필요해진 `HTMLResponse` import 정리
+
+#### 현재 이메일 수집 방식 (유지)
+온보딩 Q12에서 텍스트로 입력 → `owner_email` 필드로 Shop 컨테이너 저장 → 승인 이메일 발송에 사용
 
 #### 완료 시각
 ✅ 2026-04-10
