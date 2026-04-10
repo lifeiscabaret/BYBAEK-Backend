@@ -10,11 +10,13 @@ from services.cosmos_db import get_album_list           # 앨범 목록 조회
 from services.cosmos_db import save_album               # 새 앨범 만들기
 from services.cosmos_db import delete_album_data        # 앨범 삭제
 from services.cosmos_db import delete_photo_data        # 사진 삭제
+from datetime import datetime, timedelta, timezone
+from azure.storage.blob import generate_blob_sas, BlobSasPermissions
 
 
 router = APIRouter()
 
-# --- 요청/응답 모델 ---
+# 요청/응답 모델
 
 class FilterTriggerRequest(BaseModel):
     shop_id: str
@@ -35,7 +37,7 @@ class FilterStatusResponse(BaseModel):
     status: str                     # "done" | "in_progress" | "no_photos"
 
 #엔드포인트
-# --- Pydantic 모델 (새 앨범 만들 때 사용) ---
+#Pydantic 모델 (새 앨범 만들 때 사용)
 class AlbumCreateRequest(BaseModel):
     shop_id: str
     album_id: str
@@ -44,16 +46,35 @@ class AlbumCreateRequest(BaseModel):
     description: str = ""
 
 # 1. 전체 사진 조회 (프론트엔드 Photos 화면용)
+def _to_sas_url(blob_url: str, hours: int = 2) -> str:
+    try:
+        path = blob_url.replace("https://bybaekstorage.blob.core.windows.net/", "")
+        container, blob_name = path.split("/", 1)
+        sas_token = generate_blob_sas(
+            account_name="bybaekstorage",
+            container_name=container,
+            blob_name=blob_name,
+            account_key=os.getenv("AZURE_STORAGE_KEY"),
+            permission=BlobSasPermissions(read=True),
+            expiry=datetime.now(timezone.utc) + timedelta(hours=hours),
+        )
+        return f"{blob_url}?{sas_token}"
+    except Exception:
+        return blob_url
+
 @router.get("/all/{shop_id}")
 async def read_all_photos(shop_id: str):
     all_photos = get_all_photos_by_shop(shop_id)
     photos = [p for p in all_photos if p.get("is_usable") is not False]
+    for p in photos:
+        if p.get("blob_url"):
+            p["blob_url"] = _to_sas_url(p["blob_url"])
     return {"photos": photos}
 
 # 2. 앨범 목록 조회 (프론트엔드 Album 화면용)
 @router.get("/albums/{shop_id}")
 async def read_albums(shop_id: str):
-    albums = get_album_list(shop_id) # 함수 호출
+    albums = get_album_list(shop_id)
     return {"albums": albums}
 
 # 3. 특정 앨범 내 사진 조회
@@ -68,7 +89,7 @@ async def create_album(req: AlbumCreateRequest):
     # photo_ids 리스트를 함수 형식에 맞게 변환 (dict 형태의 list)
     photo_list = [{"photo_id": pid} for pid in req.photo_ids]
     
-    # [수정] album_id가 "new"이거나 없으면 새로 생성
+    # album_id가 "new"이거나 없으면 새로 생성
     actual_album_id = req.album_id
     if not actual_album_id or actual_album_id == "new":
         actual_album_id = str(uuid.uuid4()) # 새 UUID 생성
@@ -104,7 +125,7 @@ async def trigger_photo_filter(
                 shop_id=req.shop_id, status="started", total=0, message="새로운 사진이 없습니다."
             )
 
-        # ✅ 다시 백그라운드 방식으로 복구!
+        # 다시 백그라운드 방식으로 복구
         background_tasks.add_task(
             _run_filter_process,
             shop_id=req.shop_id,
