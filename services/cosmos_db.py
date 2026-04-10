@@ -496,40 +496,6 @@ def get_post_detail_data(post_id: str, shop_id: str) -> dict:
         return None
 
 
-def save_gmail_token(shop_id: str, email: str, access_token: str, refresh_token: str) -> bool:
-    """
-    Gmail OAuth 완료 후 토큰과 이메일을 Shop 컨테이너에 저장합니다.
-
-    Args:
-        shop_id (str): 상점 고유 식별자
-        email (str): Google 계정 이메일 (owner_email로 저장)
-        access_token (str): Gmail access token
-        refresh_token (str): Gmail refresh token (장기 갱신용)
-
-    Returns:
-        bool: 저장 성공 여부
-    """
-    container = get_cosmos_container("Shop")
-    try:
-        try:
-            shop_item = container.read_item(item=shop_id, partition_key=shop_id)
-        except Exception:
-            shop_item = {"id": shop_id, "shop_id": shop_id, "created_at": datetime.utcnow().isoformat()}
-
-        shop_item["owner_email"] = email
-        shop_item["is_gmail_connected"] = True
-        shop_item["gmail_access_token"] = access_token
-        shop_item["gmail_refresh_token"] = refresh_token
-        shop_item["gmail_connected_at"] = datetime.utcnow().isoformat()
-        shop_item["updated_at"] = datetime.utcnow().isoformat()
-
-        container.upsert_item(body=shop_item)
-        logging.info(f"Gmail 토큰 저장 완료 → shop_id={shop_id}, email={email}")
-        return True
-    except Exception as e:
-        logging.error(f"Gmail 토큰 저장 실패 (shop_id: {shop_id}): {str(e)}")
-        return False
-
 
 def save_post_data(shop_id: str, post_data: dict) -> bool:
     """
