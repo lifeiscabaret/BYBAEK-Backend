@@ -237,6 +237,20 @@ def process_message(message_body: dict) -> dict:
 
         except ResourceExistsError:
             logger.info(f"[worker] ⏭️ Blob 이미 존재 (스킵): {name}")
+            # ✅ Blob은 있지만 DB에 없을 수 있으므로 upsert
+            if ext in INSTAGRAM_SUPPORTED:
+                blob_url = (
+                    f"https://bybaekstorage.blob.core.windows.net"
+                    f"/{container_name}/{quote(isolated_path)}"
+                )
+                save_photo(shop_id, {
+                    "photo_id": photo_id,
+                    "blob_url": blob_url,
+                    "name": name,
+                    "last_modified": photo.get("last_modified", ""),
+                    "is_usable": None,
+                    "filter_status": "pending",
+                })
             skipped += 1
 
         except Exception as e:
