@@ -66,7 +66,7 @@ def _to_sas_url(blob_url: str, hours: int = 2) -> str:
 async def read_all_photos(shop_id: str):
     all_photos = get_all_photos_by_shop(shop_id)
     # ✅ is_usable=False(탈락)만 제외, None(대기)과 True(통과)는 표시
-    photos = [p for p in all_photos if p.get("is_usable") is not False]
+    photos = [p for p in all_photos if p.get("is_usable") is True]
     for p in photos:
         if p.get("blob_url"):
             p["blob_url"] = _to_sas_url(p["blob_url"])
@@ -76,12 +76,20 @@ async def read_all_photos(shop_id: str):
 @router.get("/albums/{shop_id}")
 async def read_albums(shop_id: str):
     albums = get_album_list(shop_id)
+    # ✅ 추가
+    for a in albums:
+        if a.get("thumbnail_url"):
+            a["thumbnail_url"] = _to_sas_url(a["thumbnail_url"])
     return {"albums": albums}
 
 # 3. 특정 앨범 내 사진 조회
 @router.get("/albums/{shop_id}/{album_id}")
 async def read_album_photos(shop_id: str, album_id: str):
-    photos = get_photos_by_album(shop_id, album_id) # 함수 호출
+    photos = get_photos_by_album(shop_id, album_id)
+    # ✅ 추가
+    for p in photos:
+        if p.get("blob_url"):
+            p["blob_url"] = _to_sas_url(p["blob_url"])
     return {"album_id": album_id, "photos": photos}
 
 # 4. 새 앨범 생성 (사진들을 묶어서 앨범으로 저장)
