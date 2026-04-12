@@ -203,7 +203,10 @@ async def _run_filter_process(shop_id: str, photo_list: list):
         print("DEBUG: 2. 에이전트 임포트 성공")
 
         prepared_list = [
-            {"image_id": p.get("id") or p.get("photo_id"), "blob_url": p.get("blob_url")}
+            {
+                "image_id": p.get("id") or p.get("photo_id"),
+                "blob_url": _to_sas_url(p.get("blob_url"))  # ← SAS 변환 추가
+            }
             for p in photo_list if p.get("blob_url")
         ]
         print(f"DEBUG: 3. 사진 준비 완료 ({len(prepared_list)}장)")
