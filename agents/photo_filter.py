@@ -60,6 +60,10 @@ async def run_photo_filter(
     stage1_pass_list = [r for r in stage1_results if r["stage1_pass"]]
     print(f"[photo_filter] 1차 완료 -> PASS {len(stage1_pass_list)} / FAIL {len(stage1_results) - len(stage1_pass_list)}")
 
+    stage1_fail_list = [r for r in stage1_results if not r["stage1_pass"]]
+    for photo in stage1_fail_list:
+        await _save_fail_result(shop_id, photo, photo.get("stage1_reason", "stage1_fail"))
+
     if not stage1_pass_list:
         return {"total": len(photo_list), "stage1_passed": 0, "stage2_passed": 0, "results": []}
 
@@ -448,7 +452,7 @@ async def _save_pass_result(shop_id: str, photo: dict, result: dict):
         doc = {
             "id":             photo["image_id"],
             "shop_id":        shop_id,
-            "blob_url":       photo["blob_url"],
+            "blob_url": photo["blob_url"].split("?")[0],  #동일하게
             "stage1_pass":    True,
             "stage2_pass":    True,
             "stage2_tags":    result.get("stage2_tags", []),
@@ -470,14 +474,14 @@ async def _save_fail_result(shop_id: str, photo: dict, reason: str = "stage2_fai
     try:
         now_kst = datetime.now(KST).isoformat()
         doc = {
-            "id":             photo["image_id"],
-            "shop_id":        shop_id,
-            "blob_url":       photo["blob_url"],
-            "stage1_pass":    True,
-            "stage2_pass":    False,
-            "is_usable":      False,
-            "analyzed_at":    now_kst,
-            "fail_reason":    reason
+            "id":          photo["image_id"],
+            "shop_id":     shop_id,
+            "blob_url":    photo["blob_url"].split("?")[0],
+            "stage1_pass": False if "stage1" in reason else True,  # ← 수정
+            "stage2_pass": False,
+            "is_usable":   False,
+            "analyzed_at": now_kst,
+            "fail_reason": reason
         }
         save_photo_meta(shop_id, doc)
     except Exception as e:
