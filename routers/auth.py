@@ -100,8 +100,9 @@ async def get_my_info(request: Request):
     existing_user = get_auth(ms_user_id)
 
     auth_data = {
-        "name":          ms_user_name,
-        "last_login_at": current_time,
+         "name":          ms_user_name,
+         "last_login_at": current_time,
+         "is_ms_connected": True,   # ← 이것만 추가
     }
 
     # ── refresh_token 저장 (추가된 부분) ──
