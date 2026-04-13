@@ -74,7 +74,8 @@ async def run_photo_filter(
         "total":         len(photo_list),
         "stage1_passed": len(stage1_pass_list),
         "stage2_passed": stage2_result["passed"],
-        "results":       [r for r in stage2_result["results"] if r.get("stage2_pass")]
+        "results":       [r for r in stage2_result["results"] if r.get("stage2_pass")],
+        "failed":        [r for r in stage2_result["results"] if not r.get("stage2_pass")]  # ← 추가
     }
 
 
