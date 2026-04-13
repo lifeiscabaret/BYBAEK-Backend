@@ -305,13 +305,7 @@ async def _evaluate_photo(
         return _make_fail_result(image_id, str(e))
 
 def _generate_sas_url(blob_url: str, hours: int = 1) -> str:
-    """
-    blob_url → 임시 SAS URL 변환.
-    Blob 공개 접근 비활성화 후 GPT Vision에서 이미지 접근 시 사용.
- 
-    입력: https://bybaekstorage.blob.core.windows.net/photos/{shop_id}/{hash}.jpg
-    출력: 동일 URL + ?sv=...&sig=... (1시간 유효)
-    """
+    blob_url = blob_url.split("?")[0] # 기존 SAS 제거
     path = blob_url.replace("https://bybaekstorage.blob.core.windows.net/", "")
     parts = path.split("/", 1)
     container = parts[0]
