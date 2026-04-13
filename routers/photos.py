@@ -235,3 +235,31 @@ async def delete_photo(shop_id: str, photo_id: str):
     if not success:
         raise HTTPException(status_code=500, detail="사진 삭제 중 오류가 발생했습니다.")
     return {"status": "success", "message": "사진이 삭제되었습니다."}
+
+@router.post("/filter/test/{shop_id}")
+async def test_filter_sync(shop_id: str):
+    """임시 진단용 - 동기 실행으로 에러 확인"""
+    try:
+        print(f"[TEST] 1. 진입")
+        from agents.photo_filter import run_photo_filter
+        print(f"[TEST] 2. import 성공")
+        
+        all_photos = get_all_photos_by_shop(shop_id)
+        photo_list = [p for p in all_photos if p.get("stage1_pass") is None][:3]  # 3장만
+        print(f"[TEST] 3. 사진 {len(photo_list)}장 준비")
+        
+        prepared = [
+            {"image_id": p.get("id"), "blob_url": _to_sas_url(p.get("blob_url"))}
+            for p in photo_list if p.get("blob_url")
+        ]
+        print(f"[TEST] 4. SAS 변환 완료")
+        
+        result = await run_photo_filter(shop_id=shop_id, photo_list=prepared)
+        print(f"[TEST] 5. 완료: {result}")
+        return {"status": "ok", "result": result}
+        
+    except Exception as e:
+        import traceback
+        tb = traceback.format_exc()
+        print(f"[TEST] ERROR: {tb}")
+        return {"status": "error", "error": str(e), "traceback": tb}
