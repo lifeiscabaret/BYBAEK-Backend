@@ -158,7 +158,7 @@ def save_photo(shop_id: str, photo_data: dict) -> bool:
         "onedrive_url": photo_data.get('onedrive_url', ''),
         "original_name": photo_data['name'],
         "used_yn": False,
-        "is_usable": photo_data.get('is_usable', False),
+        "is_usable": photo_data.get('is_usable', None),
         "filter_status": photo_data.get('filter_status', 'pending'),  # 추가
         "created_at": photo_data['last_modified']
     }
@@ -209,7 +209,7 @@ def get_onboarding(shop_id: str) -> dict:
 
 def get_all_photos_by_shop(shop_id: str) -> list:
     container = get_cosmos_container("Photo")
-    query = "SELECT * FROM c WHERE c.shop_id = @shop_id AND (c.is_usable = true OR NOT IS_DEFINED(c.is_usable) OR IS_NULL(c.is_usable))"
+    query = "SELECT * FROM c WHERE c.shop_id = @shop_id"
     parameters = [{"name": "@shop_id", "value": shop_id}]
 
     try:
@@ -714,8 +714,11 @@ def save_photo_meta(shop_id: str, doc: dict) -> bool:
         existing_item.update({
             "fade_cut_score": doc.get("fade_cut_score", 0),
             "detected_angle": doc.get("detected_angle", "unknown"),
-            "style_tags": doc.get("style_tags", []),
+            "style_tags": doc.get("stage2_tags", doc.get("style_tags", [])),
             "is_usable": doc.get("is_usable", False),
+            "stage1_pass": doc.get("stage1_pass", False),
+            "stage2_pass": doc.get("stage2_pass"),   # ← 추가
+            "fail_reason": doc.get("fail_reason"),   # ← 추가
             "updated_at": datetime.utcnow().isoformat()
         })
         container.upsert_item(body=existing_item)
