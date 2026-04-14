@@ -577,7 +577,8 @@ async def _auto_upload_instagram(shop_id, post_id, post_draft, selected_photos):
         hashtags   = post_draft.get("hashtags", [])
         cta        = post_draft.get("cta", "")
         full_caption = (caption + "\n\n" + " ".join(hashtags) + "\n" + cta).strip()
-        image_urls = [p["blob_url"] for p in selected_photos if p.get("blob_url")]
+        from services.blob_storage import generate_sas_url
+        image_urls = [generate_sas_url(p["blob_url"]) for p in selected_photos if p.get("blob_url")]
         if not image_urls: return False
         from routers.instagram import publish_photos
         media_id = publish_photos(insta_user_id, insta_access_token, image_urls, full_caption)
