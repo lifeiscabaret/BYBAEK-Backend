@@ -5,6 +5,7 @@ import requests
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, HttpUrl
 from utils.logging import logger
+from services.blob_storage import generate_sas_url
 
 router = APIRouter()
 
@@ -219,10 +220,12 @@ def publish_photos(
 
 @router.post("/upload", response_model=InstagramPhotoPublishResponse, status_code=status.HTTP_201_CREATED)
 async def upload(req: InstagramPhotoPublishRequest):
+    sas_urls = [generate_sas_url(str(url)) for url in req.image_urls]
+    
     media_id = publish_photos(
         ig_user_id=req.user_id,
         access_token=req.access_token,
-        image_urls=req.image_urls,
+        image_urls=sas_urls,
         caption=req.caption,
     )
     
