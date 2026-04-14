@@ -9,6 +9,7 @@ from apscheduler.triggers.cron import CronTrigger
 from routers import auth, onboarding, agent, schedule, instagram, photos, onedrive, custom_chat
 from workers.photo_queue_worker import start_worker
 
+
 load_dotenv()
 
 KST = timezone(timedelta(hours=9))
@@ -16,29 +17,34 @@ scheduler = AsyncIOScheduler(timezone="Asia/Seoul")
 
 
 async def _check_and_run_schedules():
-    """
-    매 정각마다 실행 → DB에서 지금 올릴 샵 찾아서 파이프라인 실행
-    insta_upload_time이 현재 시각(HH:00)과 일치하는 샵만 실행
-    """
     from services.cosmos_db import get_all_shops
-    from agents.orchestrator import run_pipeline
+    from orchestrator_v2 import run_pipeline
 
     now = datetime.now(KST)
-    current_time = now.strftime("%H:00")
-    print(f"[scheduler] 스케줄 체크 → {current_time} (KST)")
+    current_hour = now.strftime("%H:00")
+    print(f"[scheduler] 스케줄 체크 → {current_hour} (KST)")
 
     try:
-        shops = get_all_shops()
+        shops = get_all_shops()  # ← 추가
     except Exception as e:
         print(f"[scheduler] 샵 목록 조회 실패: {e}")
         return
 
     for shop in shops:
         upload_time = shop.get("insta_upload_time", "")
-        if upload_time != current_time:
+        if not upload_time:
             continue
 
-        # 자동 업로드 OFF인 샵은 스킵
+        try:
+            from datetime import datetime as dt
+            parsed = dt.strptime(upload_time.strip(), "%I:%M %p")
+            upload_time_24h = parsed.strftime("%H:00")
+        except:
+            upload_time_24h = upload_time
+
+        if upload_time_24h != current_hour:
+            continue
+
         if shop.get("insta_auto_upload_yn", "N") != "Y":
             continue
 
@@ -46,7 +52,7 @@ async def _check_and_run_schedules():
         if not shop_id:
             continue
 
-        print(f"[scheduler] 파이프라인 실행 → shop_id={shop_id}, time={current_time}")
+        print(f"[scheduler] 파이프라인 실행 → shop_id={shop_id}, time={current_hour}")  # ← current_time → current_hour
         try:
             await run_pipeline(shop_id=shop_id, trigger="auto")
         except Exception as e:
