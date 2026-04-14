@@ -18,13 +18,12 @@ async def ms_callback():
     frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
     return RedirectResponse(url=f"{frontend_url}/auth/callback")
 
-@router.post("/instagram", status_code=status.HTTP_201_CREATED)
-async def instagram_business_login(req: InstagramLoginRequest, res: Response, fast_req: Request) -> Response:
+@router.get("/instagram")
+async def instagram_business_login(code: str, res: Response, fast_req: Request):
 
     access_token = fast_req.headers.get("x-ms-token-aad-access-token")
     logger.info(f"access token = {access_token}")
 
-    code = req.code
     if not code:
         raise HTTPException(status_code=401, detail="authorize code doesnt exist")
 
@@ -83,7 +82,8 @@ async def instagram_business_login(req: InstagramLoginRequest, res: Response, fa
     }
     save_auth(ms_id, insta_data)
 
-    return {'access_token': access_token, "user_id": user_id}
+    frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
+    return RedirectResponse(url=f"{frontend_url}/auth/callback?type=instagram")
 
 
 @router.get("/me")
