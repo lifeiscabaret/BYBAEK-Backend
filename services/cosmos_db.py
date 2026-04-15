@@ -140,26 +140,21 @@ def update_shop_onedrive_info(shop_id: str, token_info: dict) -> bool:
         return False
 
 def save_photo(shop_id: str, photo_data: dict) -> bool:
-    """
-    동기화된 사진의 기본 메타데이터를 Photo 컨테이너에 저장합니다.
-
-    Args:
-        shop_id (str): 상점 고유 식별자 (Partition Key)
-        photo_data (dict): photo_id, blob_url, 파일명 등을 포함한 사진 데이터
-
-    Returns:
-        bool: 저장 성공 여부
-    """
     container = get_cosmos_container("Photo")
+    
+    # SAS 토큰 제거 (? 이후 모두 제거)
+    raw_url = photo_data['blob_url']
+    clean_url = raw_url.split("?")[0]
+    
     item = {
         "id": photo_data['photo_id'],
         "shop_id": shop_id,
-        "blob_url": photo_data['blob_url'],
+        "blob_url": clean_url,  # ← SAS 없는 순수 URL
         "onedrive_url": photo_data.get('onedrive_url', ''),
         "original_name": photo_data['name'],
         "used_yn": False,
         "is_usable": photo_data.get('is_usable', None),
-        "filter_status": photo_data.get('filter_status', 'pending'),  # 추가
+        "filter_status": photo_data.get('filter_status', 'pending'),
         "created_at": photo_data['last_modified']
     }
     
@@ -757,7 +752,13 @@ def delete_photo_data(shop_id: str, photo_id: str) -> bool:
         # 2. Azure Blob Storage에서 실제 파일 삭제 (기존에 만든 서비스 함수 활용)
         if blob_url:
             # URL에서 파일명만 추출하여 삭제 로직 수행
-            file_name = blob_url.split("/")[-1]
+            from services.blob_storage import CONTAINER_NAME
+            prefix = f"https://bybaekstorage.blob.core.windows.net/{CONTAINER_NAME}/"
+            clean_url = blob_url.split("?")[0]
+            if clean_url.startswith(prefix):
+                file_name = clean_url[len(prefix):]  # 00000000-.../파일명.jpg
+            else:
+                file_name = clean_url.split("/")[-1]
             delete_blob(file_name) 
 
         # 3. Cosmos DB에서 사진 데이터 삭제
