@@ -140,6 +140,7 @@ class OnboardingRequest(BaseModel):
     
     # === APP (앱 설정) ===
     # Q11: 자동 업로드 활성화 여부 ("예 (추천)" → "Y", "아니오" → "N")
+    insta_review_bfr_upload_yn: Optional[str] = None  # "Y" | "N"
     insta_auto_upload_yn: Optional[str] = None
     
     # Q12: 알람 받을 이메일 주소
