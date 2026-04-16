@@ -1,3 +1,20 @@
+"""
+기능   : 바버샵 홍보 사진 1차(룰 기반) + 2차(GPT Vision) 필터링
+입력   : shop_id, photo_list ([{"image_id": str, "blob_url": str}, ...])
+출력   : {"total", "stage1_passed", "stage2_passed", "results", "failed"}
+주요 흐름:
+    1. run_photo_filter → run_stage1_filter → run_stage2_filter
+    2. 1차: 해상도/밝기/흔들림/바버샵 관련성 (룰 기반)
+    3. 2차: GPT-4.1 Vision + Few-shot 평가 (25점 만점)
+    4. 결과 CosmosDB 저장 (filter_status: passed/failed)
+
+[수정 이력]
+- _analyze_stage1: SAS URL 발급 후 다운로드 (403 방지)
+- _save_pass_result: filter_status="passed" 추가
+- _save_fail_result: filter_status="failed" 추가
+- _generate_sas_url: AZURE_STORAGE_KEY → connection string에서 key 추출
+"""
+
 import os
 import json
 import asyncio
@@ -8,47 +25,38 @@ from datetime import datetime, timezone, timedelta
 import cv2
 import numpy as np
 from openai import AsyncAzureOpenAI
-from datetime import datetime, timedelta, timezone
-from azure.storage.blob import BlobSasPermissions, generate_blob_sas
+from azure.storage.blob import BlobSasPermissions, generate_blob_sas, BlobServiceClient
 
-# [설정값]
+#  설정값 
 
 # 1차 기준
-STAGE1_LAPLACIAN_MIN  = 40    # 흔들림 기준 완화 (스마트폰 사진 통과)
-STAGE1_BRIGHTNESS_MIN = 30    # 최소 밝기 완화
-STAGE1_BRIGHTNESS_MAX = 240   # 최대 밝기 완화
-STAGE1_SKIN_RATIO_MIN = 2.0   # 뒷머리/측면 사진 통과
-
-
+STAGE1_LAPLACIAN_MIN  = 40     # 흔들림 기준 완화 (스마트폰 사진 통과)
+STAGE1_BRIGHTNESS_MIN = 30     # 최소 밝기 완화
+STAGE1_BRIGHTNESS_MAX = 240    # 최대 밝기 완화
+STAGE1_SKIN_RATIO_MIN = 2.0    # 뒷머리/측면 사진 통과
 
 # 2차 기준
-STAGE2_PASS_THRESHOLD = 15      # 25점 중 15점 이상 PASS
-STAGE2_INSTANT_FAIL   = 1       # 한 항목이라도 1점 이하면 즉시 FAIL
+STAGE2_PASS_THRESHOLD = 15     # 25점 중 15점 이상 PASS
+STAGE2_INSTANT_FAIL   = 1      # 한 항목이라도 1점 이하면 즉시 FAIL
 MAX_CONCURRENT        = 5
 MAX_GOOD_EXAMPLES     = 5
 MAX_BAD_EXAMPLES      = 3
 
 KST = timezone(timedelta(hours=9))
 
-# [메인] 1차 + 2차 통합 진입점
-async def run_photo_filter(
-    shop_id: str,
-    photo_list: list
-) -> dict:
+
+# ── 메인 진입점 ───────────────────────────────────────────────────────────────
+
+async def run_photo_filter(shop_id: str, photo_list: list) -> dict:
     """
-    1차 -> 2차 통합 필터링 메인 함수.
+    1차 → 2차 통합 필터링 메인 함수.
 
     Args:
         shop_id:    샵 ID
         photo_list: [{"image_id": str, "blob_url": str, ...}, ...]
 
     Returns:
-        {
-          "total": int,
-          "stage1_passed": int,
-          "stage2_passed": int,
-          "results": [...]   # 2차 PASS 결과만
-        }
+        {"total", "stage1_passed", "stage2_passed", "results", "failed"}
     """
     print(f"[photo_filter] 필터링 시작 -> shop_id={shop_id}, 대상={len(photo_list)}장")
 
@@ -58,9 +66,9 @@ async def run_photo_filter(
     # STEP 1: 1차 필터링
     stage1_results   = await run_stage1_filter(photo_list)
     stage1_pass_list = [r for r in stage1_results if r["stage1_pass"]]
-    print(f"[photo_filter] 1차 완료 -> PASS {len(stage1_pass_list)} / FAIL {len(stage1_results) - len(stage1_pass_list)}")
-
     stage1_fail_list = [r for r in stage1_results if not r["stage1_pass"]]
+    print(f"[photo_filter] 1차 완료 -> PASS {len(stage1_pass_list)} / FAIL {len(stage1_fail_list)}")
+
     for photo in stage1_fail_list:
         await _save_fail_result(shop_id, photo, photo.get("stage1_reason", "stage1_fail"))
 
@@ -75,19 +83,14 @@ async def run_photo_filter(
         "stage1_passed": len(stage1_pass_list),
         "stage2_passed": stage2_result["passed"],
         "results":       [r for r in stage2_result["results"] if r.get("stage2_pass")],
-        "failed":        [r for r in stage2_result["results"] if not r.get("stage2_pass")]  # ← 추가
+        "failed":        [r for r in stage2_result["results"] if not r.get("stage2_pass")]
     }
 
 
-# [1차 필터링] 룰 기반 
-async def run_stage1_filter(photo_list: list) -> list:
-    """
-    1차 필터링: 해상도/밝기/흔들림/바버샵 관련성 체크.
-    DB쪽 코드 기반, blob URL 지원으로 확장.
+# ── 1차 필터링 (룰 기반) ──────────────────────────────────────────────────────
 
-    Returns:
-        [{"image_id": str, "blob_url": str, "stage1_pass": bool, "stage1_reason": str}, ...]
-    """
+async def run_stage1_filter(photo_list: list) -> list:
+    """1차 필터링: 해상도/밝기/흔들림/바버샵 관련성 체크."""
     results = []
     for photo in photo_list:
         image_id = photo.get("image_id", "")
@@ -105,19 +108,21 @@ async def run_stage1_filter(photo_list: list) -> list:
 
     return results
 
-# 실데이터로 연동해야함!!!!!!!!
+
 async def _analyze_stage1(blob_url: str) -> tuple:
     """
-    blob URL -> 임시 파일 다운로드 -> 룰 기반 분석.
-    지연님의 analyze_image_v2 로직 기반.
+    blob URL → SAS 발급 → 임시 파일 다운로드 → 룰 기반 분석.
 
+    [FIX] SAS 없이 다운로드 시 403 에러 → _generate_sas_url 적용
     Returns: ("Pass"|"Fail", reason_str)
     """
     tmp_path = None
     try:
+        # [FIX] SAS URL 발급 후 다운로드
+        sas_url = _generate_sas_url(blob_url)
         with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
             tmp_path = tmp.name
-        urllib.request.urlretrieve(blob_url, tmp_path)
+        urllib.request.urlretrieve(sas_url, tmp_path)
     except Exception as e:
         return "Fail", f"다운로드 실패: {e}"
 
@@ -164,12 +169,10 @@ async def _analyze_stage1(blob_url: str) -> tuple:
                 pass
 
 
-# [2차 필터링] GPT-4.1 Vision + Few-shot
-async def run_stage2_filter(
-    shop_id: str,
-    stage1_pass_list: list
-) -> dict:
-    """2차 필터링 메인 함수 (1차 PASS 사진만 받음)"""
+# ── 2차 필터링 (GPT Vision) ───────────────────────────────────────────────────
+
+async def run_stage2_filter(shop_id: str, stage1_pass_list: list) -> dict:
+    """2차 필터링 메인 함수 (1차 PASS 사진만 받음)."""
     print(f"[photo_filter] 2차 필터링 시작 -> {len(stage1_pass_list)}장")
 
     reference_photos = await _load_reference_photos(shop_id)
@@ -229,20 +232,12 @@ async def _evaluate_photo(
     bad_refs: list
 ) -> dict:
     """
-    GPT-4.1 Vision + Few-shot 평가.
-
-    평가 항목 (각 5점, 총 25점):
-      gradient   : 페이드 그라데이션 자연스러움
-      lighting   : 조명 적절성
-      background : 배경 깔끔함
-      model_vibe : 모델 분위기/표정
-      sharpness  : 핀트 + 구도
-
+    GPT-4.1 Vision + Few-shot 평가 (25점 만점).
     통과: 15점 이상 AND 모든 항목 2점 이상
     """
     print(f"[photo_filter] 2차 평가 중 -> {image_id}")
 
-    sas_url = _generate_sas_url(blob_url)
+    sas_url  = _generate_sas_url(blob_url)
     messages = _build_vision_prompt(sas_url, good_refs, bad_refs)
 
     api_key     = os.getenv("AZURE_OPENAI_API_KEY") or os.getenv("AZURE_OPENAI_KEY")
@@ -274,7 +269,6 @@ async def _evaluate_photo(
         scores      = gpt_result.get("scores", {})
         total_score = gpt_result.get("total", sum(scores.values()))
 
-        # 즉시 FAIL: 한 항목이라도 1점 이하
         instant_fail = any(v <= STAGE2_INSTANT_FAIL for v in scores.values())
         stage2_pass  = (total_score >= STAGE2_PASS_THRESHOLD) and not instant_fail
 
@@ -304,35 +298,43 @@ async def _evaluate_photo(
         print(f"[photo_filter] GPT 평가 실패 ({image_id}): {e}")
         return _make_fail_result(image_id, str(e))
 
+
+# ── SAS URL 생성 ──────────────────────────────────────────────────────────────
+
 def _generate_sas_url(blob_url: str, hours: int = 1) -> str:
-    blob_url = blob_url.split("?")[0] # 기존 SAS 제거
-    path = blob_url.replace("https://bybaekstorage.blob.core.windows.net/", "")
-    parts = path.split("/", 1)
-    container = parts[0]
-    blob_name = parts[1]
- 
+    """
+    순수 blob URL → SAS URL 발급.
+
+    [FIX] AZURE_STORAGE_KEY 대신 AZURE_STORAGE_CONNECTION_STRING에서
+          account_key 추출 (blob_storage.py 방식과 통일)
+    """
+    blob_url = blob_url.split("?")[0]  # 기존 SAS 제거
+    path     = blob_url.replace("https://bybaekstorage.blob.core.windows.net/", "")
+    parts    = path.split("/", 1)
+    container_name = parts[0]
+    blob_name      = parts[1]
+
+    # [FIX] connection string에서 key 추출
+    connection_string = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
+    blob_service_client = BlobServiceClient.from_connection_string(connection_string)
+    account_name = blob_service_client.account_name
+    account_key  = blob_service_client.credential.account_key
+
     sas_token = generate_blob_sas(
-        account_name="bybaekstorage",
-        container_name=container,
+        account_name=account_name,
+        container_name=container_name,
         blob_name=blob_name,
-        account_key=os.getenv("AZURE_STORAGE_KEY"),
+        account_key=account_key,
         permission=BlobSasPermissions(read=True),
         expiry=datetime.now(timezone.utc) + timedelta(hours=hours),
     )
     return f"{blob_url}?{sas_token}"
 
 
-def _build_vision_prompt(blob_url: str, good_refs: list, bad_refs: list) -> list:
-    """
-    Few-shot 프롬프트 구성.
+# ── 프롬프트 빌더 ─────────────────────────────────────────────────────────────
 
-    구조:
-      system    : 전문가 역할 + 5항목 평가 기준
-      user      : 좋은 예시 사진들 (good_refs, detail: low)
-      user      : 나쁜 예시 사진들 (bad_refs, detail: low)
-      assistant : "기준 이해, 평가 준비됨"
-      user      : 평가 대상 사진 (detail: high)
-    """
+def _build_vision_prompt(blob_url: str, good_refs: list, bad_refs: list) -> list:
+    """Few-shot 프롬프트 구성."""
     system_content = """너는 경력 20년의 바버샵 전문가이자 인스타그램 마케터야.
 바버샵 홍보용 사진의 퀄리티를 전문가 기준으로 평가해줘.
 
@@ -369,7 +371,6 @@ def _build_vision_prompt(blob_url: str, good_refs: list, bad_refs: list) -> list
 
     messages = [{"role": "system", "content": system_content}]
 
-    # Few-shot: 좋은 예시
     if good_refs:
         good_content = []
         for i, ref in enumerate(good_refs[:MAX_GOOD_EXAMPLES], 1):
@@ -377,11 +378,10 @@ def _build_vision_prompt(blob_url: str, good_refs: list, bad_refs: list) -> list
             ref_reason = ref.get("reason", "원장님이 선택한 좋은 예시")
             if ref_url:
                 good_content.append({"type": "text", "text": f"[좋은 예시 {i}] {ref_reason}"})
-                good_content.append({"type": "image_url", "image_url": {"url": ref_url, "detail": "low"}})
+                good_content.append({"type": "image_url", "image_url": {"url": _generate_sas_url(ref_url), "detail": "low"}})
         if good_content:
             messages.append({"role": "user", "content": good_content})
 
-    # Few-shot: 나쁜 예시
     if bad_refs:
         bad_content = []
         for i, ref in enumerate(bad_refs[:MAX_BAD_EXAMPLES], 1):
@@ -389,18 +389,16 @@ def _build_vision_prompt(blob_url: str, good_refs: list, bad_refs: list) -> list
             ref_reason = ref.get("reason", "원장님이 탈락시킨 나쁜 예시")
             if ref_url:
                 bad_content.append({"type": "text", "text": f"[나쁜 예시 {i}] {ref_reason}"})
-                bad_content.append({"type": "image_url", "image_url": {"url": ref_url, "detail": "low"}})
+                bad_content.append({"type": "image_url", "image_url": {"url": _generate_sas_url(ref_url), "detail": "low"}})
         if bad_content:
             messages.append({"role": "user", "content": bad_content})
 
-    # 예시가 있으면 어시스턴트 확인 응답 삽입
     if good_refs or bad_refs:
         messages.append({
             "role": "assistant",
             "content": "네, 원장님 기준을 이해했습니다. 평가할 사진을 보여주세요."
         })
 
-    # 평가 대상 사진
     messages.append({
         "role": "user",
         "content": [
@@ -411,7 +409,57 @@ def _build_vision_prompt(blob_url: str, good_refs: list, bad_refs: list) -> list
 
     return messages
 
-# [헬퍼]
+
+# ── DB 저장 ───────────────────────────────────────────────────────────────────
+
+async def _save_pass_result(shop_id: str, photo: dict, result: dict):
+    """2차 PASS 결과 CosmosDB 저장."""
+    from services.cosmos_db import save_photo_meta
+    try:
+        now_kst = datetime.now(KST).isoformat()
+        doc = {
+            "id":             photo["image_id"],
+            "shop_id":        shop_id,
+            "blob_url":       photo["blob_url"].split("?")[0],
+            "stage1_pass":    True,
+            "stage2_pass":    True,
+            "stage2_tags":    result.get("stage2_tags", []),
+            "total_score":    result["total_score"],
+            "fade_cut_score": result["fade_cut_score"],
+            "detected_angle": result["detected_angle"],
+            "is_usable":      True,
+            "filter_status":  "passed",   # [FIX] 추가
+            "analyzed_at":    now_kst
+        }
+        save_photo_meta(shop_id, doc)
+        print(f"[photo_filter] DB 저장 완료 -> {photo['image_id']}")
+    except Exception as e:
+        print(f"[photo_filter] DB 저장 오류: {e}")
+
+
+async def _save_fail_result(shop_id: str, photo: dict, reason: str = "stage2_fail"):
+    """2차 FAIL 결과 CosmosDB 저장 (is_usable=False)."""
+    from services.cosmos_db import save_photo_meta
+    try:
+        now_kst = datetime.now(KST).isoformat()
+        doc = {
+            "id":            photo["image_id"],
+            "shop_id":       shop_id,
+            "blob_url":      photo["blob_url"].split("?")[0],
+            "stage1_pass":   False if "stage1" in reason else True,
+            "stage2_pass":   False,
+            "is_usable":     False,
+            "filter_status": "failed",    # [FIX] 추가
+            "analyzed_at":   now_kst,
+            "fail_reason":   reason
+        }
+        save_photo_meta(shop_id, doc)
+    except Exception as e:
+        print(f"[photo_filter] FAIL 저장 오류 (건너뜀): {e}")
+
+
+# ── 헬퍼 ──────────────────────────────────────────────────────────────────────
+
 def _classify_angle(detected: str) -> str:
     angle_map = {
         "back_side": "back_side",
@@ -439,61 +487,15 @@ def _make_fail_result(image_id: str, reason: str) -> dict:
     }
 
 
-async def _save_pass_result(shop_id: str, photo: dict, result: dict):
-    """AG-010: 2차 PASS 결과 CosmosDB 저장 (실제 연결)"""
-    from services.cosmos_db import save_photo_meta
-    try:
-        now_kst = datetime.now(KST).isoformat()
-        doc = {
-            "id":             photo["image_id"],
-            "shop_id":        shop_id,
-            "blob_url": photo["blob_url"].split("?")[0],  #동일하게
-            "stage1_pass":    True,
-            "stage2_pass":    True,
-            "stage2_tags":    result.get("stage2_tags", []),
-            "total_score":    result["total_score"],
-            "fade_cut_score": result["fade_cut_score"],
-            "detected_angle": result["detected_angle"],
-            "is_usable":      True,
-            "analyzed_at":    now_kst
-        }
-        save_photo_meta(shop_id, doc)
-        print(f"[photo_filter] DB 저장 완료 -> {photo['image_id']}")
-    except Exception as e:
-        print(f"[photo_filter] DB 저장 오류: {e}")
-
-
-async def _save_fail_result(shop_id: str, photo: dict, reason: str = "stage2_fail"):
-    """AG-010: 2차 FAIL 결과 CosmosDB 저장 (is_usable=False)"""
-    from services.cosmos_db import save_photo_meta
-    try:
-        now_kst = datetime.now(KST).isoformat()
-        doc = {
-            "id":          photo["image_id"],
-            "shop_id":     shop_id,
-            "blob_url":    photo["blob_url"].split("?")[0],
-            "stage1_pass": False if "stage1" in reason else True,  # ← 수정
-            "stage2_pass": False,
-            "is_usable":   False,
-            "analyzed_at": now_kst,
-            "fail_reason": reason
-        }
-        save_photo_meta(shop_id, doc)
-    except Exception as e:
-        print(f"[photo_filter] FAIL 저장 오류 (건너뜀): {e}")
-
-
 async def _load_reference_photos(shop_id: str) -> list:
     """
     Few-shot 레퍼런스 사진 로드.
-
-    라벨링 세션 완료 후 CosmosDB reference 앨범에서 가져옴.
-    라벨링 전: 빈 리스트 반환 -> 기준만으로 동작.
+    레퍼런스 앨범 없으면 빈 리스트 반환 → 기준만으로 동작.
     """
     try:
         from services.cosmos_db import get_album, get_photo_by_id
         album_id = f"reference_{shop_id}"
-        album = get_album(shop_id, album_id)
+        album    = get_album(shop_id, album_id)
 
         if not album:
             print(f"[photo_filter] 레퍼런스 앨범 없음 ({album_id}) -> Few-shot 없이 진행")
