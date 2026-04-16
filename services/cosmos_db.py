@@ -712,8 +712,9 @@ def save_photo_meta(shop_id: str, doc: dict) -> bool:
             "style_tags": doc.get("stage2_tags", doc.get("style_tags", [])),
             "is_usable": doc.get("is_usable", False),
             "stage1_pass": doc.get("stage1_pass", False),
-            "stage2_pass": doc.get("stage2_pass"),   # ← 추가
-            "fail_reason": doc.get("fail_reason"),   # ← 추가
+            "stage2_pass": doc.get("stage2_pass"),
+            "fail_reason": doc.get("fail_reason"),
+            "filter_status": doc.get("filter_status", "failed"),  # ← 추가
             "updated_at": datetime.utcnow().isoformat()
         })
         container.upsert_item(body=existing_item)
