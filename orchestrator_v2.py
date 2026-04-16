@@ -8,12 +8,14 @@ orchestrator.py의 순차 파이프라인을 LangGraph Agent로 리팩토링
 - 모델 승격(mini→full)을 upgrade_model 노드로 분리
 - 전체 상태를 PostState TypedDict로 명시적 관리
 """
-
+import requests
+from io import BytesIO
 import os
 import json
 import asyncio
 import uuid
 from typing import TypedDict, Literal, Optional
+from PIL import Image
 
 from langgraph.graph import StateGraph, END
 from semantic_kernel import Kernel
@@ -565,29 +567,75 @@ async def _save_draft(shop_id, post_id, post_draft, selected_photos,
     )
 
 
+def _get_aspect_ratio(sas_url: str) -> float | None:
+    """SAS URL에서 이미지 비율(가로/세로) 계산"""
+    try:
+        response = requests.get(sas_url, timeout=5)
+        img = Image.open(BytesIO(response.content))
+        w, h = img.size
+        return round(w / h, 2)
+    except Exception as e:
+        print(f"[orchestrator_v2] 비율 계산 실패 ({sas_url[:50]}...): {e}")
+        return None
+ 
+ 
 async def _auto_upload_instagram(shop_id, post_id, post_draft, selected_photos):
     try:
         from services.cosmos_db import get_auth, save_post_data
         shop_auth = get_auth(shop_id)
-        if not shop_auth: return False
-        insta_user_id    = shop_auth.get("insta_user_id")
+        if not shop_auth:
+            return False
+ 
+        insta_user_id      = shop_auth.get("insta_user_id")
         insta_access_token = shop_auth.get("insta_access_token")
-        if not insta_user_id or not insta_access_token: return False
-        caption    = post_draft.get("caption", "")
-        hashtags   = post_draft.get("hashtags", [])
-        cta        = post_draft.get("cta", "")
+        if not insta_user_id or not insta_access_token:
+            return False
+ 
+        caption      = post_draft.get("caption", "")
+        hashtags     = post_draft.get("hashtags", [])
+        cta          = post_draft.get("cta", "")
         full_caption = (caption + "\n\n" + " ".join(hashtags) + "\n" + cta).strip()
+ 
         from services.blob_storage import generate_sas_url
-        image_urls = [generate_sas_url(p["blob_url"]) for p in selected_photos if p.get("blob_url")]
-        if not image_urls: return False
+        image_urls = [
+            generate_sas_url(p["blob_url"])
+            for p in selected_photos if p.get("blob_url")
+        ]
+        if not image_urls:
+            return False
+ 
+        # [FIX] 캐러셀 비율 통일 — 첫 번째 사진 기준으로 ±0.1 범위 벗어나는 사진 제외
+        if len(image_urls) > 1:
+            base_ratio = _get_aspect_ratio(image_urls[0])
+            if base_ratio:
+                filtered = []
+                for url in image_urls:
+                    ratio = _get_aspect_ratio(url)
+                    if ratio is None or abs(ratio - base_ratio) < 0.1:
+                        filtered.append(url)
+                    else:
+                        print(f"[orchestrator_v2] 비율 불일치 제외 → {ratio:.2f} (기준: {base_ratio:.2f})")
+                image_urls = filtered
+                print(f"[orchestrator_v2] 비율 필터링 후 {len(image_urls)}장 유지")
+ 
+        if not image_urls:
+            print("[orchestrator_v2] 비율 필터링 후 사진 없음 → 업로드 중단")
+            return False
+ 
         from routers.instagram import publish_photos
         media_id = publish_photos(insta_user_id, insta_access_token, image_urls, full_caption)
+ 
         save_post_data(shop_id, {
-            "id": post_id, "caption": caption, "hashtags": hashtags,
-            "photo_ids": [p.get("id") for p in selected_photos],
-            "cta": cta, "status": "success", "instagram_media_id": media_id
+            "id":                 post_id,
+            "caption":            caption,
+            "hashtags":           hashtags,
+            "photo_ids":          [p.get("id") for p in selected_photos],
+            "cta":                cta,
+            "status":             "success",
+            "instagram_media_id": media_id
         })
         return True
+ 
     except Exception as e:
         print(f"[orchestrator_v2] 자동 업로드 실패: {e}")
         return False
