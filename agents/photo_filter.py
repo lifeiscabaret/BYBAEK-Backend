@@ -27,7 +27,7 @@ import numpy as np
 from openai import AsyncAzureOpenAI
 from azure.storage.blob import BlobSasPermissions, generate_blob_sas, BlobServiceClient
 
-#  설정값 
+# ── 설정값 ────────────────────────────────────────────────────────────────────
 
 # 1차 기준
 STAGE1_LAPLACIAN_MIN  = 40     # 흔들림 기준 완화 (스마트폰 사진 통과)
@@ -244,7 +244,7 @@ async def _evaluate_photo(
     endpoint    = os.getenv("AZURE_OPENAI_ENDPOINT")
     api_version = os.getenv("AZURE_OPENAI_API_VERSION", "2024-02-01")
     deployment  = (
-        os.getenv("AZURE_OPENAI_DEPLOYMENT_FULL") or
+        os.getenv("AZURE_OPENAI_DEPLOYMENT_MINI") or
         os.getenv("AZURE_OPENAI_DEPLOYMENT")
     )
 
