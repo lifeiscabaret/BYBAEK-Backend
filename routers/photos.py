@@ -1,25 +1,28 @@
 """
 역할: 사진 관련 라우터
-- GET  /api/photos/all/{shop_id}         전체 사진 조회
-- GET  /api/photos/albums/{shop_id}      앨범 목록 조회
-- GET  /api/photos/albums/{shop_id}/{album_id}  앨범 내 사진 조회
-- POST /api/photos/albums                새 앨범 생성
-- POST /api/photos/filter                필터링 트리거 (청크 분할)
-- GET  /api/photos/status/{shop_id}      필터링 상태 조회
-- POST /api/photos/filter/test/{shop_id} 동기 진단용 (3장)
-- DELETE /api/photos/albums/{shop_id}/{album_id}  앨범 삭제
-- DELETE /api/photos/{shop_id}/{photo_id}          사진 삭제
+- GET  /api/photos/all/{shop_id}
+- GET  /api/photos/albums/{shop_id}
+- GET  /api/photos/albums/{shop_id}/{album_id}
+- POST /api/photos/albums
+- POST /api/photos/filter
+- GET  /api/photos/status/{shop_id}
+- GET  /api/photos/proxy/{photo_id}      Instagram 업로드용 이미지 프록시 [NEW]
+- POST /api/photos/filter/test/{shop_id}
+- DELETE /api/photos/albums/{shop_id}/{album_id}
+- DELETE /api/photos/{shop_id}/{photo_id}
 
 [수정 이력]
-- FILTER_CHUNK_SIZE 추가: 10장씩 청크 분할
-- trigger_photo_filter: 청크별 별도 background_task 등록 (타임아웃 근본 해결)
+- FILTER_CHUNK_SIZE: 10장씩 청크 분할
+- proxy 엔드포인트: Instagram SAS URL 차단 문제 해결
 """
 
 import os
+import httpx
 from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import uuid
-from typing import Optional, List
+from typing import List
 from services.cosmos_db import get_all_photos_by_shop
 from services.cosmos_db import get_photos_by_album
 from services.cosmos_db import get_album_list
@@ -31,11 +34,12 @@ from azure.storage.blob import generate_blob_sas, BlobSasPermissions
 
 router = APIRouter()
 
-# ── 설정 ──────────────────────────────────────────────────────────
-FILTER_CHUNK_SIZE = 10   # 청크당 처리 사진 수 (Azure 타임아웃 230초 안전 기준)
+FILTER_CHUNK_SIZE = 10
+BACKEND_URL = os.getenv(
+    "BACKEND_URL",
+    "https://bybaek-b-bzhhgzh8d2gthpb3.koreacentral-01.azurewebsites.net"
+)
 
-
-# ── 요청/응답 모델 ────────────────────────────────────────────────
 
 class FilterTriggerRequest(BaseModel):
     shop_id: str
@@ -63,8 +67,6 @@ class AlbumCreateRequest(BaseModel):
     description: str = ""
 
 
-# ── SAS URL 헬퍼 ──────────────────────────────────────────────────
-
 def _to_sas_url(blob_url: str, hours: int = 2) -> str:
     try:
         clean_url = blob_url.split("?")[0]
@@ -83,9 +85,11 @@ def _to_sas_url(blob_url: str, hours: int = 2) -> str:
         return blob_url
 
 
-# ── 엔드포인트 ────────────────────────────────────────────────────
+def get_proxy_url(photo_id: str, shop_id: str) -> str:
+    """Instagram 업로드용 프록시 URL 생성"""
+    return f"{BACKEND_URL}/api/photos/proxy/{photo_id}?shop_id={shop_id}"
 
-# 1. 전체 사진 조회
+
 @router.get("/all/{shop_id}")
 async def read_all_photos(shop_id: str):
     all_photos = get_all_photos_by_shop(shop_id)
@@ -96,7 +100,6 @@ async def read_all_photos(shop_id: str):
     return {"photos": photos}
 
 
-# 2. 앨범 목록 조회
 @router.get("/albums/{shop_id}")
 async def read_albums(shop_id: str):
     albums = get_album_list(shop_id)
@@ -106,7 +109,6 @@ async def read_albums(shop_id: str):
     return {"albums": albums}
 
 
-# 3. 특정 앨범 내 사진 조회
 @router.get("/albums/{shop_id}/{album_id}")
 async def read_album_photos(shop_id: str, album_id: str):
     photos = get_photos_by_album(shop_id, album_id)
@@ -116,15 +118,12 @@ async def read_album_photos(shop_id: str, album_id: str):
     return {"album_id": album_id, "photos": photos}
 
 
-# 4. 새 앨범 생성
 @router.post("/albums")
 async def create_album(req: AlbumCreateRequest):
     photo_list = [{"photo_id": pid} for pid in req.photo_ids]
-
     actual_album_id = req.album_id
     if not actual_album_id or actual_album_id == "new":
         actual_album_id = str(uuid.uuid4())
-
     success = save_album(
         shop_id=req.shop_id,
         album_id=actual_album_id,
@@ -132,22 +131,15 @@ async def create_album(req: AlbumCreateRequest):
         album_name=req.album_name,
         description=req.description
     )
-
     if not success:
         raise HTTPException(status_code=500, detail="앨범 저장에 실패했습니다.")
-
     return {"status": "success", "album_id": actual_album_id}
 
 
-# 5. 필터링 트리거 [FIX: 청크 분할로 타임아웃 근본 해결]
 @router.post("/filter", response_model=FilterTriggerResponse)
-async def trigger_photo_filter(
-    req: FilterTriggerRequest,
-    background_tasks: BackgroundTasks
-):
+async def trigger_photo_filter(req: FilterTriggerRequest, background_tasks: BackgroundTasks):
     try:
         all_photos = get_all_photos_by_shop(req.shop_id)
-
         if req.force_refilter:
             photo_list = all_photos
         else:
@@ -159,67 +151,65 @@ async def trigger_photo_filter(
                 message="새로운 사진이 없습니다."
             )
 
-        # [FIX] 10장씩 청크로 나눠 각각 별도 백그라운드 태스크 등록
-        # 이유: Azure App Service 타임아웃 230초 → 10장 × ~20초 = 200초 이내 완료
-        chunks = [
-            photo_list[i: i + FILTER_CHUNK_SIZE]
-            for i in range(0, len(photo_list), FILTER_CHUNK_SIZE)
-        ]
+        chunks = [photo_list[i: i + FILTER_CHUNK_SIZE] for i in range(0, len(photo_list), FILTER_CHUNK_SIZE)]
         for chunk in chunks:
-            background_tasks.add_task(
-                _run_filter_process,
-                shop_id=req.shop_id,
-                photo_list=chunk
-            )
+            background_tasks.add_task(_run_filter_process, shop_id=req.shop_id, photo_list=chunk)
 
         print(f"[Photo Router] {len(photo_list)}장 → {len(chunks)}개 청크로 분할 등록")
-
         return FilterTriggerResponse(
             shop_id=req.shop_id,
             status="started",
             total=len(photo_list),
             message=f"{len(photo_list)}장을 {len(chunks)}개 청크로 나눠 백그라운드 처리 시작합니다."
         )
-
     except Exception as e:
         print(f"[Photo Router] Trigger Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# 6. 필터링 상태 조회
 @router.get("/status/{shop_id}", response_model=FilterStatusResponse)
 async def get_filter_status(shop_id: str):
     try:
         all_photos = get_all_photos_by_shop(shop_id)
-
         if not all_photos:
-            return FilterStatusResponse(
-                shop_id=shop_id, total=0, passed=0, failed=0, pending=0,
-                status="no_photos"
-            )
+            return FilterStatusResponse(shop_id=shop_id, total=0, passed=0, failed=0, pending=0, status="no_photos")
 
         passed  = sum(1 for p in all_photos if p.get("is_usable") is True)
         failed  = sum(1 for p in all_photos if p.get("is_usable") is False)
-        pending = sum(1 for p in all_photos
-                      if p.get("stage1_pass") is None and p.get("is_usable") is None)
-
+        pending = sum(1 for p in all_photos if p.get("stage1_pass") is None and p.get("is_usable") is None)
         current_status = "done" if pending == 0 else "in_progress"
 
         return FilterStatusResponse(
-            shop_id=shop_id,
-            total=len(all_photos),
-            passed=passed,
-            failed=failed,
-            pending=pending,
-            status=current_status
+            shop_id=shop_id, total=len(all_photos),
+            passed=passed, failed=failed, pending=pending, status=current_status
         )
-
     except Exception as e:
-        print(f"[Photo Router] Status Error: {e}")
         raise HTTPException(status_code=500, detail=f"상태 조회 실패: {str(e)}")
 
 
-# 7. 앨범 삭제
+@router.get("/proxy/{photo_id}")
+async def proxy_photo(photo_id: str, shop_id: str):
+    """
+    Instagram 업로드용 이미지 프록시.
+    Blob Storage SAS URL을 내부적으로 생성 후 이미지를 스트리밍 반환.
+    Instagram → 백엔드 URL 접근 → SAS 차단 문제 해결.
+    Blob Storage 비공개 유지.
+    """
+    from services.cosmos_db import get_photo_by_id
+    photo = get_photo_by_id(shop_id, photo_id)
+    if not photo or not photo.get("blob_url"):
+        raise HTTPException(status_code=404, detail="사진을 찾을 수 없습니다.")
+
+    sas_url = _to_sas_url(photo["blob_url"], hours=1)
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(sas_url)
+        if resp.status_code != 200:
+            raise HTTPException(status_code=502, detail="이미지 다운로드 실패")
+
+    content_type = resp.headers.get("content-type", "image/jpeg")
+    return StreamingResponse(iter([resp.content]), media_type=content_type)
+
+
 @router.delete("/albums/{shop_id}/{album_id}")
 async def delete_album(shop_id: str, album_id: str):
     success = delete_album_data(shop_id, album_id)
@@ -228,7 +218,6 @@ async def delete_album(shop_id: str, album_id: str):
     return {"status": "success", "message": "앨범이 삭제되었습니다."}
 
 
-# 8. 사진 삭제
 @router.delete("/{shop_id}/{photo_id}")
 async def delete_photo(shop_id: str, photo_id: str):
     success = delete_photo_data(shop_id, photo_id)
@@ -237,54 +226,33 @@ async def delete_photo(shop_id: str, photo_id: str):
     return {"status": "success", "message": "사진이 삭제되었습니다."}
 
 
-# 9. 동기 진단용 (3장) — 런칭 전 제거 예정
 @router.post("/filter/test/{shop_id}")
 async def test_filter_sync(shop_id: str):
     try:
-        print(f"[TEST] 1. 진입")
         from agents.photo_filter import run_photo_filter
-        print(f"[TEST] 2. import 성공")
-
         all_photos = get_all_photos_by_shop(shop_id)
         photo_list = [p for p in all_photos if p.get("stage1_pass") is None][:3]
-        print(f"[TEST] 3. 사진 {len(photo_list)}장 준비")
-
         prepared = [
             {"image_id": p.get("id"), "blob_url": _to_sas_url(p.get("blob_url"))}
             for p in photo_list if p.get("blob_url")
         ]
-        print(f"[TEST] 4. SAS 변환 완료")
-
         result = await run_photo_filter(shop_id=shop_id, photo_list=prepared)
-        print(f"[TEST] 5. 완료: {result}")
         return {"status": "ok", "result": result}
-
     except Exception as e:
         import traceback
-        tb = traceback.format_exc()
-        print(f"[TEST] ERROR: {tb}")
-        return {"status": "error", "error": str(e), "traceback": tb}
+        return {"status": "error", "error": str(e), "traceback": traceback.format_exc()}
 
-
-# ── 내부 헬퍼 ─────────────────────────────────────────────────────
 
 async def _run_filter_process(shop_id: str, photo_list: list):
-    """청크 단위 필터링 실행 (10장 이하로 받으므로 타임아웃 안전)"""
     print(f"[Photo Router] 청크 필터링 시작 ({len(photo_list)}장)")
     try:
         from agents.photo_filter import run_photo_filter
-
         prepared_list = [
-            {
-                "image_id": p.get("id") or p.get("photo_id"),
-                "blob_url": _to_sas_url(p.get("blob_url"))
-            }
+            {"image_id": p.get("id") or p.get("photo_id"), "blob_url": _to_sas_url(p.get("blob_url"))}
             for p in photo_list if p.get("blob_url")
         ]
-
         result = await run_photo_filter(shop_id=shop_id, photo_list=prepared_list)
         print(f"[Photo Router] 청크 완료 → stage1={result['stage1_passed']}, stage2={result['stage2_passed']}")
-
     except Exception as e:
         print(f"[Photo Router] 청크 필터링 오류: {str(e)}")
         import traceback

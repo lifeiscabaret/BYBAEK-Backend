@@ -18,7 +18,6 @@ from orchestrator_v2 import run_pipeline
 
 router = APIRouter()
 
-# Request / Response 모델
 class AgentRunRequest(BaseModel):
     shop_id: str
     trigger: str
@@ -36,8 +35,8 @@ class AgentRunRequest(BaseModel):
 class AgentReviewRequest(BaseModel):
     shop_id: str
     post_id: str
-    action: str                          # "ok" | "edit" | "cancel"
-    edited_caption: Optional[str] = None # action이 "edit"일 때만
+    action: str
+    edited_caption: Optional[str] = None
 
     class Config:
         json_schema_extra = {
@@ -58,7 +57,6 @@ class PostSaveRequest(BaseModel):
     status: str = "success"
 
 
-# POST /api/agent/run
 @router.post("/run")
 async def agent_run(req: AgentRunRequest):
     if req.trigger not in ("auto", "manual"):
@@ -74,7 +72,6 @@ async def agent_run(req: AgentRunRequest):
         raise HTTPException(500, f"에이전트 실행 실패: {str(e)}")
 
 
-# POST /api/agent/review
 @router.post("/review")
 async def agent_review(req: AgentReviewRequest):
     if req.action not in ("ok", "edit", "cancel"):
@@ -96,14 +93,12 @@ async def agent_review(req: AgentReviewRequest):
         raise HTTPException(500, f"검토 처리 실패: {str(e)}")
 
 
-# GET /api/agent/posts/{shop_id}
 @router.get("/posts/{shop_id}")
 async def get_posts(shop_id: str):
     posts = get_post_by_shop(shop_id)
     return {"posts": posts}
 
 
-# POST /api/agent/save
 @router.post("/save")
 async def save_post(req: PostSaveRequest):
     import uuid
@@ -120,7 +115,6 @@ async def save_post(req: PostSaveRequest):
     return {"status": "success", "post_id": post_id}
 
 
-# GET /api/agent/post/detail/{post_id}
 @router.get("/post/detail/{post_id}")
 async def get_post_detail(post_id: str, shop_id: str):
     post = get_post_detail_data(post_id, shop_id)
@@ -128,7 +122,7 @@ async def get_post_detail(post_id: str, shop_id: str):
         raise HTTPException(status_code=404, detail="게시물을 찾을 수 없습니다.")
     return post
 
-# 내부 헬퍼
+
 async def _handle_upload(shop_id: str, post_id: str, edited_caption: str = None):
     """초안 조회 → (캡션 수정) → Instagram 업로드 → 이력 저장"""
     from services.cosmos_db import get_draft, save_post_data
@@ -152,22 +146,14 @@ async def _handle_upload(shop_id: str, post_id: str, edited_caption: str = None)
     cta          = draft.get("cta", "")
     full_caption = f"{caption}\n\n{' '.join(hashtags)}\n{cta}".strip()
 
-    from services.cosmos_db import get_photo_by_id
     photo_ids  = draft.get("photo_ids", [])
-    image_urls = []
-    for pid in photo_ids:
-        photo = get_photo_by_id(shop_id, pid)
-        print(f"[DEBUG] photo_id={pid}, photo={photo}")
-        if photo and photo.get("blob_url"):
-            from services.blob_storage import generate_sas_url
-            sas_url = generate_sas_url(photo["blob_url"])
-            image_urls.append(sas_url)
-            print(f"[DEBUG] sas_url={sas_url}")
 
+    # [FIX] SAS URL → proxy URL (Instagram SAS 차단 문제 해결)
+    from routers.photos import get_proxy_url
+    image_urls = [get_proxy_url(pid, shop_id) for pid in photo_ids]
     print(f"[DEBUG] 최종 image_urls={image_urls}")
     print(f"[DEBUG] 업로드 조건: user={bool(insta_user_id)}, token={bool(access_token)}, urls={bool(image_urls)}")
 
-    # Instagram 업로드 (1장: 단일, 2장+: CAROUSEL 자동 분기)
     instagram_media_id = None
     if insta_user_id and access_token and image_urls:
         from routers.instagram import publish_photos
@@ -189,7 +175,6 @@ async def _handle_upload(shop_id: str, post_id: str, edited_caption: str = None)
         }
     )
 
-    # RAG 플라이휠: 업로드 성공한 캡션 Vector DB 저장
     if instagram_media_id:
         try:
             from agents.rag_tool import get_embedding
@@ -204,9 +189,7 @@ async def _handle_upload(shop_id: str, post_id: str, edited_caption: str = None)
 
 
 async def _handle_cancel(shop_id: str, post_id: str):
-    """취소 처리 → 이력에 cancel 저장"""
     from services.cosmos_db import get_draft, save_post_data
-
     draft = get_draft(shop_id=shop_id, post_id=post_id)
     if draft:
         save_post_data(
