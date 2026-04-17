@@ -8,7 +8,7 @@ from azure.storage.blob import generate_blob_sas, BlobSasPermissions
 AZURE_STORAGE_CONNECTION_STRING = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
 CONTAINER_NAME = os.getenv("AZURE_BLOB_CONTAINER_NAME")
 
-def generate_sas_url(blob_url: str, expiry_hours: int = 1) -> str:
+def generate_sas_url(blob_url: str, expiry_hours: int = 24) -> str:
     try:
         clean_url = blob_url.split("?")[0]
 
