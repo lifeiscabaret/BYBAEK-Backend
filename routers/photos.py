@@ -86,8 +86,7 @@ def _to_sas_url(blob_url: str, hours: int = 2) -> str:
 
 
 def get_proxy_url(photo_id: str, shop_id: str) -> str:
-    """Instagram 업로드용 프록시 URL 생성"""
-    return f"{BACKEND_URL}/api/photos/proxy/{photo_id}?shop_id={shop_id}"
+    return f"{BACKEND_URL}/api/photos/proxy/{photo_id}/image.jpg?shop_id={shop_id}"
 
 
 @router.get("/all/{shop_id}")
@@ -187,7 +186,7 @@ async def get_filter_status(shop_id: str):
         raise HTTPException(status_code=500, detail=f"상태 조회 실패: {str(e)}")
 
 
-@router.get("/proxy/{photo_id}")
+@router.get("/proxy/{photo_id}/image.jpg")
 async def proxy_photo(photo_id: str, shop_id: str):
     """
     Instagram 업로드용 이미지 프록시.
