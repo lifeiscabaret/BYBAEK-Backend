@@ -6,7 +6,7 @@
 - POST /api/photos/albums
 - POST /api/photos/filter
 - GET  /api/photos/status/{shop_id}
-- GET  /api/photos/proxy/{photo_id}      Instagram 업로드용 이미지 프록시 [NEW]
+- GET|HEAD /api/photos/proxy/{photo_id}/image.jpg  Instagram 업로드용 이미지 프록시
 - POST /api/photos/filter/test/{shop_id}
 - DELETE /api/photos/albums/{shop_id}/{album_id}
 - DELETE /api/photos/{shop_id}/{photo_id}
@@ -14,12 +14,13 @@
 [수정 이력]
 - FILTER_CHUNK_SIZE: 10장씩 청크 분할
 - proxy 엔드포인트: Instagram SAS URL 차단 문제 해결
+- proxy HEAD 메서드 추가: Instagram URL 유효성 검사 통과
 """
 
 import os
 import httpx
-from fastapi import APIRouter, HTTPException, BackgroundTasks
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Request
+from fastapi.responses import StreamingResponse, Response
 from pydantic import BaseModel
 import uuid
 from typing import List
@@ -186,18 +187,27 @@ async def get_filter_status(shop_id: str):
         raise HTTPException(status_code=500, detail=f"상태 조회 실패: {str(e)}")
 
 
-@router.get("/proxy/{photo_id}/image.jpg")
-async def proxy_photo(photo_id: str, shop_id: str):
+@router.api_route("/proxy/{photo_id}/image.jpg", methods=["GET", "HEAD"])
+async def proxy_photo(photo_id: str, shop_id: str, request: Request):
     """
     Instagram 업로드용 이미지 프록시.
-    Blob Storage SAS URL을 내부적으로 생성 후 이미지를 스트리밍 반환.
-    Instagram → 백엔드 URL 접근 → SAS 차단 문제 해결.
-    Blob Storage 비공개 유지.
+    GET: 이미지 스트리밍 반환
+    HEAD: Instagram URL 유효성 검사 통과용 (이미지 다운로드 없이 헤더만 반환)
     """
     from services.cosmos_db import get_photo_by_id
     photo = get_photo_by_id(shop_id, photo_id)
     if not photo or not photo.get("blob_url"):
         raise HTTPException(status_code=404, detail="사진을 찾을 수 없습니다.")
+
+    # Instagram이 HEAD 요청으로 URL 유효성 검사 → 헤더만 반환
+    if request.method == "HEAD":
+        return Response(
+            headers={
+                "content-type": "image/jpeg",
+                "content-length": "1000000",
+                "accept-ranges": "bytes"
+            }
+        )
 
     sas_url = _to_sas_url(photo["blob_url"], hours=1)
     async with httpx.AsyncClient() as client:
