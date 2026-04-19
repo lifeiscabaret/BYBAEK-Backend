@@ -216,7 +216,15 @@ async def proxy_photo(shop_id: str, photo_id: str, request: Request):
             raise HTTPException(status_code=502, detail="이미지 다운로드 실패")
 
     content_type = resp.headers.get("content-type", "image/jpeg")
-    return StreamingResponse(iter([resp.content]), media_type=content_type)
+    return Response(
+        content=resp.content,
+        media_type=content_type,
+        headers={
+            "content-length": str(len(resp.content)),
+            "accept-ranges": "bytes",
+            "cache-control": "public, max-age=3600"
+        }
+    )
 
 
 @router.delete("/albums/{shop_id}/{album_id}")
