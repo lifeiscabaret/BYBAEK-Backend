@@ -87,7 +87,7 @@ def _to_sas_url(blob_url: str, hours: int = 2) -> str:
 
 
 def get_proxy_url(photo_id: str, shop_id: str) -> str:
-    return f"{BACKEND_URL}/api/photos/proxy/{photo_id}/image.jpg?shop_id={shop_id}"
+    return f"{BACKEND_URL}/api/photos/proxy/{shop_id}/{photo_id}/image.jpg"
 
 
 @router.get("/all/{shop_id}")
@@ -187,8 +187,8 @@ async def get_filter_status(shop_id: str):
         raise HTTPException(status_code=500, detail=f"상태 조회 실패: {str(e)}")
 
 
-@router.api_route("/proxy/{photo_id}/image.jpg", methods=["GET", "HEAD"])
-async def proxy_photo(photo_id: str, shop_id: str, request: Request):
+@router.api_route("/proxy/{shop_id}/{photo_id}/image.jpg", methods=["GET", "HEAD"])
+async def proxy_photo(shop_id: str, photo_id: str, request: Request):
     """
     Instagram 업로드용 이미지 프록시.
     GET: 이미지 스트리밍 반환
