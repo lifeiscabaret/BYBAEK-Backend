@@ -461,15 +461,13 @@ async def _auto_upload_instagram(shop_id, post_id, post_draft, selected_photos):
         cta          = post_draft.get("cta", "")
         full_caption = (caption + "\n\n" + " ".join(hashtags) + "\n" + cta).strip()
 
-        # [TODO] 도메인 구매 후 Blob 비공개 전환 시 아래 proxy 방식으로 교체
-        # from routers.photos import get_proxy_url
-        # image_urls = [get_proxy_url(p.get("id"), shop_id) for p in selected_photos if p.get("id")]
-
-        # [현재] Blob Storage 공개 설정 → blob_url 직접 사용 (SAS 파라미터 제거)
+        # [현재] bybaekofficial.com 도메인 연결 → proxy 방식 사용 (Instagram 차단 우회)
+        from routers.photos import get_proxy_url
         image_urls = [
-            p["blob_url"].split("?")[0]
-            for p in selected_photos if p.get("blob_url")
+            get_proxy_url(p.get("id"), shop_id)
+            for p in selected_photos if p.get("id")
         ]
+
         if not image_urls:
             return False
 
