@@ -1,4 +1,5 @@
 """
+에이전트 라우터
 - POST /api/agent/run: 에이전트 파이프라인 실행
 - POST /api/agent/review: 사장님 검토 결과 처리 (OK/수정/취소)
 - GET /api/agent/posts/{shop_id}: 게시물 목록 조회
@@ -147,18 +148,9 @@ async def _handle_upload(shop_id: str, post_id: str, edited_caption: str = None)
 
     photo_ids = draft.get("photo_ids", [])
 
-    # [TODO] 도메인 구매 후 Blob 비공개 전환 시 아래 proxy 방식으로 교체
-    # from routers.photos import get_proxy_url
-    # image_urls = [get_proxy_url(pid, shop_id) for pid in photo_ids]
-
-    # [현재] Blob Storage 공개 설정 → blob_url 직접 사용 (SAS 파라미터 제거)
-    from services.cosmos_db import get_photo_by_id
-    image_urls = []
-    for pid in photo_ids:
-        photo = get_photo_by_id(shop_id, pid)
-        if photo and photo.get("blob_url"):
-            clean_url = photo["blob_url"].split("?")[0]
-            image_urls.append(clean_url)
+    # bybaekofficial.com 도메인 연결 → proxy 방식 사용 (Instagram 차단 우회)
+    from routers.photos import get_proxy_url
+    image_urls = [get_proxy_url(pid, shop_id) for pid in photo_ids]
 
     print(f"[DEBUG] 최종 image_urls={image_urls}")
     print(f"[DEBUG] 업로드 조건: user={bool(insta_user_id)}, token={bool(access_token)}, urls={bool(image_urls)}")
