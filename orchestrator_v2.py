@@ -1,6 +1,3 @@
-"""
-BYBAEK Orchestrator v2 — LangGraph StateGraph 기반
-"""
 import requests
 from io import BytesIO
 import os
@@ -447,17 +444,6 @@ async def _save_draft(shop_id, post_id, post_draft, selected_photos,
     )
 
 
-def _get_aspect_ratio(sas_url: str) -> float | None:
-    try:
-        response = requests.get(sas_url, timeout=5)
-        img = Image.open(BytesIO(response.content))
-        w, h = img.size
-        return round(w / h, 2)
-    except Exception as e:
-        print(f"[orchestrator_v2] 비율 계산 실패: {e}")
-        return None
-
-
 async def _auto_upload_instagram(shop_id, post_id, post_draft, selected_photos):
     try:
         from services.cosmos_db import get_auth, save_post_data
@@ -475,16 +461,19 @@ async def _auto_upload_instagram(shop_id, post_id, post_draft, selected_photos):
         cta          = post_draft.get("cta", "")
         full_caption = (caption + "\n\n" + " ".join(hashtags) + "\n" + cta).strip()
 
-        # [FIX] SAS URL → proxy URL (Instagram SAS 차단 문제 해결)
-        from routers.photos import get_proxy_url
+        # [TODO] 도메인 구매 후 Blob 비공개 전환 시 아래 proxy 방식으로 교체
+        # from routers.photos import get_proxy_url
+        # image_urls = [get_proxy_url(p.get("id"), shop_id) for p in selected_photos if p.get("id")]
+
+        # [현재] Blob Storage 공개 설정 → blob_url 직접 사용 (SAS 파라미터 제거)
         image_urls = [
-            get_proxy_url(p.get("id"), shop_id)
-            for p in selected_photos if p.get("id")
+            p["blob_url"].split("?")[0]
+            for p in selected_photos if p.get("blob_url")
         ]
         if not image_urls:
             return False
 
-        print(f"[orchestrator_v2] 자동 업로드 proxy URLs: {len(image_urls)}장")
+        print(f"[orchestrator_v2] 자동 업로드 blob URLs: {len(image_urls)}장")
 
         from routers.instagram import publish_photos
         media_id = publish_photos(insta_user_id, insta_access_token, image_urls, full_caption)
