@@ -1,3 +1,6 @@
+"""
+BYBAEK Orchestrator v2 — LangGraph StateGraph 기반
+"""
 import requests
 from io import BytesIO
 import os
@@ -461,17 +464,21 @@ async def _auto_upload_instagram(shop_id, post_id, post_draft, selected_photos):
         cta          = post_draft.get("cta", "")
         full_caption = (caption + "\n\n" + " ".join(hashtags) + "\n" + cta).strip()
 
-        # [현재] bybaekofficial.com 도메인 연결 → proxy 방식 사용 (Instagram 차단 우회)
-        from routers.photos import get_proxy_url
+        # [현재] Blob Storage 공개 설정 → blob_url 직접 사용 (SAS 파라미터 제거)
         image_urls = [
-            get_proxy_url(p.get("id"), shop_id)
-            for p in selected_photos if p.get("id")
+            p["blob_url"].split("?")[0]
+            for p in selected_photos if p.get("blob_url")
         ]
 
+        # Blob 비공개 전환 시 아래 proxy 방식으로 교체 -> proxy 방식 실패, 다시 blo으로 전환
+        # from routers.photos import get_proxy_url
+        # image_urls = [get_proxy_url(p.get("id"), shop_id) for p in selected_photos if p.get("id")]
+
         if not image_urls:
+            print("[orchestrator_v2] 업로드할 이미지 없음")
             return False
 
-        print(f"[orchestrator_v2] 자동 업로드 blob URLs: {len(image_urls)}장")
+        print(f"[orchestrator_v2] 자동 업로드 → {len(image_urls)}장")
 
         from routers.instagram import publish_photos
         media_id = publish_photos(insta_user_id, insta_access_token, image_urls, full_caption)
