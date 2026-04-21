@@ -60,6 +60,14 @@ async def run_photo_filter(shop_id: str, photo_list: list) -> dict:
     """
     print(f"[photo_filter] 필터링 시작 -> shop_id={shop_id}, 대상={len(photo_list)}장")
 
+    # [FIX] 이미 통과한 사진은 재필터링에서 제외
+    already_passed = [p for p in photo_list if p.get("is_usable") is True and p.get("filter_status") == "passed"]
+    photo_list = [p for p in photo_list if not (p.get("is_usable") is True and p.get("filter_status") == "passed")]
+    if already_passed:
+        print(f"[photo_filter] 이미 통과 {len(already_passed)}장 제외 → 대상 {len(photo_list)}장")
+    if not photo_list:
+        return {"total": len(already_passed), "stage1_passed": len(already_passed), "stage2_passed": len(already_passed), "results": []}
+
     if not photo_list:
         return {"total": 0, "stage1_passed": 0, "stage2_passed": 0, "results": []}
 
@@ -439,6 +447,15 @@ async def _save_pass_result(shop_id: str, photo: dict, result: dict):
 
 async def _save_fail_result(shop_id: str, photo: dict, reason: str = "stage2_fail"):
     """2차 FAIL 결과 CosmosDB 저장 (is_usable=False)."""
+    # [FIX] 이미 통과한 사진은 FAIL로 덮어쓰지 않음
+    try:
+        from services.cosmos_db import get_photo_by_id
+        existing = get_photo_by_id(shop_id, photo["image_id"])
+        if existing and existing.get("is_usable") is True:
+            print(f"[photo_filter] 통과 사진 보호 → FAIL 저장 건너뜀: {photo['image_id']}")
+            return
+    except Exception:
+        pass
     from services.cosmos_db import save_photo_meta
     try:
         now_kst = datetime.now(KST).isoformat()
