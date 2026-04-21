@@ -4,7 +4,7 @@
 출력   : {"total", "stage1_passed", "stage2_passed", "results", "failed"}
 주요 흐름:
     1. run_photo_filter → run_stage1_filter → run_stage2_filter
-    2. 1차: 해상도/밝기/흔들림/바버샵 관련성 (룰 기반)
+    2. 1차: 밝기/흔들림만 체크 (바버샵 관련성 체크 제거 → Stage 2에 위임)
     3. 2차: GPT-4.1 Vision + Few-shot 평가 (25점 만점)
     4. 결과 CosmosDB 저장 (filter_status: passed/failed)
 
@@ -13,6 +13,10 @@
 - _save_pass_result: filter_status="passed" 추가
 - _save_fail_result: filter_status="failed" 추가
 - _generate_sas_url: AZURE_STORAGE_KEY → connection string에서 key 추출
+- [FIX] _analyze_stage1: 바버샵 관련성 체크 제거 (뒷머리/측면 사진 탈락 방지)
+- [FIX] _evaluate_photo: model_vibe를 instant_fail 대상에서 제외 (뒷면 사진 보호)
+- [FIX] _save_pass_result: scores 필드 저장 추가 (photo_select에서 참조)
+- [FIX] _generate_sas_url: BlobServiceClient 싱글톤 캐시로 성능 개선
 """
 
 import os
@@ -29,20 +33,33 @@ from azure.storage.blob import BlobSasPermissions, generate_blob_sas, BlobServic
 
 # ── 설정값 ────────────────────────────────────────────────────────────────────
 
-# 1차 기준
-STAGE1_LAPLACIAN_MIN  = 40     # 흔들림 기준 완화 (스마트폰 사진 통과)
-STAGE1_BRIGHTNESS_MIN = 30     # 최소 밝기 완화
-STAGE1_BRIGHTNESS_MAX = 240    # 최대 밝기 완화
-STAGE1_SKIN_RATIO_MIN = 2.0    # 뒷머리/측면 사진 통과
+# 1차 기준 (밝기/흔들림만)
+STAGE1_LAPLACIAN_MIN  = 40     # 흔들림 기준
+STAGE1_BRIGHTNESS_MIN = 30     # 최소 밝기
+STAGE1_BRIGHTNESS_MAX = 240    # 최대 밝기
+# [FIX] STAGE1_SKIN_RATIO_MIN 제거 → 바버샵 관련성 체크 Stage 2에 위임
 
 # 2차 기준
 STAGE2_PASS_THRESHOLD = 15     # 25점 중 15점 이상 PASS
 STAGE2_INSTANT_FAIL   = 1      # 한 항목이라도 1점 이하면 즉시 FAIL
+# [FIX] model_vibe는 instant_fail 제외 (뒷면/측면 사진은 표정이 안 보임)
+STAGE2_INSTANT_FAIL_EXCLUDE = {"model_vibe"}
+
 MAX_CONCURRENT        = 5
 MAX_GOOD_EXAMPLES     = 5
 MAX_BAD_EXAMPLES      = 3
 
 KST = timezone(timedelta(hours=9))
+
+# [FIX] BlobServiceClient 싱글톤 캐시 (매 사진마다 새로 생성 방지)
+_blob_service_client = None
+
+def _get_blob_service_client() -> BlobServiceClient:
+    global _blob_service_client
+    if _blob_service_client is None:
+        connection_string = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
+        _blob_service_client = BlobServiceClient.from_connection_string(connection_string)
+    return _blob_service_client
 
 
 # ── 메인 진입점 ───────────────────────────────────────────────────────────────
@@ -65,11 +82,14 @@ async def run_photo_filter(shop_id: str, photo_list: list) -> dict:
     photo_list = [p for p in photo_list if not (p.get("is_usable") is True and p.get("filter_status") == "passed")]
     if already_passed:
         print(f"[photo_filter] 이미 통과 {len(already_passed)}장 제외 → 대상 {len(photo_list)}장")
-    if not photo_list:
-        return {"total": len(already_passed), "stage1_passed": len(already_passed), "stage2_passed": len(already_passed), "results": []}
 
     if not photo_list:
-        return {"total": 0, "stage1_passed": 0, "stage2_passed": 0, "results": []}
+        return {
+            "total": len(already_passed),
+            "stage1_passed": len(already_passed),
+            "stage2_passed": len(already_passed),
+            "results": []
+        }
 
     # STEP 1: 1차 필터링
     stage1_results   = await run_stage1_filter(photo_list)
@@ -98,7 +118,7 @@ async def run_photo_filter(shop_id: str, photo_list: list) -> dict:
 # ── 1차 필터링 (룰 기반) ──────────────────────────────────────────────────────
 
 async def run_stage1_filter(photo_list: list) -> list:
-    """1차 필터링: 해상도/밝기/흔들림/바버샵 관련성 체크."""
+    """1차 필터링: 밝기/흔들림만 체크. 바버샵 관련성은 Stage 2 GPT Vision에 위임."""
     results = []
     for photo in photo_list:
         image_id = photo.get("image_id", "")
@@ -119,14 +139,16 @@ async def run_stage1_filter(photo_list: list) -> list:
 
 async def _analyze_stage1(blob_url: str) -> tuple:
     """
-    blob URL → SAS 발급 → 임시 파일 다운로드 → 룰 기반 분석.
+    blob URL → SAS 발급 → 임시 파일 다운로드 → 밝기/흔들림 체크.
 
-    [FIX] SAS 없이 다운로드 시 403 에러 → _generate_sas_url 적용
+    [FIX] 바버샵 관련성 체크 제거:
+    - 뒷머리/측면 사진은 얼굴 미검출 + 피부 비중 낮아서 탈락하던 문제 해결
+    - 관련성 판단은 Stage 2 GPT Vision에 위임
+
     Returns: ("Pass"|"Fail", reason_str)
     """
     tmp_path = None
     try:
-        # [FIX] SAS URL 발급 후 다운로드
         sas_url = _generate_sas_url(blob_url)
         with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
             tmp_path = tmp.name
@@ -139,7 +161,6 @@ async def _analyze_stage1(blob_url: str) -> tuple:
         if image is None:
             return "Fail", "이미지 읽기 실패"
 
-        height, width = image.shape[:2]
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
         # 1) 흔들림 체크 (Laplacian variance)
@@ -152,22 +173,8 @@ async def _analyze_stage1(blob_url: str) -> tuple:
         if avg_brightness < STAGE1_BRIGHTNESS_MIN or avg_brightness > STAGE1_BRIGHTNESS_MAX:
             return "Fail", f"밝기 부적절 ({avg_brightness:.1f})"
 
-        # 3) 바버샵 관련성 체크 (얼굴 인식 + 피부색 비중)
-        face_cascade = cv2.CascadeClassifier(
-            cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
-        )
-        faces = face_cascade.detectMultiScale(gray, 1.3, 5)
-
-        hsv        = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-        lower_skin = np.array([0,  20,  70],  dtype=np.uint8)
-        upper_skin = np.array([25, 255, 255], dtype=np.uint8)
-        mask       = cv2.inRange(hsv, lower_skin, upper_skin)
-        skin_ratio = (cv2.countNonZero(mask) / (height * width)) * 100
-
-        if len(faces) == 0 and skin_ratio < STAGE1_SKIN_RATIO_MIN:
-            return "Fail", f"관련성 낮음 (얼굴 미검출, 피부 비중 {skin_ratio:.1f}%)"
-
-        return "Pass", f"1차 통과 (선명도:{laplacian_var:.0f}, 밝기:{avg_brightness:.0f}, 피부:{skin_ratio:.1f}%)"
+        # [FIX] 바버샵 관련성 체크 제거 → Stage 2 GPT Vision에 위임
+        return "Pass", f"1차 통과 (선명도:{laplacian_var:.0f}, 밝기:{avg_brightness:.0f})"
 
     finally:
         if tmp_path:
@@ -241,7 +248,11 @@ async def _evaluate_photo(
 ) -> dict:
     """
     GPT-4.1 Vision + Few-shot 평가 (25점 만점).
-    통과: 15점 이상 AND 모든 항목 2점 이상
+    통과: 15점 이상 AND model_vibe 제외 항목 모두 2점 이상
+
+    [FIX] model_vibe instant_fail 제외:
+    - 뒷면/측면 사진은 표정이 안 보여서 model_vibe 0~1점 나올 수 있음
+    - instant_fail 판정에서 model_vibe 제외하여 탈락 방지
     """
     print(f"[photo_filter] 2차 평가 중 -> {image_id}")
 
@@ -277,7 +288,12 @@ async def _evaluate_photo(
         scores      = gpt_result.get("scores", {})
         total_score = gpt_result.get("total", sum(scores.values()))
 
-        instant_fail = any(v <= STAGE2_INSTANT_FAIL for v in scores.values())
+        # [FIX] model_vibe는 instant_fail 판정에서 제외
+        instant_fail = any(
+            v <= STAGE2_INSTANT_FAIL
+            for k, v in scores.items()
+            if k not in STAGE2_INSTANT_FAIL_EXCLUDE
+        )
         stage2_pass  = (total_score >= STAGE2_PASS_THRESHOLD) and not instant_fail
 
         fade_cut_score = round(scores.get("gradient", 0) / 5, 2)
@@ -312,21 +328,17 @@ async def _evaluate_photo(
 def _generate_sas_url(blob_url: str, hours: int = 1) -> str:
     """
     순수 blob URL → SAS URL 발급.
-
-    [FIX] AZURE_STORAGE_KEY 대신 AZURE_STORAGE_CONNECTION_STRING에서
-          account_key 추출 (blob_storage.py 방식과 통일)
+    [FIX] BlobServiceClient 싱글톤 캐시 사용 (매 사진마다 재생성 방지)
     """
-    blob_url = blob_url.split("?")[0]  # 기존 SAS 제거
+    blob_url = blob_url.split("?")[0]
     path     = blob_url.replace("https://bybaekstorage.blob.core.windows.net/", "")
     parts    = path.split("/", 1)
     container_name = parts[0]
     blob_name      = parts[1]
 
-    # [FIX] connection string에서 key 추출
-    connection_string = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
-    blob_service_client = BlobServiceClient.from_connection_string(connection_string)
-    account_name = blob_service_client.account_name
-    account_key  = blob_service_client.credential.account_key
+    client       = _get_blob_service_client()
+    account_name = client.account_name
+    account_key  = client.credential.account_key
 
     sas_token = generate_blob_sas(
         account_name=account_name,
@@ -350,17 +362,23 @@ def _build_vision_prompt(blob_url: str, good_refs: list, bad_refs: list) -> list
 1. gradient  : 페이드 그라데이션이 자연스럽고 경계가 뭉치지 않을 것
 2. lighting  : 너무 어둡거나 과노출되지 않고 자연스러울 것
 3. background: 복잡하거나 지저분하지 않고 깔끔할 것
-4. model_vibe: 모델 표정이 자연스럽고 홍보용으로 적합할 것
+4. model_vibe: 모델 표정/분위기가 홍보용으로 적합할 것
+              ※ 뒷면/측면 사진은 표정이 안 보이므로 자세/헤어스타일 완성도로 평가
 5. sharpness : 핀트가 맞고 구도가 홍보용으로 적합할 것
 
 [통과 기준]
 - 총점 25점 기준 15점 이상 PASS
-- 어느 한 항목이라도 1점 이하면 즉시 FAIL (치명적 결함)
+- gradient/lighting/background/sharpness 중 하나라도 1점 이하면 즉시 FAIL
+- model_vibe는 즉시 FAIL 대상 제외 (뒷면 사진 보호)
 
 [각도 감지]
 - "back_side": 뒷면 또는 측면 (페이드 그라데이션 중심)
 - "front"    : 정면 (스타일링 중심)
 - "unknown"  : 판단 불가
+
+[바버샵 비관련 사진 처리]
+- 헤어컷/시술과 무관한 사진 (풍경, 사물, 음식 등): gradient=0, 즉시 FAIL
+- 여성 헤어, 펌, 염색 사진: gradient=1, sharpness 기준으로만 평가
 
 [응답 형식] JSON으로만:
 {
@@ -435,8 +453,9 @@ async def _save_pass_result(shop_id: str, photo: dict, result: dict):
             "total_score":    result["total_score"],
             "fade_cut_score": result["fade_cut_score"],
             "detected_angle": result["detected_angle"],
+            "scores":         result.get("scores", {}),   # [FIX] photo_select에서 참조
             "is_usable":      True,
-            "filter_status":  "passed",   # [FIX] 추가
+            "filter_status":  "passed",
             "analyzed_at":    now_kst
         }
         save_photo_meta(shop_id, doc)
@@ -456,6 +475,7 @@ async def _save_fail_result(shop_id: str, photo: dict, reason: str = "stage2_fai
             return
     except Exception:
         pass
+
     from services.cosmos_db import save_photo_meta
     try:
         now_kst = datetime.now(KST).isoformat()
@@ -466,7 +486,7 @@ async def _save_fail_result(shop_id: str, photo: dict, reason: str = "stage2_fai
             "stage1_pass":   False if "stage1" in reason else True,
             "stage2_pass":   False,
             "is_usable":     False,
-            "filter_status": "failed",    # [FIX] 추가
+            "filter_status": "failed",
             "analyzed_at":   now_kst,
             "fail_reason":   reason
         }
