@@ -207,8 +207,12 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 .vscode/
+# Google OAuth 토큰 / 크리덴셜 (절대 커밋 금지)
 token.json
 credentials.json
+services/credentials.json
+services/credentials_desktop.json
+services/token_output.txt
 
 seed_embeddings.py
 .claude/

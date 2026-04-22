@@ -8,6 +8,7 @@
 """
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from typing import Optional, List
 from services.cosmos_db import get_post_by_shop
@@ -83,11 +84,11 @@ async def agent_review(req: AgentReviewRequest):
     try:
         if req.action == "cancel":
             await _handle_cancel(req.shop_id, req.post_id)
-            return {"post_id": req.post_id, "status": "cancelled"}
+            return {"status": "success", "message": "게시물이 취소되었습니다."}
 
         caption_to_use = req.edited_caption if req.action == "edit" else None
         await _handle_upload(req.shop_id, req.post_id, caption_to_use)
-        return {"post_id": req.post_id, "status": "uploaded"}
+        return {"status": "success", "message": "인스타그램 업로드가 완료되었습니다."}
 
     except Exception as e:
         raise HTTPException(500, f"검토 처리 실패: {str(e)}")
@@ -215,6 +216,76 @@ async def _handle_cancel(shop_id: str, post_id: str):
                 "status":    "cancel"
             }
         )
+
+
+def _html_result(success: bool, title: str, message: str) -> HTMLResponse:
+    """이메일 액션 결과 페이지 — 브라우저에서 버튼 클릭 시 표시"""
+    color  = "#28a745" if success else "#dc3545"
+    icon   = "✅" if success else "❌"
+    return HTMLResponse(content=f"""<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{title}</title>
+  <style>
+    body {{ margin:0; font-family:Arial,sans-serif; background:#f4f4f4;
+           display:flex; align-items:center; justify-content:center; min-height:100vh; }}
+    .card {{ background:#fff; border-radius:10px; padding:48px 40px; text-align:center;
+             max-width:400px; box-shadow:0 2px 12px rgba(0,0,0,.1); }}
+    .icon {{ font-size:48px; margin-bottom:16px; }}
+    h1 {{ margin:0 0 12px; color:#222; font-size:22px; }}
+    p  {{ margin:0; color:#666; font-size:15px; line-height:1.6; }}
+    .badge {{ display:inline-block; margin-top:20px; padding:4px 12px;
+              border-radius:20px; font-size:12px; color:#fff; background:{color}; }}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="icon">{icon}</div>
+    <h1>{title}</h1>
+    <p>{message}</p>
+    <div class="badge">BYBAEK</div>
+  </div>
+</body>
+</html>""")
+
+
+# GET /api/agent/email-action  (이메일 버튼 클릭 처리)
+@router.get("/email-action")
+async def email_action(action: str, shop_id: str, post_id: str, token: str):
+    """
+    이메일 내 승인/거절 버튼 클릭 시 호출되는 엔드포인트.
+    - action=approve : 인스타그램 바로 업로드
+    - action=reject  : 게시물 취소
+    HMAC 토큰으로 위변조를 방지합니다.
+    """
+    from services.email_service import verify_email_token
+
+    if action not in ("approve", "reject"):
+        return _html_result(False, "잘못된 요청", "유효하지 않은 action입니다.")
+
+    if not verify_email_token(shop_id, post_id, token):
+        return _html_result(False, "인증 실패", "토큰이 유효하지 않습니다. 이메일 링크를 다시 확인해 주세요.")
+
+    try:
+        if action == "approve":
+            await _handle_upload(shop_id, post_id)
+            return _html_result(
+                True,
+                "승인 완료!",
+                "인스타그램 업로드가 완료되었습니다.<br>이 창을 닫아도 됩니다."
+            )
+        else:
+            await _handle_cancel(shop_id, post_id)
+            return _html_result(
+                True,
+                "거절 완료",
+                "게시물 자동 업로드가 취소되었습니다.<br>이 창을 닫아도 됩니다."
+            )
+
+    except Exception as e:
+        return _html_result(False, "처리 실패", f"오류가 발생했습니다: {str(e)}")
 
 
 @router.get("/metrics/{shop_id}")

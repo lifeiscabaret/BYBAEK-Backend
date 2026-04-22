@@ -121,3 +121,4 @@ async def get_my_info(request: Request):
     save_auth(ms_user_id, auth_data)
 
     return {"shop_id": ms_user_id, "is_new": not existing_user}
+
