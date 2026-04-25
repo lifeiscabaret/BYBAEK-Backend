@@ -81,18 +81,32 @@ def save_photo(shop_id: str, photo_data: dict) -> bool:
     container = get_cosmos_container("Photo")
     raw_url = photo_data['blob_url']
     clean_url = raw_url.split("?")[0]
-    item = {
-        "id": photo_data['photo_id'],
-        "shop_id": shop_id,
-        "blob_url": clean_url,
-        "onedrive_url": photo_data.get('onedrive_url', ''),
-        "original_name": photo_data['name'],
-        "used_yn": False,
-        "is_usable": photo_data.get('is_usable', None),
-        "filter_status": photo_data.get('filter_status', 'pending'),
-        "created_at": photo_data['last_modified']
-    }
+    photo_id = photo_data['photo_id']
+
     try:
+        # [FIX] 기존 데이터 확인 - passed/failed면 필터링 결과 보존
+        try:
+            existing = container.read_item(item=photo_id, partition_key=shop_id)
+            if existing.get("filter_status") in ("passed", "failed"):
+                existing["blob_url"] = clean_url
+                existing["updated_at"] = datetime.utcnow().isoformat()
+                container.upsert_item(body=existing)
+                return True
+        except Exception:
+            pass  # 신규 사진이면 아래에서 새로 생성
+
+        # 신규 사진 저장
+        item = {
+            "id": photo_id,
+            "shop_id": shop_id,
+            "blob_url": clean_url,
+            "onedrive_url": photo_data.get('onedrive_url', ''),
+            "original_name": photo_data['name'],
+            "used_yn": False,
+            "is_usable": None,
+            "filter_status": "pending",
+            "created_at": photo_data['last_modified']
+        }
         container.upsert_item(body=item)
         return True
     except Exception as e:
