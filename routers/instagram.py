@@ -9,8 +9,6 @@ from fastapi import APIRouter, HTTPException, status
 from PIL import Image
 from pydantic import BaseModel, HttpUrl
 from azure.storage.blob import BlobServiceClient, ContentSettings
-
-from services.blob_storage import generate_sas_url
 from utils.logging import logger
 
 router = APIRouter()
@@ -272,11 +270,11 @@ def publish_photos(ig_user_id: str, access_token: str,
 @router.post("/upload", response_model=InstagramPhotoPublishResponse,
              status_code=status.HTTP_201_CREATED)
 async def upload(req: InstagramPhotoPublishRequest):
-    sas_urls = [generate_sas_url(str(url)) for url in req.image_urls]
+    # SAS URL 변환 제거 - _normalize_aspect_ratio 내부에서 처리
     media_id = publish_photos(
         ig_user_id=req.user_id,
         access_token=req.access_token,
-        image_urls=sas_urls,
+        image_urls=[str(url) for url in req.image_urls],  # 원본 URL 그대로
         caption=req.caption,
     )
     if not media_id:
