@@ -41,7 +41,6 @@ async def post_writer_agent(
         previous_draft=previous_draft,
         feedback=feedback
     )
-    
 
     chat_history = ChatHistory()
     chat_history.add_system_message(system_prompt)
@@ -85,6 +84,12 @@ async def post_writer_agent(
         result.pop("needs_retry", None)
         result.pop("retry_reason", None)
 
+        # CTA는 DB 값으로 강제 덮어씌우기 (GPT가 임의로 바꾸지 못하게)
+        cta_fixed = brand_settings.get("cta", "").strip()
+        if cta_fixed:
+            result["cta"] = cta_fixed
+            print(f"[post_writer] CTA 고정 적용 → '{cta_fixed}'")
+
         print(f"[post_writer] 완료 → 캡션 {len(result.get('caption', ''))}자, "
               f"해시태그 {len(result.get('hashtags', []))}개")
         return result
@@ -92,6 +97,7 @@ async def post_writer_agent(
     except Exception as e:
         print(f"[post_writer] GPT 실패 ({e}) → fallback 캡션 반환")
         return _fallback_draft(brand_settings, trend_data)
+
 
 # [프롬프트] 통합 프롬프트 구성
 def _build_prompt(
@@ -112,24 +118,27 @@ def _build_prompt(
     """
 
     # ── 시스템 프롬프트 ──
-    # ✅ brand_tone 리스트 처리
+
+    # [FIX 1] brand_tone: 리스트 항목을 / 로 구분해서 GPT가 각 톤을 명확히 인식
     brand_tone = brand_settings.get("brand_tone", "친근하고 편안한 말투")
     if isinstance(brand_tone, list):
-        brand_tone = " ".join(brand_tone)
-    
-    # ✅ forbidden_words 리스트 처리
+        brand_tone = " / ".join(brand_tone)  # 공백 대신 /로 구분 (혼합 톤 명확히 전달)
+
+    # forbidden_words 리스트 처리
     forbidden_words = brand_settings.get("forbidden_words", [])
     if isinstance(forbidden_words, str):
         forbidden_words = [w.strip() for w in forbidden_words.split(",")]
     forbidden_str = ", ".join(forbidden_words) if forbidden_words else "없음"
-    
+
     feed_style    = brand_settings.get("feed_style", {})
     emoji_usage   = feed_style.get("emoji_usage", "적당히")
     caption_len   = feed_style.get("caption_length", "2~4줄")
     hashtag_count = feed_style.get("hashtag_count", 10)
 
-    # AG-040: 온보딩 추가 필드
+    # [FIX 2] hashtag_style: 리스트 항목을 모두 문자열로 변환
     hashtag_style = brand_settings.get("hashtag_style", "감성형")
+    if isinstance(hashtag_style, list):
+        hashtag_style = ", ".join(hashtag_style)  # 리스트 → 쉼표 구분 문자열
 
     preferred_styles = brand_settings.get("preferred_styles", [])
     if isinstance(preferred_styles, str):
@@ -141,17 +150,26 @@ def _build_prompt(
         exclude_conditions = [s.strip() for s in exclude_conditions.split(",") if s.strip()]
     exclude_str = ", ".join(exclude_conditions) if exclude_conditions else "없음"
 
+    # [FIX 3] CTA 고정 명시 — 시스템 프롬프트에서부터 강제
+    cta_fixed = brand_settings.get("cta", "").strip()
+    cta_instruction = f"반드시 아래 문구 그대로 사용, 절대 바꾸지 마:\n  → \"{cta_fixed}\"" if cta_fixed else "자연스러운 예약 유도 문구"
+
+    # shop_intro 있으면 시스템 프롬프트에 포함 (할루시네이션 오탐 방지용)
+    shop_intro = brand_settings.get("shop_intro", "").strip()
+    shop_intro_line = f"\n[샵 소개 - 이 내용은 사실이므로 캡션에 자연스럽게 활용 가능]\n{shop_intro}" if shop_intro else ""
+
     # 시스템 프롬프트 구성
     system_prompt = f"""너는 바버샵 사장님 대신 인스타 게시물을 써주는 사람이야.
 사장님이 바빠서 직접 못 쓰니까 네가 대신 쓰는 거야.
+{shop_intro_line}
 
 [절대 금지]
-- 경력 연수 지어내기 ("22년 경력" 등) — DB에 없으면 절대 쓰지 마
+- shop_intro에 없는 경력 연수 지어내기 — DB에 없으면 절대 쓰지 마
 - 예약 현황 지어내기 ("오늘 3자리 남음" 등) — 실제 현황 모름
 - "정교한", "선사하는", "완성하는", "트렌디한" 같은 AI 냄새 나는 표현
 - 수상 이력, 인증, 특허 — 확인 안 된 거 절대 쓰지 마
 
-[말투]
+[말투 - 이 톤들을 혼합해서 자연스럽게]
 - 실제 바버샵 사장님이 인스타에 쓸 법한 말투로 — 짧고 편하게
 - 브랜드 톤: {brand_tone}
 - 이모지: {emoji_usage}
@@ -162,20 +180,23 @@ def _build_prompt(
 - 금칙어: {forbidden_str}
 - 언급 금지: {exclude_str}
 
-[해시태그]
-- {hashtag_style} 스타일 / 총 {hashtag_count}개
+[해시태그 - 총 {hashtag_count}개]
+- 방향: {hashtag_style}
+- 위 방향에 명시된 키워드(지역명, 영문 등)는 반드시 포함할 것
+
+[CTA - {cta_instruction}]
 
 [출력 — JSON만, 다른 텍스트 없이]
 {{
   "caption": "첫 문장에 스타일명 포함, {caption_len}, 자연스러운 말투",
   "hashtags": ["#페이드컷", "#바버샵", ... 총 {hashtag_count}개],
-  "cta": "예약 유도 문구"
+  "cta": "{cta_fixed if cta_fixed else '예약 유도 문구'}"
 }}"""
 
     # ── 유저 프롬프트 ──
     parts = []
 
-     # 1. 오늘 트렌드
+    # 1. 오늘 트렌드
     trend_summary = trend_data.get("trend", "")
     weather       = trend_data.get("weather", "")
     promo         = trend_data.get("promo", "")
@@ -186,7 +207,7 @@ def _build_prompt(
     if promo:
         parts.append(f"[바버샵 홍보 포인트]\n{promo}")
 
-    # 샵 차별점 - shop_intro 있을 때만 반영 
+    # 샵 차별점 - brand_differentiation 있을 때만 반영
     brand_diff = brand_settings.get("brand_differentiation", "").strip()
     if brand_diff:
         parts.append(f"[우리 샵 차별점 - 첫 문장에 자연스럽게 녹여줘]\n{brand_diff}")
@@ -212,26 +233,26 @@ def _build_prompt(
         tone_rules       = rag_context.get("tone_rules", "")
         examples         = rag_context.get("examples", [])
         hashtag_patterns = rag_context.get("hashtag_patterns", [])
-        
+
         if hashtag_patterns:
             parts.append(f"[자주 쓰는 해시태그]\n{' '.join(hashtag_patterns[:10])}")
 
-        # 성과 인사이트 
+        # 성과 인사이트
         if rag_context.get("performance_insights"):
             parts.append(f"[과거 성과 패턴 - 이 패턴대로 써줘]\n{rag_context['performance_insights']}")
-            
+
         if tone_rules:
             parts.append(f"[이 샵의 말투 패턴]\n{tone_rules}")
 
         if examples:
-            ex_text = f"[이 샵의 과거 게시물 — 이 말투와 비슷하게 써줘]\n"
+            ex_text = "[이 샵의 과거 게시물 — 이 말투와 비슷하게 써줘]\n"
             for i, ex in enumerate(examples[:3], 1):
                 caption  = ex.get("caption", "")
                 hashtags = ex.get("hashtags", [])
                 ex_text += f"{i}. {caption[:80]}{'...' if len(caption) > 80 else ''}\n"
                 if hashtags:
                     ex_text += f"   해시태그: {' '.join(hashtags[:5])}\n"
-            parts.append(ex_text) 
+            parts.append(ex_text)
 
     # 4. 최근 게시물 말투 참고
     if recent_posts:
@@ -284,16 +305,20 @@ def _validate_and_clean(result: dict, brand_settings: dict) -> dict:
     1) 금칙어 (브랜드 설정)  → 자동 제거
     2) 주제 이탈 키워드      → 자동 제거 + 경고
     3) 과장 표현             → 자동 제거 + 경고
+
+    [FIX 4] shop_intro에 명시된 내용은 할루시네이션 오탐에서 제외
     """
     # forbidden_words 리스트 처리
     forbidden_words = brand_settings.get("forbidden_words", [])
     if isinstance(forbidden_words, str):
         forbidden_words = [w.strip() for w in forbidden_words.split(",")]
 
+    # [FIX 4] shop_intro 값 미리 추출 — 오탐 방지용
+    shop_intro = brand_settings.get("shop_intro", "").strip()
+
     caption = result.get("caption", "")
 
     # 0) 할루시네이션 패턴 감지 → 재생성 신호 (제거 말고 플래그)
-    import re
     hallucination_patterns = [
         (r'\d+년\s*경력',   "경력 연수 할루시네이션"),
         (r'\d+자리\s*남',   "예약 현황 할루시네이션"),
@@ -301,7 +326,13 @@ def _validate_and_clean(result: dict, brand_settings: dict) -> dict:
         (r'오늘만\s*할인',   "근거없는 할인 할루시네이션"),
     ]
     for pattern, label in hallucination_patterns:
-        if re.search(pattern, caption):
+        match = re.search(pattern, caption)
+        if match:
+            # [FIX 4] shop_intro에 이미 있는 내용이면 오탐 → 통과
+            matched_text = match.group(0)
+            if shop_intro and matched_text in shop_intro:
+                print(f"[post_writer] '{matched_text}' → shop_intro에 명시된 사실, 통과")
+                continue
             print(f"[post_writer] ⚠️  {label} 감지 → needs_retry=True")
             result["needs_retry"] = True
             result["retry_reason"] = label
