@@ -1,9 +1,10 @@
-from fastapi import APIRouter, HTTPException, Request, Response, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, Response, status
 from pydantic import BaseModel
 from utils.logging import logger
 import os
 import requests
 from services.cosmos_db import save_auth, get_auth
+from agents.insta_analyzer import analyze_instagram_history
 import logging
 from datetime import datetime
 from fastapi.responses import RedirectResponse
@@ -19,7 +20,7 @@ async def ms_callback():
     return RedirectResponse(url=f"{frontend_url}/auth/callback")
 
 @router.get("/instagram")
-async def instagram_business_login(code: str, res: Response, fast_req: Request):
+async def instagram_business_login(code: str, res: Response, fast_req: Request, background_tasks: BackgroundTasks):
 
     access_token = fast_req.headers.get("x-ms-token-aad-access-token")
     logger.info(f"access token = {access_token}")
@@ -81,6 +82,9 @@ async def instagram_business_login(code: str, res: Response, fast_req: Request):
         "insta_updated_at":   datetime.utcnow().isoformat()
     }
     save_auth(ms_id, insta_data)
+
+    # 백그라운드에서 과거 게시물 분석 실행
+    background_tasks.add_task(analyze_instagram_history, ms_id)
 
     frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
     return RedirectResponse(url=f"{frontend_url}/auth/callback?type=instagram")
