@@ -158,10 +158,31 @@ def _build_prompt(
     shop_intro = brand_settings.get("shop_intro", "").strip()
     shop_intro_line = f"\n[샵 소개 - 이 내용은 사실이므로 캡션에 자연스럽게 활용 가능]\n{shop_intro}" if shop_intro else ""
 
+    # insta_style_profile: 과거 게시물 분석 결과를 few-shot으로 주입
+    insta_profile = brand_settings.get("insta_style_profile", {})
+    insta_style_block = ""
+    if insta_profile:
+        tone_desc = insta_profile.get("tone_description", "")
+        tone_examples = insta_profile.get("tone_examples", [])
+        emoji_pattern = insta_profile.get("emoji_pattern", "")
+
+        lines = []
+        if tone_desc:
+            lines.append(f"- 말투 특징: {tone_desc}")
+        if emoji_pattern:
+            lines.append(f"- 이모지 습관: {emoji_pattern}")
+        if tone_examples:
+            lines.append("- 실제 사장님 캡션 예시:")
+            for ex in tone_examples[:3]:
+                lines.append(f"  \"{ex}\"")
+
+        if lines:
+            insta_style_block = "\n\n[이 사장님의 실제 인스타 말투 - 이 말투와 동일하게 써줘]\n" + "\n".join(lines)
+
     # 시스템 프롬프트 구성
     system_prompt = f"""너는 바버샵 사장님 대신 인스타 게시물을 써주는 사람이야.
 사장님이 바빠서 직접 못 쓰니까 네가 대신 쓰는 거야.
-{shop_intro_line}
+{shop_intro_line}{insta_style_block}
 
 [절대 금지]
 - shop_intro에 없는 경력 연수 지어내기 — DB에 없으면 절대 쓰지 마
