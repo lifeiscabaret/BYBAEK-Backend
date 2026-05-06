@@ -1,4 +1,5 @@
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, Response, status
+from fastapi import APIRouter, HTTPException, Request, Response, status
+from starlette.background import BackgroundTask
 from pydantic import BaseModel
 from utils.logging import logger
 import os
@@ -20,7 +21,7 @@ async def ms_callback():
     return RedirectResponse(url=f"{frontend_url}/auth/callback")
 
 @router.get("/instagram")
-async def instagram_business_login(code: str, res: Response, fast_req: Request, background_tasks: BackgroundTasks):
+async def instagram_business_login(code: str, res: Response, fast_req: Request):
 
     access_token = fast_req.headers.get("x-ms-token-aad-access-token")
     logger.info(f"access token = {access_token}")
@@ -83,11 +84,11 @@ async def instagram_business_login(code: str, res: Response, fast_req: Request, 
     }
     save_auth(ms_id, insta_data)
 
-    # 백그라운드에서 과거 게시물 분석 실행
-    background_tasks.add_task(analyze_instagram_history, ms_id)
-
     frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
-    return RedirectResponse(url=f"{frontend_url}/auth/callback?type=instagram")
+    return RedirectResponse(
+        url=f"{frontend_url}/auth/callback?type=instagram",
+        background=BackgroundTask(analyze_instagram_history, ms_id)
+    )
 
 
 @router.get("/me")
