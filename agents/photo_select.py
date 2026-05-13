@@ -122,6 +122,23 @@ def _categorize_by_angle(candidates: list) -> dict:
     front.sort(key=lambda x: x.get("_sort_score", 0), reverse=True)
     vibe.sort(key=lambda x: x.get("_vibe_score", 0), reverse=True)
     
+    # 쿨다운 완화: 모든 카테고리가 비어있으면 가장 오래된 사진 사용
+    if not back_side and not front and not vibe:
+        print("[photo_select] 쿨다운 완화 → 가장 오래된 사진 사용")
+        sorted_by_used = sorted(
+            candidates,
+            key=lambda x: x.get("used_at") or "2000-01-01T00:00:00"
+        )
+        oldest = sorted_by_used[:5]
+        for photo in oldest:
+            angle = photo.get("detected_angle", "unknown")
+            if angle == "back_side":
+                back_side.append(photo)
+            elif angle == "front":
+                front.append(photo)
+            else:
+                vibe.append(photo)
+
     return {
         "back_side": back_side,
         "front": front,
@@ -157,8 +174,14 @@ async def _apply_director_pattern(
     base_selection = fade_2 + style_1 + vibe_1
     
     # 중복 제거 (vibe에 이미 포함된 사진 제외)
-    selected_ids = {p["id"] for p in base_selection}
-    base_selection = [p for i, p in enumerate(base_selection) if p["id"] not in list(selected_ids)[:i]]
+    seen_ids = set()
+    deduped = []
+    for p in base_selection:
+        if p["id"] not in seen_ids:
+            seen_ids.add(p["id"])
+            deduped.append(p)
+    base_selection = deduped
+    selected_ids = seen_ids
     
     # min 미달 시 보충
     if len(base_selection) < min_count:
