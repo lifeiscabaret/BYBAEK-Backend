@@ -423,6 +423,7 @@ def save_photo_meta(shop_id: str, doc: dict) -> bool:
             "stage2_pass": doc.get("stage2_pass"),
             "fail_reason": doc.get("fail_reason"),
             "filter_status": doc.get("filter_status", "failed"),
+            "used_at": doc.get("used_at", existing_item.get("used_at")),
             "updated_at": datetime.utcnow().isoformat()
         })
         container.upsert_item(body=existing_item)
