@@ -414,15 +414,16 @@ def save_photo_meta(shop_id: str, doc: dict) -> bool:
     try:
         photo_id = doc.get('id')
         existing_item = container.read_item(item=photo_id, partition_key=shop_id)
+        # [FIX] doc에 없는 키는 기존 값 유지 (is_usable, filter_status 덮어쓰기 방지)
         existing_item.update({
-            "fade_cut_score": doc.get("fade_cut_score", 0),
-            "detected_angle": doc.get("detected_angle", "unknown"),
-            "style_tags": doc.get("stage2_tags", doc.get("style_tags", [])),
-            "is_usable": doc.get("is_usable", False),
-            "stage1_pass": doc.get("stage1_pass", False),
-            "stage2_pass": doc.get("stage2_pass"),
-            "fail_reason": doc.get("fail_reason"),
-            "filter_status": doc.get("filter_status", "failed"),
+            "fade_cut_score": doc.get("fade_cut_score", existing_item.get("fade_cut_score")),
+            "detected_angle": doc.get("detected_angle", existing_item.get("detected_angle")),
+            "style_tags": doc.get("stage2_tags", doc.get("style_tags", existing_item.get("style_tags", []))),
+            "is_usable": doc.get("is_usable") if doc.get("is_usable") is not None else existing_item.get("is_usable"),
+            "stage1_pass": doc.get("stage1_pass") if doc.get("stage1_pass") is not None else existing_item.get("stage1_pass"),
+            "stage2_pass": doc.get("stage2_pass") if doc.get("stage2_pass") is not None else existing_item.get("stage2_pass"),
+            "fail_reason": doc.get("fail_reason", existing_item.get("fail_reason")),
+            "filter_status": doc.get("filter_status", existing_item.get("filter_status")),
             "used_at": doc.get("used_at", existing_item.get("used_at")),
             "updated_at": datetime.utcnow().isoformat()
         })
