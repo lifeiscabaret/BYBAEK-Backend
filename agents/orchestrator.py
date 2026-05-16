@@ -468,11 +468,17 @@ async def _get_brand_settings(shop_id: str) -> dict:
         "brand_tone": shop.get("brand_tone", "친근하고 편안한 말투"),
         "forbidden_words": to_list(shop.get("forbidden_words")),
         "preferred_styles": to_list(shop.get("preferred_styles")),
+        "exclude_conditions": to_list(shop.get("exclude_conditions")),
         "cta": shop.get("cta", "DM으로 예약 문의주세요"),
         "photo_range": {"min": 1, "max": 5},
         "feed_style": shop.get("feed_style", {}),
+        "hashtag_style": shop.get("hashtag_style", "감성형"),
+        "must_include_hashtags": to_list(shop.get("must_include_hashtags")),
+        "shop_intro": shop.get("shop_intro", ""),
         "brand_differentiation": shop.get("shop_intro", ""),
-        "insta_review_bfr_upload_yn": str(shop.get("insta_review_bfr_upload_yn", "Y")).upper() != "N"  # DB값 "Y"/"N" 문자열 대응
+        "insta_style_profile": shop.get("insta_style_profile", {}),
+        "rag_reference": shop.get("rag_reference", ""),
+        "insta_review_bfr_upload_yn": str(shop.get("insta_review_bfr_upload_yn", "Y")).upper() != "N"
     }
 
 
