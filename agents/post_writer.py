@@ -344,6 +344,9 @@ def _validate_and_clean(result: dict, brand_settings: dict) -> dict:
     if isinstance(forbidden_words, str):
         forbidden_words = [w.strip() for w in forbidden_words.split(",")]
 
+    must_include_hashtags = brand_settings.get("must_include_hashtags", [])
+    print(f"[post_writer] must_include_hashtags 수신값: {must_include_hashtags}")
+
     # [FIX 4] shop_intro 값 미리 추출 — 오탐 방지용
     shop_intro = brand_settings.get("shop_intro", "").strip()
 
@@ -418,6 +421,7 @@ def _validate_and_clean(result: dict, brand_settings: dict) -> dict:
         if normalized not in result["hashtags"]:
             result["hashtags"].append(normalized)
 
+    print(f"[post_writer] 최종 hashtags: {result['hashtags']}")
     return result
 
 
