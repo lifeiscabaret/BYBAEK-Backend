@@ -1,12 +1,16 @@
 import asyncio
 import sys
+import os
 sys.path.insert(0, "/Users/lifeiscabaret/bybaek-backend")
 
 from services.cosmos_db import get_all_photos_by_shop
 from agents.photo_filter import run_photo_filter
 from collections import Counter
 
-SHOP_ID = "00000000-0000-0000-0718-3a306722d45c"
+SHOP_ID = os.environ.get("TEST_SHOP_ID", "")
+if not SHOP_ID:
+    print("Usage: TEST_SHOP_ID=xxx python run_photo_filter_pending.py")
+    sys.exit(1)
 
 async def main():
     photos = get_all_photos_by_shop(SHOP_ID)
