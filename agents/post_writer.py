@@ -140,6 +140,14 @@ def _build_prompt(
     if isinstance(hashtag_style, list):
         hashtag_style = ", ".join(hashtag_style)  # 리스트 → 쉼표 구분 문자열
 
+    # 필수 해시태그 추출
+    must_include_hashtags = brand_settings.get("must_include_hashtags", [])
+    if not must_include_hashtags and hashtag_style:
+        must_include_hashtags = [
+            w.strip() for w in re.findall(r'#\S+', hashtag_style)
+        ]
+    must_hashtag_str = ", ".join(must_include_hashtags) if must_include_hashtags else ""
+
     preferred_styles = brand_settings.get("preferred_styles", [])
     if isinstance(preferred_styles, str):
         preferred_styles = [s.strip() for s in preferred_styles.split(",") if s.strip()]
@@ -178,6 +186,7 @@ def _build_prompt(
 
         if lines:
             insta_style_block = "\n\n[이 사장님의 실제 인스타 말투 - 이 말투와 동일하게 써줘]\n" + "\n".join(lines)
+            insta_style_block += "\n⚠️ 위 실제 말투 예시와 최대한 동일하게. 광고체('어울립니다', '완성됩니다' 등) 절대 금지."
 
     # 시스템 프롬프트 구성
     system_prompt = f"""너는 바버샵 사장님 대신 인스타 게시물을 써주는 사람이야.
@@ -204,6 +213,7 @@ def _build_prompt(
 [해시태그 - 총 {hashtag_count}개]
 - 방향: {hashtag_style}
 - 위 방향에 명시된 키워드(지역명, 영문 등)는 반드시 포함할 것
+- 필수 포함 (반드시): {must_hashtag_str if must_hashtag_str else "없음"}
 
 [CTA - {cta_instruction}]
 
@@ -395,6 +405,18 @@ def _validate_and_clean(result: dict, brand_settings: dict) -> dict:
         tag for tag in hashtags
         if not any(word in tag for word in all_banned)
     ]
+
+    # 필수 해시태그 강제 추가
+    must_include_hashtags = brand_settings.get("must_include_hashtags", [])
+    if not must_include_hashtags:
+        hashtag_style = brand_settings.get("hashtag_style", "")
+        if isinstance(hashtag_style, list):
+            hashtag_style = ", ".join(hashtag_style)
+        must_include_hashtags = [w.strip() for w in re.findall(r'#\S+', hashtag_style)]
+    for tag in must_include_hashtags:
+        normalized = tag if tag.startswith("#") else f"#{tag}"
+        if normalized not in result["hashtags"]:
+            result["hashtags"].append(normalized)
 
     return result
 
