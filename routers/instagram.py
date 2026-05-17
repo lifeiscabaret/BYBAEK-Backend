@@ -192,11 +192,14 @@ def wait_until_ready(ig_user_id: str, creation_id: str, access_token: str) -> No
 
 
 def create_image_container(ig_user_id: str, access_token: str,
-                           image_url: str, is_carousel_item: bool = False) -> str:
+                           image_url: str, is_carousel_item: bool = False,
+                           caption: str = None) -> str:
     headers = {"Content-Type": "application/json", "Authorization": f"Bearer {access_token}"}
     data    = {"image_url": str(image_url)}
     if is_carousel_item:
         data["is_carousel_item"] = "true"
+    elif caption:
+        data["caption"] = caption
 
     result     = graph_post(f"/{ig_user_id}/media", headers=headers, data=data)
     creation_id = result.get("id")
@@ -245,7 +248,8 @@ def publish_photos(ig_user_id: str, access_token: str,
     try:
         if len(normalized_urls) == 1:
             creation_id = create_image_container(ig_user_id, access_token,
-                                                 normalized_urls[0], is_carousel_item=False)
+                                                 normalized_urls[0], is_carousel_item=False,
+                                                 caption=caption)
             wait_until_ready(ig_user_id, creation_id, access_token)
             media_id = publish_container(ig_user_id, creation_id, access_token)
             logger.info(f"[instagram] 단일 이미지 업로드 성공 → media_id={media_id}")

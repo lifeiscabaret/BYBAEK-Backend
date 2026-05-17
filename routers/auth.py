@@ -91,6 +91,23 @@ async def instagram_business_login(code: str, res: Response, fast_req: Request):
     )
 
 
+@router.get("/status/{shop_id}")
+async def get_auth_status(shop_id: str):
+    auth = get_auth(shop_id)
+    if not auth:
+        raise HTTPException(status_code=404, detail="샵 정보를 찾을 수 없습니다.")
+
+    is_onedrive_connected = bool(
+        auth.get("one_delta_link") or auth.get("onedrive_token")
+    )
+    is_insta_connected = bool(auth.get("insta_access_token"))
+
+    return {
+        "is_onedrive_connected": is_onedrive_connected,
+        "is_insta_connected": is_insta_connected,
+    }
+
+
 @router.get("/me")
 async def get_my_info(request: Request):
     ms_user_id   = request.headers.get("X-MS-CLIENT-PRINCIPAL-ID")
