@@ -242,7 +242,8 @@ def save_onboarding(shop_id: str, data: dict) -> bool:
         "hashtag_style", "cta", "shop_intro",
         "forbidden_words", "locale", "city", "language",
         "is_kakao_connected", "is_insta_connected", "is_gmail_connected",
-        "rag_reference", "is_ms_connected", "owner_email", "district"
+        "rag_reference", "is_ms_connected", "owner_email", "district",
+        "must_include_hashtags"
     ]
 
     try:
