@@ -402,13 +402,30 @@ async def _get_brand_settings(shop_id: str) -> dict:
         if isinstance(val, str) and val: return [v.strip() for v in val.split(",")]
         return []
     shop = data.get("shop_info", {})
+
+    # brand_tone 배열에서 이모지 사용 여부 파싱
+    brand_tone_list = to_list(shop.get("brand_tone"))
+    emoji_map = {"자주 씀": "자주", "가끔 씀": "가끔", "안 씀": "안 씀"}
+    emoji_usage = next(
+        (emoji_map[v] for v in brand_tone_list if v in emoji_map),
+        "가끔"
+    )
+
     return {
-        "brand_tone":                 shop.get("brand_tone", "친근하고 편안한 말투"),
+        "brand_tone":                 brand_tone_list,
         "forbidden_words":            to_list(shop.get("forbidden_words")),
         "preferred_styles":           to_list(shop.get("preferred_styles")),
+        "exclude_conditions":         to_list(shop.get("exclude_conditions")),
+        "hashtag_style":              to_list(shop.get("hashtag_style")),
+        "must_include_hashtags":      to_list(shop.get("must_include_hashtags")),
         "cta":                        shop.get("cta", "DM으로 예약 문의주세요"),
+        "shop_intro":                 shop.get("shop_intro", ""),
         "photo_range":                {"min": 1, "max": 5},
-        "feed_style":                 shop.get("feed_style", {}),
+        "feed_style": {
+            "emoji_usage":    emoji_usage,
+            "caption_length": shop.get("caption_length", "2~4줄"),
+            "hashtag_count":  shop.get("hashtag_count", 10),
+        },
         "brand_differentiation":      shop.get("shop_intro", ""),
         "insta_review_bfr_upload_yn": str(shop.get("insta_review_bfr_upload_yn", "Y")).upper() != "N"
     }
