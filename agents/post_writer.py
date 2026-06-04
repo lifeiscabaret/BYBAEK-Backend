@@ -3,6 +3,7 @@ import json
 import re
 from semantic_kernel import Kernel
 from semantic_kernel.connectors.ai.open_ai import AzureChatCompletion
+from semantic_kernel.connectors.ai.azure_ai_inference import AzureAIInferenceChatCompletion
 from semantic_kernel.contents import ChatHistory
 
 # [메인] orchestrator에서 호출
@@ -47,7 +48,7 @@ async def post_writer_agent(
     chat_history.add_user_message(user_prompt)
 
     try:
-        chat_service = kernel.get_service("azure_openai")
+        chat_service = kernel.get_service("claude")
         settings = chat_service.instantiate_prompt_execution_settings()
         settings.temperature = 0.85   # 자연스러운 말투 + 일관성 균형
         settings.max_tokens = 600
@@ -447,21 +448,12 @@ def _fallback_draft(brand_settings: dict, trend_data: dict) -> dict:
 
 # [커널 초기화]
 def _init_kernel(tier: str = "mini") -> Kernel:
-    """
-    Semantic Kernel 초기화
-    orchestrator에서 tier 결정 후 호출
-    mini: GPT-4.1-mini (기본)
-    full: GPT-4.1 (승격 시)
-    """
-    deployment = os.getenv(
-        f"AZURE_OPENAI_DEPLOYMENT_{tier.upper()}",
-        os.getenv("AZURE_OPENAI_DEPLOYMENT")
-    )
     kernel = Kernel()
-    kernel.add_service(AzureChatCompletion(
-        service_id="azure_openai",
-        deployment_name=deployment,
-        endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
-        api_key=os.getenv("AZURE_OPENAI_KEY")
+    # Claude Sonnet 4.6 (Azure Foundry) - 글쓰기 전용
+    kernel.add_service(AzureAIInferenceChatCompletion(
+        service_id="claude",
+        ai_model_id="claude-sonnet-4-6",
+        endpoint=os.getenv("AZURE_CLAUDE_ENDPOINT"),
+        api_key=os.getenv("AZURE_CLAUDE_KEY"),
     ))
     return kernel
