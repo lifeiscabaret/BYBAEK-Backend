@@ -243,7 +243,7 @@ def save_onboarding(shop_id: str, data: dict) -> bool:
         "forbidden_words", "locale", "city", "language",
         "is_kakao_connected", "is_insta_connected", "is_gmail_connected",
         "rag_reference", "is_ms_connected", "owner_email", "district",
-        "must_include_hashtags"
+        "must_include_hashtags", "photo_range_max"
     ]
 
     try:
