@@ -152,7 +152,11 @@ class OnboardingRequest(BaseModel):
     
     # Q14: 언어 설정
     language: Optional[str] = None  # "ko" 또는 "en"
-    
+
+    # 설정 페이지 추가 필드
+    photo_range_max: Optional[int] = None       # 게시물당 최대 사진 수
+    brand_tone_emoji: Optional[str] = None      # 이모지 사용 여부 (brand_tone 배열에 합침)
+
     # === 연동 상태 (Boolean) ===
     is_ms_connected: Optional[bool] = None
     is_insta_connected: Optional[bool] = None
@@ -187,7 +191,24 @@ async def save_onboarding_api(shop_id: str, data: OnboardingRequest):
     """
     # Pydantic 모델을 dict로 변환 (None 값 제외)
     data_dict = data.model_dump(exclude_none=True)
-    
+
+    # brand_tone_emoji는 별도 필드가 아니라 brand_tone 배열에 합쳐서 저장
+    if "brand_tone_emoji" in data_dict:
+        emoji_val = data_dict.pop("brand_tone_emoji")
+        emoji_options = ["자주 씀", "가끔 씀", "안 씀"]
+
+        if "brand_tone" not in data_dict:
+            existing_data = get_onboarding_db(shop_id)
+            existing_shop = existing_data.get("shop_info", {}) if existing_data else {}
+            existing_tone = existing_shop.get("brand_tone", [])
+        else:
+            existing_tone = data_dict.get("brand_tone", [])
+
+        filtered = [v for v in existing_tone if v not in emoji_options]
+        if emoji_val:
+            filtered.append(emoji_val)
+        data_dict["brand_tone"] = filtered
+
     success = save_onboarding_db(shop_id, data_dict)
 
     if not success:

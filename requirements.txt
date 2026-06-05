@@ -10,7 +10,7 @@ python-dotenv==1.0.1
 httpx==0.27.0
 pillow==10.4.0
 python-jose==3.3.0
-azure-search-documents==11.4.0
+azure-search-documents>=11.6.0b4
 gunicorn
 semantic-kernel[azure]>=1.30.0
 pydantic[email]>=2.10,<3
