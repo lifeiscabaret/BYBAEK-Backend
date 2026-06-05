@@ -132,26 +132,30 @@ async def node_search_rag(state: PostState) -> PostState:
 
 
 async def node_write_post(state: PostState) -> PostState:
-    kernel  = _init_kernel(state["tier"])
-    retries = state.get("caption_retries", 0)
-    previous_draft = state.get("post_draft") if retries > 0 else None
-    feedback = (
-        f"브랜드 톤 점수 {state.get('caption_score', 0):.2f} 미달. 금칙어 제거 및 톤 재조정 필요."
-        if previous_draft else None
-    )
-    post_draft = await post_writer_agent(
-        shop_id=state["shop_id"],
-        trend_data=state["trend_data"],
-        selected_photos=state["selected_photos"],
-        brand_settings=state["brand_settings"],
-        recent_posts=state["recent_posts"],
-        rag_context=state["rag_context"],
-        previous_draft=previous_draft,
-        feedback=feedback
-    )
-    caption_score = await _evaluate_caption(kernel, post_draft, state["brand_settings"])
-    print(f"[orchestrator_v2] node_write_post → score={caption_score:.2f}, retries={retries}")
-    return {**state, "post_draft": post_draft, "caption_score": caption_score}
+    try:
+        kernel  = _init_kernel(state["tier"])
+        retries = state.get("caption_retries", 0)
+        previous_draft = state.get("post_draft") if retries > 0 else None
+        feedback = (
+            f"브랜드 톤 점수 {state.get('caption_score', 0):.2f} 미달. 금칙어 제거 및 톤 재조정 필요."
+            if previous_draft else None
+        )
+        post_draft = await post_writer_agent(
+            shop_id=state["shop_id"],
+            trend_data=state["trend_data"],
+            selected_photos=state["selected_photos"],
+            brand_settings=state["brand_settings"],
+            recent_posts=state["recent_posts"],
+            rag_context=state["rag_context"],
+            previous_draft=previous_draft,
+            feedback=feedback
+        )
+        caption_score = await _evaluate_caption(kernel, post_draft, state["brand_settings"])
+        print(f"[orchestrator_v2] node_write_post → score={caption_score:.2f}, retries={retries}")
+        return {**state, "post_draft": post_draft, "caption_score": caption_score}
+    except Exception as e:
+        print(f"[orchestrator_v2] node_write_post 실패: {e}")
+        raise
 
 
 async def node_upgrade_model(state: PostState) -> PostState:
