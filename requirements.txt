@@ -20,3 +20,4 @@ langgraph
 apscheduler
 azure-storage-queue>=12.0.0
 pillow-heif
+anthropic>=0.49.0
