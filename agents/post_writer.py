@@ -1,10 +1,7 @@
 import os
 import json
 import re
-from semantic_kernel import Kernel
-from semantic_kernel.connectors.ai.open_ai import AzureChatCompletion
-from semantic_kernel.connectors.ai.azure_ai_inference import AzureAIInferenceChatCompletion
-from semantic_kernel.contents import ChatHistory
+import anthropic
 
 # [메인] orchestrator에서 호출
 async def post_writer_agent(
@@ -30,7 +27,7 @@ async def post_writer_agent(
     mode = "재작성" if is_rewrite else "최초 작성"
     print(f"[post_writer] 시작 → shop_id={shop_id}, 모드={mode}")
 
-    kernel = _init_kernel()
+    client = _init_claude_client()
 
     # 프롬프트 구성
     system_prompt, user_prompt = _build_prompt(
@@ -43,22 +40,16 @@ async def post_writer_agent(
         feedback=feedback
     )
 
-    chat_history = ChatHistory()
-    chat_history.add_system_message(system_prompt)
-    chat_history.add_user_message(user_prompt)
-
     try:
-        chat_service = kernel.get_service("claude")
-        settings = chat_service.instantiate_prompt_execution_settings()
-        settings.temperature = 0.85   # 자연스러운 말투 + 일관성 균형
-        settings.max_tokens = 600
-
-        response = await chat_service.get_chat_message_content(
-            chat_history=chat_history,
-            settings=settings
+        response = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=600,
+            temperature=0.85,   # 자연스러운 말투 + 일관성 균형
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_prompt}]
         )
 
-        raw = str(response).strip()
+        raw = response.content[0].text.strip()
         raw = raw.replace("```json", "").replace("```", "").strip()
         result = json.loads(raw)
 
@@ -70,13 +61,18 @@ async def post_writer_agent(
             reason = result.get("retry_reason", "할루시네이션")
             print(f"[post_writer] {reason} 감지 → 재시도 (feedback 주입)")
             feedback_msg = f"이전 캡션에서 '{reason}'이 감지됐어. 확인되지 않은 사실은 절대 쓰지 마."
-            chat_history.add_assistant_message(str(result.get("caption", "")))
-            chat_history.add_user_message(feedback_msg)
-            response2 = await chat_service.get_chat_message_content(
-                chat_history=chat_history,
-                settings=chat_service.instantiate_prompt_execution_settings()
+            response2 = client.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=600,
+                temperature=0.85,
+                system=system_prompt,
+                messages=[
+                    {"role": "user", "content": user_prompt},
+                    {"role": "assistant", "content": str(result.get("caption", ""))},
+                    {"role": "user", "content": feedback_msg},
+                ]
             )
-            raw2 = str(response2).strip().replace("```json", "").replace("```", "").strip()
+            raw2 = response2.content[0].text.strip().replace("```json", "").replace("```", "").strip()
             try:
                 result = _validate_and_clean(json.loads(raw2), brand_settings)
             except Exception:
@@ -446,14 +442,11 @@ def _fallback_draft(brand_settings: dict, trend_data: dict) -> dict:
     }
 
 
-# [커널 초기화]
-def _init_kernel(tier: str = "mini") -> Kernel:
-    kernel = Kernel()
-    # Claude Sonnet 4.6 (Azure Foundry) - 글쓰기 전용
-    kernel.add_service(AzureAIInferenceChatCompletion(
-        service_id="claude",
-        ai_model_id="claude-sonnet-4-6",
-        endpoint=os.getenv("AZURE_CLAUDE_ENDPOINT"),
+# [Claude 클라이언트 초기화]
+def _init_claude_client():
+    # Claude Sonnet 4.6 (Azure Foundry) - anthropic SDK 직접 호출
+    return anthropic.Anthropic(
+        base_url="https://bybaek-claude-swedencen-resource.services.ai.azure.com/anthropic",
         api_key=os.getenv("AZURE_CLAUDE_KEY"),
-    ))
-    return kernel
+        default_headers={"api-key": os.getenv("AZURE_CLAUDE_KEY")}
+    )
