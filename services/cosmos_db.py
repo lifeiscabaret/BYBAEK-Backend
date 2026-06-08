@@ -132,7 +132,7 @@ def get_onboarding(shop_id: str) -> dict:
             "is_kakao_connected", "is_insta_connected", "is_gmail_connected",
             "rag_reference", "is_ms_connected", "owner_email", "district",
             "insta_style_profile", "must_include_hashtags", "photo_range_max"  # ← 추가
-        ]ㅍ
+        ]
 
         filtered_shop_info = {k: shop_item.get(k) for k in allowed_keys if k in shop_item}
         
