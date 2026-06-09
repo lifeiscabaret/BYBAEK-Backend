@@ -30,6 +30,7 @@ class PostState(TypedDict):
     shop_id:          str
     trigger:          str
     photo_ids:        Optional[list]
+    message:          Optional[str]   # 사장님 직접 요청 (manual)
     performance_history: dict
     tier:             str
     trend_data:       dict
@@ -148,7 +149,8 @@ async def node_write_post(state: PostState) -> PostState:
             recent_posts=state["recent_posts"],
             rag_context=state["rag_context"],
             previous_draft=previous_draft,
-            feedback=feedback
+            feedback=feedback,
+            user_request=state.get("message")
         )
         caption_score = await _evaluate_caption(kernel, post_draft, state["brand_settings"])
         print(f"[orchestrator_v2] node_write_post → score={caption_score:.2f}, retries={retries}")
@@ -242,12 +244,13 @@ def build_graph() -> StateGraph:
     return graph.compile()
 
 
-async def run_pipeline(shop_id: str, trigger: str, photo_ids: list = None) -> dict:
+async def run_pipeline(shop_id: str, trigger: str, photo_ids: list = None, message: str = None) -> dict:
     app = build_graph()
     initial_state: PostState = {
         "shop_id":           shop_id,
         "trigger":           trigger,
         "photo_ids":         photo_ids or [],
+        "message":           message,
         "tier":              "mini",
         "trend_data":        {},
         "brand_settings":    {},

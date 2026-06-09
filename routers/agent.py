@@ -22,13 +22,15 @@ class AgentRunRequest(BaseModel):
     shop_id: str
     trigger: str
     photo_ids: Optional[List[str]] = None
+    message: Optional[str] = None   # 사장님 직접 요청 (manual 트리거 시)
 
     class Config:
         json_schema_extra = {
             "example": {
                 "shop_id": "3sesac18",
                 "trigger": "auto",
-                "photo_ids": None
+                "photo_ids": None,
+                "message": None
             }
         }
 
@@ -65,7 +67,8 @@ async def agent_run(req: AgentRunRequest):
         result = await run_pipeline(
             shop_id=req.shop_id,
             trigger=req.trigger,
-            photo_ids=req.photo_ids
+            photo_ids=req.photo_ids,
+            message=req.message
         )
         return result
     except Exception as e:
