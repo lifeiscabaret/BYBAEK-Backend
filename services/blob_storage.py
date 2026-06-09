@@ -2,9 +2,41 @@ import os
 import logging
 from azure.storage.blob import BlobServiceClient
 from azure.core.exceptions import ResourceNotFoundError
+from datetime import datetime, timezone, timedelta
+from azure.storage.blob import generate_blob_sas, BlobSasPermissions
 
 AZURE_STORAGE_CONNECTION_STRING = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
 CONTAINER_NAME = os.getenv("AZURE_BLOB_CONTAINER_NAME")
+
+def generate_sas_url(blob_url: str, expiry_hours: int = 24) -> str:
+    try:
+        clean_url = blob_url.split("?")[0]
+
+        # 컨테이너명 이후 전체 경로 추출 (shop_id 폴더 포함)
+        prefix = f"https://bybaekstorage.blob.core.windows.net/{CONTAINER_NAME}/"
+        if clean_url.startswith(prefix):
+            blob_name = clean_url[len(prefix):]  # 예: 00000000-.../67a42e...jpg
+        else:
+            blob_name = clean_url.split("/")[-1]
+
+        blob_service_client = BlobServiceClient.from_connection_string(AZURE_STORAGE_CONNECTION_STRING)
+        account_name = blob_service_client.account_name
+        account_key = blob_service_client.credential.account_key
+
+        sas_token = generate_blob_sas(
+            account_name=account_name,
+            container_name=CONTAINER_NAME,
+            blob_name=blob_name,  # ← file_name → blob_name
+            account_key=account_key,
+            permission=BlobSasPermissions(read=True),
+            expiry=datetime.now(timezone.utc) + timedelta(hours=expiry_hours)
+        )
+
+        return f"https://{account_name}.blob.core.windows.net/{CONTAINER_NAME}/{blob_name}?{sas_token}"
+
+    except Exception as e:
+        logging.error(f"SAS URL 생성 실패 ({blob_url}): {str(e)}")
+        return blob_url
 
 def delete_blob(file_name: str) -> bool:
     """

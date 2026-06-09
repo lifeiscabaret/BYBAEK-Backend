@@ -1,15 +1,4 @@
-"""
-기능: Azure Cosmos DB 클라이언트 생성 및 컨테이너 연결 관리
-작성자: jiyeon back
-최초 생성: 2026. 02. 24.
-버전: 1.0
-
-[Modification Information]
-DATE        AUTHOR          NOTE
------------------------------------------------------------
-2026.02.24  jiyeon back     최초 생성 및 기본 연결 로직 구현
-"""
-
+#기능: Azure Cosmos DB 클라이언트 생성 및 컨테이너 연결 관리
 import os
 from dotenv import load_dotenv
 from azure.cosmos import CosmosClient

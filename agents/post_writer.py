@@ -1,9 +1,7 @@
 import os
 import json
 import re
-from semantic_kernel import Kernel
-from semantic_kernel.connectors.ai.open_ai import AzureChatCompletion
-from semantic_kernel.contents import ChatHistory
+import anthropic
 
 # [메인] orchestrator에서 호출
 async def post_writer_agent(
@@ -29,7 +27,7 @@ async def post_writer_agent(
     mode = "재작성" if is_rewrite else "최초 작성"
     print(f"[post_writer] 시작 → shop_id={shop_id}, 모드={mode}")
 
-    kernel = _init_kernel()
+    client = _init_claude_client()
 
     # 프롬프트 구성
     system_prompt, user_prompt = _build_prompt(
@@ -41,24 +39,17 @@ async def post_writer_agent(
         previous_draft=previous_draft,
         feedback=feedback
     )
-    
-
-    chat_history = ChatHistory()
-    chat_history.add_system_message(system_prompt)
-    chat_history.add_user_message(user_prompt)
 
     try:
-        chat_service = kernel.get_service("azure_openai")
-        settings = chat_service.instantiate_prompt_execution_settings()
-        settings.temperature = 0.85   # 자연스러운 말투 + 일관성 균형
-        settings.max_tokens = 600
-
-        response = await chat_service.get_chat_message_content(
-            chat_history=chat_history,
-            settings=settings
+        response = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=600,
+            temperature=0.85,   # 자연스러운 말투 + 일관성 균형
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_prompt}]
         )
 
-        raw = str(response).strip()
+        raw = response.content[0].text.strip()
         raw = raw.replace("```json", "").replace("```", "").strip()
         result = json.loads(raw)
 
@@ -70,13 +61,18 @@ async def post_writer_agent(
             reason = result.get("retry_reason", "할루시네이션")
             print(f"[post_writer] {reason} 감지 → 재시도 (feedback 주입)")
             feedback_msg = f"이전 캡션에서 '{reason}'이 감지됐어. 확인되지 않은 사실은 절대 쓰지 마."
-            chat_history.add_assistant_message(str(result.get("caption", "")))
-            chat_history.add_user_message(feedback_msg)
-            response2 = await chat_service.get_chat_message_content(
-                chat_history=chat_history,
-                settings=chat_service.instantiate_prompt_execution_settings()
+            response2 = client.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=600,
+                temperature=0.85,
+                system=system_prompt,
+                messages=[
+                    {"role": "user", "content": user_prompt},
+                    {"role": "assistant", "content": str(result.get("caption", ""))},
+                    {"role": "user", "content": feedback_msg},
+                ]
             )
-            raw2 = str(response2).strip().replace("```json", "").replace("```", "").strip()
+            raw2 = response2.content[0].text.strip().replace("```json", "").replace("```", "").strip()
             try:
                 result = _validate_and_clean(json.loads(raw2), brand_settings)
             except Exception:
@@ -85,6 +81,12 @@ async def post_writer_agent(
         result.pop("needs_retry", None)
         result.pop("retry_reason", None)
 
+        # CTA는 DB 값으로 강제 덮어씌우기 (GPT가 임의로 바꾸지 못하게)
+        cta_fixed = brand_settings.get("cta", "").strip()
+        if cta_fixed:
+            result["cta"] = cta_fixed
+            print(f"[post_writer] CTA 고정 적용 → '{cta_fixed}'")
+
         print(f"[post_writer] 완료 → 캡션 {len(result.get('caption', ''))}자, "
               f"해시태그 {len(result.get('hashtags', []))}개")
         return result
@@ -92,6 +94,7 @@ async def post_writer_agent(
     except Exception as e:
         print(f"[post_writer] GPT 실패 ({e}) → fallback 캡션 반환")
         return _fallback_draft(brand_settings, trend_data)
+
 
 # [프롬프트] 통합 프롬프트 구성
 def _build_prompt(
@@ -112,24 +115,35 @@ def _build_prompt(
     """
 
     # ── 시스템 프롬프트 ──
-    # ✅ brand_tone 리스트 처리
+
+    # [FIX 1] brand_tone: 리스트 항목을 / 로 구분해서 GPT가 각 톤을 명확히 인식
     brand_tone = brand_settings.get("brand_tone", "친근하고 편안한 말투")
     if isinstance(brand_tone, list):
-        brand_tone = " ".join(brand_tone)
-    
-    # ✅ forbidden_words 리스트 처리
+        brand_tone = " / ".join(brand_tone)  # 공백 대신 /로 구분 (혼합 톤 명확히 전달)
+
+    # forbidden_words 리스트 처리
     forbidden_words = brand_settings.get("forbidden_words", [])
     if isinstance(forbidden_words, str):
         forbidden_words = [w.strip() for w in forbidden_words.split(",")]
     forbidden_str = ", ".join(forbidden_words) if forbidden_words else "없음"
-    
+
     feed_style    = brand_settings.get("feed_style", {})
     emoji_usage   = feed_style.get("emoji_usage", "적당히")
     caption_len   = feed_style.get("caption_length", "2~4줄")
     hashtag_count = feed_style.get("hashtag_count", 10)
 
-    # AG-040: 온보딩 추가 필드
+    # [FIX 2] hashtag_style: 리스트 항목을 모두 문자열로 변환
     hashtag_style = brand_settings.get("hashtag_style", "감성형")
+    if isinstance(hashtag_style, list):
+        hashtag_style = ", ".join(hashtag_style)  # 리스트 → 쉼표 구분 문자열
+
+    # 필수 해시태그 추출
+    must_include_hashtags = brand_settings.get("must_include_hashtags", [])
+    if not must_include_hashtags and hashtag_style:
+        must_include_hashtags = [
+            w.strip() for w in re.findall(r'#\S+', hashtag_style)
+        ]
+    must_hashtag_str = ", ".join(must_include_hashtags) if must_include_hashtags else ""
 
     preferred_styles = brand_settings.get("preferred_styles", [])
     if isinstance(preferred_styles, str):
@@ -141,17 +155,48 @@ def _build_prompt(
         exclude_conditions = [s.strip() for s in exclude_conditions.split(",") if s.strip()]
     exclude_str = ", ".join(exclude_conditions) if exclude_conditions else "없음"
 
+    # [FIX 3] CTA 고정 명시 — 시스템 프롬프트에서부터 강제
+    cta_fixed = brand_settings.get("cta", "").strip()
+    cta_instruction = f"반드시 아래 문구 그대로 사용, 절대 바꾸지 마:\n  → \"{cta_fixed}\"" if cta_fixed else "자연스러운 예약 유도 문구"
+
+    # shop_intro 있으면 시스템 프롬프트에 포함 (할루시네이션 오탐 방지용)
+    shop_intro = brand_settings.get("shop_intro", "").strip()
+    shop_intro_line = f"\n[샵 소개 - 이 내용은 사실이므로 캡션에 자연스럽게 활용 가능]\n{shop_intro}" if shop_intro else ""
+
+    # insta_style_profile: 과거 게시물 분석 결과를 few-shot으로 주입
+    insta_profile = brand_settings.get("insta_style_profile", {})
+    insta_style_block = ""
+    if insta_profile:
+        tone_desc = insta_profile.get("tone_description", "")
+        tone_examples = insta_profile.get("tone_examples", [])
+        emoji_pattern = insta_profile.get("emoji_pattern", "")
+
+        lines = []
+        if tone_desc:
+            lines.append(f"- 말투 특징: {tone_desc}")
+        if emoji_pattern:
+            lines.append(f"- 이모지 습관: {emoji_pattern}")
+        if tone_examples:
+            lines.append("- 실제 사장님 캡션 예시:")
+            for ex in tone_examples[:3]:
+                lines.append(f"  \"{ex}\"")
+
+        if lines:
+            insta_style_block = "\n\n[이 사장님의 실제 인스타 말투 - 이 말투와 동일하게 써줘]\n" + "\n".join(lines)
+            insta_style_block += "\n⚠️ 위 실제 말투 예시와 최대한 동일하게. 광고체('어울립니다', '완성됩니다' 등) 절대 금지."
+
     # 시스템 프롬프트 구성
     system_prompt = f"""너는 바버샵 사장님 대신 인스타 게시물을 써주는 사람이야.
 사장님이 바빠서 직접 못 쓰니까 네가 대신 쓰는 거야.
+{shop_intro_line}{insta_style_block}
 
 [절대 금지]
-- 경력 연수 지어내기 ("22년 경력" 등) — DB에 없으면 절대 쓰지 마
+- shop_intro에 없는 경력 연수 지어내기 — DB에 없으면 절대 쓰지 마
 - 예약 현황 지어내기 ("오늘 3자리 남음" 등) — 실제 현황 모름
 - "정교한", "선사하는", "완성하는", "트렌디한" 같은 AI 냄새 나는 표현
 - 수상 이력, 인증, 특허 — 확인 안 된 거 절대 쓰지 마
 
-[말투]
+[말투 - 이 톤들을 혼합해서 자연스럽게]
 - 실제 바버샵 사장님이 인스타에 쓸 법한 말투로 — 짧고 편하게
 - 브랜드 톤: {brand_tone}
 - 이모지: {emoji_usage}
@@ -162,20 +207,24 @@ def _build_prompt(
 - 금칙어: {forbidden_str}
 - 언급 금지: {exclude_str}
 
-[해시태그]
-- {hashtag_style} 스타일 / 총 {hashtag_count}개
+[해시태그 - 총 {hashtag_count}개]
+- 방향: {hashtag_style}
+- 위 방향에 명시된 키워드(지역명, 영문 등)는 반드시 포함할 것
+- 필수 포함 (반드시): {must_hashtag_str if must_hashtag_str else "없음"}
+
+[CTA - {cta_instruction}]
 
 [출력 — JSON만, 다른 텍스트 없이]
 {{
   "caption": "첫 문장에 스타일명 포함, {caption_len}, 자연스러운 말투",
   "hashtags": ["#페이드컷", "#바버샵", ... 총 {hashtag_count}개],
-  "cta": "예약 유도 문구"
+  "cta": "{cta_fixed if cta_fixed else '예약 유도 문구'}"
 }}"""
 
     # ── 유저 프롬프트 ──
     parts = []
 
-     # 1. 오늘 트렌드
+    # 1. 오늘 트렌드
     trend_summary = trend_data.get("trend", "")
     weather       = trend_data.get("weather", "")
     promo         = trend_data.get("promo", "")
@@ -186,7 +235,7 @@ def _build_prompt(
     if promo:
         parts.append(f"[바버샵 홍보 포인트]\n{promo}")
 
-    # 샵 차별점 - shop_intro 있을 때만 반영 
+    # 샵 차별점 - brand_differentiation 있을 때만 반영
     brand_diff = brand_settings.get("brand_differentiation", "").strip()
     if brand_diff:
         parts.append(f"[우리 샵 차별점 - 첫 문장에 자연스럽게 녹여줘]\n{brand_diff}")
@@ -212,26 +261,26 @@ def _build_prompt(
         tone_rules       = rag_context.get("tone_rules", "")
         examples         = rag_context.get("examples", [])
         hashtag_patterns = rag_context.get("hashtag_patterns", [])
-        
+
         if hashtag_patterns:
             parts.append(f"[자주 쓰는 해시태그]\n{' '.join(hashtag_patterns[:10])}")
 
-        # 성과 인사이트 
+        # 성과 인사이트
         if rag_context.get("performance_insights"):
             parts.append(f"[과거 성과 패턴 - 이 패턴대로 써줘]\n{rag_context['performance_insights']}")
-            
+
         if tone_rules:
             parts.append(f"[이 샵의 말투 패턴]\n{tone_rules}")
 
         if examples:
-            ex_text = f"[이 샵의 과거 게시물 — 이 말투와 비슷하게 써줘]\n"
+            ex_text = "[이 샵의 과거 게시물 — 이 말투와 비슷하게 써줘]\n"
             for i, ex in enumerate(examples[:3], 1):
                 caption  = ex.get("caption", "")
                 hashtags = ex.get("hashtags", [])
                 ex_text += f"{i}. {caption[:80]}{'...' if len(caption) > 80 else ''}\n"
                 if hashtags:
                     ex_text += f"   해시태그: {' '.join(hashtags[:5])}\n"
-            parts.append(ex_text) 
+            parts.append(ex_text)
 
     # 4. 최근 게시물 말투 참고
     if recent_posts:
@@ -284,16 +333,23 @@ def _validate_and_clean(result: dict, brand_settings: dict) -> dict:
     1) 금칙어 (브랜드 설정)  → 자동 제거
     2) 주제 이탈 키워드      → 자동 제거 + 경고
     3) 과장 표현             → 자동 제거 + 경고
+
+    [FIX 4] shop_intro에 명시된 내용은 할루시네이션 오탐에서 제외
     """
     # forbidden_words 리스트 처리
     forbidden_words = brand_settings.get("forbidden_words", [])
     if isinstance(forbidden_words, str):
         forbidden_words = [w.strip() for w in forbidden_words.split(",")]
 
+    must_include_hashtags = brand_settings.get("must_include_hashtags", [])
+    print(f"[post_writer] must_include_hashtags 수신값: {must_include_hashtags}")
+
+    # [FIX 4] shop_intro 값 미리 추출 — 오탐 방지용
+    shop_intro = brand_settings.get("shop_intro", "").strip()
+
     caption = result.get("caption", "")
 
     # 0) 할루시네이션 패턴 감지 → 재생성 신호 (제거 말고 플래그)
-    import re
     hallucination_patterns = [
         (r'\d+년\s*경력',   "경력 연수 할루시네이션"),
         (r'\d+자리\s*남',   "예약 현황 할루시네이션"),
@@ -301,7 +357,13 @@ def _validate_and_clean(result: dict, brand_settings: dict) -> dict:
         (r'오늘만\s*할인',   "근거없는 할인 할루시네이션"),
     ]
     for pattern, label in hallucination_patterns:
-        if re.search(pattern, caption):
+        match = re.search(pattern, caption)
+        if match:
+            # [FIX 4] shop_intro에 이미 있는 내용이면 오탐 → 통과
+            matched_text = match.group(0)
+            if shop_intro and matched_text in shop_intro:
+                print(f"[post_writer] '{matched_text}' → shop_intro에 명시된 사실, 통과")
+                continue
             print(f"[post_writer] ⚠️  {label} 감지 → needs_retry=True")
             result["needs_retry"] = True
             result["retry_reason"] = label
@@ -344,6 +406,19 @@ def _validate_and_clean(result: dict, brand_settings: dict) -> dict:
         if not any(word in tag for word in all_banned)
     ]
 
+    # 필수 해시태그 강제 추가
+    must_include_hashtags = brand_settings.get("must_include_hashtags", [])
+    if not must_include_hashtags:
+        hashtag_style = brand_settings.get("hashtag_style", "")
+        if isinstance(hashtag_style, list):
+            hashtag_style = ", ".join(hashtag_style)
+        must_include_hashtags = [w.strip() for w in re.findall(r'#\S+', hashtag_style)]
+    for tag in must_include_hashtags:
+        normalized = tag if tag.startswith("#") else f"#{tag}"
+        if normalized not in result["hashtags"]:
+            result["hashtags"].append(normalized)
+
+    print(f"[post_writer] 최종 hashtags: {result['hashtags']}")
     return result
 
 
@@ -367,23 +442,11 @@ def _fallback_draft(brand_settings: dict, trend_data: dict) -> dict:
     }
 
 
-# [커널 초기화]
-def _init_kernel(tier: str = "mini") -> Kernel:
-    """
-    Semantic Kernel 초기화
-    orchestrator에서 tier 결정 후 호출
-    mini: GPT-4.1-mini (기본)
-    full: GPT-4.1 (승격 시)
-    """
-    deployment = os.getenv(
-        f"AZURE_OPENAI_DEPLOYMENT_{tier.upper()}",
-        os.getenv("AZURE_OPENAI_DEPLOYMENT")
+# [Claude 클라이언트 초기화]
+def _init_claude_client():
+    # Claude Sonnet 4.6 (Azure Foundry) - anthropic SDK 직접 호출
+    return anthropic.Anthropic(
+        base_url="https://bybaek-claude-swedencen-resource.services.ai.azure.com/anthropic",
+        api_key=os.getenv("AZURE_CLAUDE_KEY"),
+        default_headers={"api-key": os.getenv("AZURE_CLAUDE_KEY")}
     )
-    kernel = Kernel()
-    kernel.add_service(AzureChatCompletion(
-        service_id="azure_openai",
-        deployment_name=deployment,
-        endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
-        api_key=os.getenv("AZURE_OPENAI_KEY")
-    ))
-    return kernel

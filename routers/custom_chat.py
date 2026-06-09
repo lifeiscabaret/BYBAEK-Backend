@@ -13,7 +13,8 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import List
-from openai import AsyncAzureOpenAI
+import anthropic
+
 
 router = APIRouter()
 
@@ -61,12 +62,28 @@ async def _get_brand_settings(shop_id: str) -> dict:
             if isinstance(val, str) and val: return [v.strip() for v in val.split(",")]
             return []
 
+        # brand_tone 배열에서 이모지 사용 여부 파싱
+        brand_tone_list = to_list(shop.get("brand_tone"))
+        emoji_map = {"자주 씀": "자주", "가끔 씀": "가끔", "안 씀": "안 씀"}
+        emoji_usage = next(
+            (emoji_map[v] for v in brand_tone_list if v in emoji_map),
+            "가끔"
+        )
+
         return {
-            "brand_tone":      shop.get("brand_tone", "친근하고 편안한 말투"),
-            "forbidden_words": to_list(shop.get("forbidden_words")),
-            "preferred_styles":to_list(shop.get("preferred_styles")),
-            "cta":             shop.get("cta", "DM으로 예약 문의주세요"),
-            "feed_style":      shop.get("feed_style", {}),
+            "brand_tone":            brand_tone_list,
+            "forbidden_words":       to_list(shop.get("forbidden_words")),
+            "preferred_styles":      to_list(shop.get("preferred_styles")),
+            "exclude_conditions":    to_list(shop.get("exclude_conditions")),
+            "hashtag_style":         to_list(shop.get("hashtag_style")),
+            "must_include_hashtags": to_list(shop.get("must_include_hashtags")),
+            "cta":                   shop.get("cta", "DM으로 예약 문의주세요"),
+            "shop_intro":            shop.get("shop_intro", ""),
+            "feed_style": {
+                "emoji_usage":    emoji_usage,
+                "caption_length": shop.get("caption_length", "2~4줄"),
+                "hashtag_count":  shop.get("hashtag_count", 10),
+            },
         }
     except Exception as e:
         print(f"[custom_chat] 브랜드 설정 조회 실패 (무시): {e}")
@@ -78,14 +95,11 @@ async def generate_chat_stream(shop_id: str, message: str, photo_ids: List[str])
     트렌드 조회 → 브랜드 설정 조회 → 캡션 스트리밍 생성.
     출력: caption + hashtags + cta JSON 스트림.
     """
-    endpoint   = os.getenv("AZURE_OPENAI_ENDPOINT")
-    api_key    = os.getenv("AZURE_OPENAI_KEY")
-    deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT_MINI") or \
-                 os.getenv("AZURE_OPENAI_DEPLOYMENT_FULL") or \
-                 os.getenv("AZURE_OPENAI_DEPLOYMENT")
+    api_key  = os.getenv("AZURE_CLAUDE_KEY")
+    base_url = "https://bybaek-claude-swedencen-resource.services.ai.azure.com/anthropic"
 
-    if not endpoint or not api_key or not deployment:
-        yield "[❌ Azure OpenAI 환경변수가 설정되지 않았습니다.]"
+    if not api_key:
+        yield "[❌ AZURE_CLAUDE_KEY 환경변수가 설정되지 않았습니다.]"
         return
 
     # 1. 트렌드 + 브랜드 설정 병렬 조회
@@ -96,9 +110,13 @@ async def generate_chat_stream(shop_id: str, message: str, photo_ids: List[str])
     )
 
     # 2. 브랜드 톤 처리
-    brand_tone = brand_settings.get("brand_tone", "친근하고 편안한 말투")
+    brand_tone = brand_settings.get("brand_tone", ["친근하고 편안한 말투"])
     if isinstance(brand_tone, list):
-        brand_tone = " ".join(brand_tone)
+        # 스타일/타겟/이모지 항목 분리해서 프롬프트에 명확하게 전달
+        style_labels = ["힙/스트릿 바이브", "클래식 프리미엄", "친근한 동네 바버", "감성/무드"]
+        emoji_labels = ["자주 씀", "가끔 씀", "안 씀"]
+        tone_items = [v for v in brand_tone if v not in emoji_labels]
+        brand_tone = " / ".join(tone_items) if tone_items else "친근하고 편안한 말투"
 
     forbidden = brand_settings.get("forbidden_words", [])
     forbidden_str = ", ".join(forbidden) if forbidden else "없음"
@@ -110,11 +128,19 @@ async def generate_chat_stream(shop_id: str, message: str, photo_ids: List[str])
     hashtag_count = feed_style.get("hashtag_count", 10)
     caption_len   = feed_style.get("caption_length", "2~4줄")
 
-    # 3. 트렌드 컨텍스트
+    # 3. 트렌드 컨텍스트 + 브랜드 추가 설정
     trend_summary = trend_data.get("trend", "") or trend_data.get("trend_summary", "")
     weather       = trend_data.get("weather", "")
     promo         = trend_data.get("promo", "")
     cta           = brand_settings.get("cta") or "DM으로 예약 문의주세요"
+    shop_intro    = brand_settings.get("shop_intro", "")
+    exclude_conditions = brand_settings.get("exclude_conditions", [])
+    exclude_str   = ", ".join(exclude_conditions) if exclude_conditions else "없음"
+    must_hashtags = brand_settings.get("must_include_hashtags", [])
+    hashtag_style = brand_settings.get("hashtag_style", [])
+    if not must_hashtags and hashtag_style:
+        must_hashtags = [t for t in hashtag_style if t.startswith("#")]
+    must_hashtag_str = ", ".join(must_hashtags) if must_hashtags else "없음"
 
     # 4. 시스템 프롬프트 — 캡션 JSON만 출력
     system_prompt = f"""너는 바버샵 인스타그램 게시물을 대신 써주는 마케터야.
@@ -130,8 +156,11 @@ async def generate_chat_stream(shop_id: str, message: str, photo_ids: List[str])
 - 말투: {brand_tone}
 - 전문 스타일: {preferred_str}
 - 금칙어: {forbidden_str}
+- 언급 금지: {exclude_str}
 - 길이: {caption_len}
 - 해시태그: {hashtag_count}개
+- 필수 해시태그 (반드시 포함): {must_hashtag_str}
+{f"[샵 소개 - 이 내용은 사실이므로 캡션에 자연스럽게 활용 가능]{chr(10)}{shop_intro}" if shop_intro else ""}
 
 [출력 형식 — 이것만]
 {{
@@ -153,28 +182,23 @@ async def generate_chat_stream(shop_id: str, message: str, photo_ids: List[str])
 
     user_prompt = "\n\n".join(user_parts)
 
-    # 6. 스트리밍 생성
-    client = AsyncAzureOpenAI(
-        azure_endpoint=endpoint,
+    # 6. 스트리밍 생성 (Claude Sonnet 4.6)
+    client = anthropic.Anthropic(
+        base_url=base_url,
         api_key=api_key,
-        api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2024-02-01")
+        default_headers={"api-key": api_key}
     )
 
     try:
-        response = await client.chat.completions.create(
-            model=deployment,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user",   "content": user_prompt}
-            ],
-            stream=True,
+        with client.messages.stream(
+            model="claude-sonnet-4-6",
+            max_tokens=600,
             temperature=0.7,
-            max_tokens=600
-        )
-
-        async for chunk in response:
-            if chunk.choices and chunk.choices[0].delta.content:
-                yield chunk.choices[0].delta.content
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_prompt}]
+        ) as stream:
+            for text in stream.text_stream:
+                yield text
 
     except Exception as e:
         print(f"[custom_chat] 스트리밍 오류: {e}")
