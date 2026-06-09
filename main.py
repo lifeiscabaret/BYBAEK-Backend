@@ -48,6 +48,27 @@ async def _check_and_run_schedules():
         if shop.get("insta_auto_upload_yn", "N") != "Y":
             continue
 
+        # 업로드 빈도 체크 — 시각이 맞아도 요일이 안 맞으면 스킵.
+        # DB의 insta_upload_days(사용자 지정 요일)를 우선 사용하고,
+        # 비어 있으면 time_slot 기반 기본 요일(주3회=월·수·금, 주1회=월)로 폴백.
+        upload_days   = shop.get("insta_upload_days", []) or []
+        time_slot     = (shop.get("insta_upload_time_slot") or "매일").strip()
+        today_weekday = now.weekday()  # 월=0 ... 일=6
+
+        if time_slot == "매일" or not time_slot:
+            should_run = True
+        elif time_slot in ("주 3회", "주 1회"):
+            if upload_days:
+                should_run = today_weekday in upload_days
+            else:
+                # 설정 안 됐으면 기본값 사용
+                should_run = today_weekday in ([0, 2, 4] if time_slot == "주 3회" else [0])
+        else:
+            should_run = True
+
+        if not should_run:
+            continue
+
         shop_id = shop.get("id") or shop.get("shop_id")
         if not shop_id:
             continue

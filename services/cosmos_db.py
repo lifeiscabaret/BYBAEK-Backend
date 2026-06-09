@@ -131,7 +131,8 @@ def get_onboarding(shop_id: str) -> dict:
             "forbidden_words", "locale", "city", "language",
             "is_kakao_connected", "is_insta_connected", "is_gmail_connected",
             "rag_reference", "is_ms_connected", "owner_email", "district",
-            "insta_style_profile", "must_include_hashtags", "photo_range_max"  # ← 추가
+            "insta_style_profile", "must_include_hashtags", "photo_range_max",  # ← 추가
+            "insta_upload_days"
         ]
 
         filtered_shop_info = {k: shop_item.get(k) for k in allowed_keys if k in shop_item}
@@ -243,7 +244,7 @@ def save_onboarding(shop_id: str, data: dict) -> bool:
         "forbidden_words", "locale", "city", "language",
         "is_kakao_connected", "is_insta_connected", "is_gmail_connected",
         "rag_reference", "is_ms_connected", "owner_email", "district",
-        "must_include_hashtags", "photo_range_max"
+        "must_include_hashtags", "photo_range_max", "insta_upload_days"
     ]
 
     try:
@@ -542,7 +543,7 @@ def update_schedule_settings(shop_id: str, upload_time: str, timezone: str = "As
 
 def get_all_shops() -> list:
     container = get_cosmos_container("Shop")
-    query = "SELECT c.id, c.shop_id, c.insta_upload_time, c.insta_auto_upload_yn FROM c"
+    query = "SELECT c.id, c.shop_id, c.insta_upload_time, c.insta_upload_time_slot, c.insta_upload_days, c.insta_auto_upload_yn FROM c"
     try:
         return list(container.query_items(query=query, enable_cross_partition_query=True))
     except Exception as e:
