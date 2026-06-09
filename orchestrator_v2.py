@@ -424,7 +424,10 @@ async def _get_brand_settings(shop_id: str) -> dict:
         "must_include_hashtags":      to_list(shop.get("must_include_hashtags")),
         "cta":                        shop.get("cta", "DM으로 예약 문의주세요"),
         "shop_intro":                 shop.get("shop_intro", ""),
-        "photo_range":                {"min": 1, "max": 5},
+        "photo_range":                {
+            "min": 1,
+            "max": shop.get("photo_range_max", 5)
+        },
         "feed_style": {
             "emoji_usage":    emoji_usage,
             "caption_length": shop.get("caption_length", "2~4줄"),

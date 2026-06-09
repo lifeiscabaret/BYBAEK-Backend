@@ -149,6 +149,7 @@ class OnboardingRequest(BaseModel):
     # Q13: 업로드 스케줄
     insta_upload_time_slot: Optional[str] = None  # "매일", "평일", "주말" 등
     insta_upload_time: Optional[str] = None       # "10:30 AM" 형식
+    insta_upload_days: Optional[List[int]] = None  # 업로드 요일 [0=월..6=일]
     
     # Q14: 언어 설정
     language: Optional[str] = None  # "ko" 또는 "en"
