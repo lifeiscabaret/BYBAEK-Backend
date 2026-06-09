@@ -59,6 +59,23 @@ async def _check_and_run_schedules():
             print(f"[scheduler] 파이프라인 실패 ({shop_id}): {e}")
 
 
+async def _sync_all_shops_onedrive():
+    """모든 샵의 OneDrive 사진 자동 동기화"""
+    from services.cosmos_db import get_all_shops
+    from routers.onedrive import sync_photos_internal
+
+    shops = get_all_shops()
+    for shop in shops:
+        shop_id = shop.get("shop_id")
+        if not shop_id:
+            continue
+        try:
+            await sync_photos_internal(shop_id)
+            print(f"[scheduler] OneDrive 동기화 완료 → shop_id={shop_id}")
+        except Exception as e:
+            print(f"[scheduler] OneDrive 동기화 실패 → shop_id={shop_id}: {e}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # 매 정각마다 스케줄 체크
@@ -66,6 +83,13 @@ async def lifespan(app: FastAPI):
         _check_and_run_schedules,
         CronTrigger(minute=0),
         id="auto_upload",
+        replace_existing=True
+    )
+    # 4시간마다 OneDrive 자동 동기화
+    scheduler.add_job(
+        _sync_all_shops_onedrive,
+        CronTrigger(minute=0, hour="*/4"),
+        id="onedrive_sync",
         replace_existing=True
     )
     scheduler.start()

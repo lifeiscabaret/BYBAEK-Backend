@@ -21,3 +21,4 @@ apscheduler
 azure-storage-queue>=12.0.0
 pillow-heif
 anthropic>=0.49.0
+msal>=1.30.0
