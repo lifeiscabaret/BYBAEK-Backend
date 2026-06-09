@@ -12,7 +12,8 @@ async def post_writer_agent(
     recent_posts: list,
     rag_context: dict,
     previous_draft: dict = None,    # 재작성 시 이전 초안
-    feedback: str = None            # 재작성 시 피드백
+    feedback: str = None,           # 재작성 시 피드백
+    user_request: str = None        # 사장님 직접 요청 (manual)
 ) -> dict:
     """
     게시물 작성 에이전트 메인 함수
@@ -37,7 +38,8 @@ async def post_writer_agent(
         recent_posts=recent_posts,
         rag_context=rag_context,
         previous_draft=previous_draft,
-        feedback=feedback
+        feedback=feedback,
+        user_request=user_request
     )
 
     try:
@@ -104,7 +106,8 @@ def _build_prompt(
     recent_posts: list,
     rag_context: dict,
     previous_draft: dict = None,
-    feedback: str = None
+    feedback: str = None,
+    user_request: str = None
 ) -> tuple:
     """
     시스템 프롬프트 + 유저 프롬프트 구성
@@ -307,6 +310,10 @@ def _build_prompt(
             "✅ 긴박감 있는 CTA\n"
             "✅ 검색량 높은 해시태그 우선 배치"
         )
+
+    # 사장님 직접 요청(manual message)이 있으면 최우선으로 맨 앞에 배치
+    if user_request:
+        parts.insert(0, f"[사장님 요청 - 이 요청을 최우선으로 반영해줘]\n{user_request}")
 
     user_prompt = "\n\n".join(parts)
     return system_prompt, user_prompt
