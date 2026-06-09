@@ -207,3 +207,12 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 .vscode/
+token.json
+credentials.json
+
+seed_embeddings.py
+.claude/
+check_names.py
+fix_detected_angle.py
+seed_test_data.py
+test_mail.py

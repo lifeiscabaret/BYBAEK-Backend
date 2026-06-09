@@ -41,6 +41,7 @@ async def post_writer_agent(
         previous_draft=previous_draft,
         feedback=feedback
     )
+    
 
     chat_history = ChatHistory()
     chat_history.add_system_message(system_prompt)
@@ -48,17 +49,41 @@ async def post_writer_agent(
 
     try:
         chat_service = kernel.get_service("azure_openai")
+        settings = chat_service.instantiate_prompt_execution_settings()
+        settings.temperature = 0.85   # 자연스러운 말투 + 일관성 균형
+        settings.max_tokens = 600
+
         response = await chat_service.get_chat_message_content(
             chat_history=chat_history,
-            settings=chat_service.instantiate_prompt_execution_settings()
+            settings=settings
         )
 
         raw = str(response).strip()
         raw = raw.replace("```json", "").replace("```", "").strip()
         result = json.loads(raw)
 
-        # 금칙어 검증 + 자동 제거
+        # 금칙어 + 할루시네이션 검증
         result = _validate_and_clean(result, brand_settings)
+
+        # 할루시네이션 감지 시 한 번 재시도
+        if result.get("needs_retry"):
+            reason = result.get("retry_reason", "할루시네이션")
+            print(f"[post_writer] {reason} 감지 → 재시도 (feedback 주입)")
+            feedback_msg = f"이전 캡션에서 '{reason}'이 감지됐어. 확인되지 않은 사실은 절대 쓰지 마."
+            chat_history.add_assistant_message(str(result.get("caption", "")))
+            chat_history.add_user_message(feedback_msg)
+            response2 = await chat_service.get_chat_message_content(
+                chat_history=chat_history,
+                settings=chat_service.instantiate_prompt_execution_settings()
+            )
+            raw2 = str(response2).strip().replace("```json", "").replace("```", "").strip()
+            try:
+                result = _validate_and_clean(json.loads(raw2), brand_settings)
+            except Exception:
+                pass  # 재시도도 실패하면 원본 그대로 사용
+
+        result.pop("needs_retry", None)
+        result.pop("retry_reason", None)
 
         print(f"[post_writer] 완료 → 캡션 {len(result.get('caption', ''))}자, "
               f"해시태그 {len(result.get('hashtags', []))}개")
@@ -87,36 +112,64 @@ def _build_prompt(
     """
 
     # ── 시스템 프롬프트 ──
-    forbidden_str = ", ".join(brand_settings.get("forbidden_words", []))
+    # ✅ brand_tone 리스트 처리
+    brand_tone = brand_settings.get("brand_tone", "친근하고 편안한 말투")
+    if isinstance(brand_tone, list):
+        brand_tone = " ".join(brand_tone)
+    
+    # ✅ forbidden_words 리스트 처리
+    forbidden_words = brand_settings.get("forbidden_words", [])
+    if isinstance(forbidden_words, str):
+        forbidden_words = [w.strip() for w in forbidden_words.split(",")]
+    forbidden_str = ", ".join(forbidden_words) if forbidden_words else "없음"
+    
     feed_style    = brand_settings.get("feed_style", {})
     emoji_usage   = feed_style.get("emoji_usage", "적당히")
     caption_len   = feed_style.get("caption_length", "2~4줄")
     hashtag_count = feed_style.get("hashtag_count", 10)
 
-    system_prompt = f"""너는 경력 20년의 바버샵 전문 인스타그램 마케터야.
-사장님의 브랜드 설정을 완벽하게 지키면서 인스타그램 게시물을 작성해줘.
+    # AG-040: 온보딩 추가 필드
+    hashtag_style = brand_settings.get("hashtag_style", "감성형")
 
-[브랜드 설정]
-- 말투/톤: {brand_settings.get("brand_tone", "친근하고 편안한 말투")}
-- 절대 사용 금지 단어: {forbidden_str if forbidden_str else "없음"}
-- CTA 문구: {brand_settings.get("cta", "DM으로 예약 문의주세요")}
-- 이모지 사용: {emoji_usage}
-- 캡션 길이: {caption_len}
-- 해시태그 수: {hashtag_count}개 내외
+    preferred_styles = brand_settings.get("preferred_styles", [])
+    if isinstance(preferred_styles, str):
+        preferred_styles = [s.strip() for s in preferred_styles.split(",") if s.strip()]
+    preferred_str = ", ".join(preferred_styles) if preferred_styles else "페이드컷, 투블럭 등 바버샵 스타일"
 
-[절대 규칙]
-1. 금지 단어는 절대 사용하지 마
-2. 여성 헤어, 펌, 염색 관련 내용 절대 금지
-3. 과장되거나 거짓된 표현 금지 (예: "최고", "완벽한")
-4. 반드시 JSON으로만 응답
-5. 캡션 첫 줄에 반드시 스타일명 키워드 포함 (예: "페이드컷으로 봄을 맞이해요 🌿")
-6. CTA는 문의/예약 행동을 직접적으로 유도하는 문구로 작성 (예: "이 스타일 궁금하면 DM 주세요 👇")
+    exclude_conditions = brand_settings.get("exclude_conditions", [])
+    if isinstance(exclude_conditions, str):
+        exclude_conditions = [s.strip() for s in exclude_conditions.split(",") if s.strip()]
+    exclude_str = ", ".join(exclude_conditions) if exclude_conditions else "없음"
 
-[응답 형식]
+    # 시스템 프롬프트 구성
+    system_prompt = f"""너는 바버샵 사장님 대신 인스타 게시물을 써주는 사람이야.
+사장님이 바빠서 직접 못 쓰니까 네가 대신 쓰는 거야.
+
+[절대 금지]
+- 경력 연수 지어내기 ("22년 경력" 등) — DB에 없으면 절대 쓰지 마
+- 예약 현황 지어내기 ("오늘 3자리 남음" 등) — 실제 현황 모름
+- "정교한", "선사하는", "완성하는", "트렌디한" 같은 AI 냄새 나는 표현
+- 수상 이력, 인증, 특허 — 확인 안 된 거 절대 쓰지 마
+
+[말투]
+- 실제 바버샵 사장님이 인스타에 쓸 법한 말투로 — 짧고 편하게
+- 브랜드 톤: {brand_tone}
+- 이모지: {emoji_usage}
+- 길이: {caption_len}
+
+[내용 범위]
+- 전문 스타일: {preferred_str}
+- 금칙어: {forbidden_str}
+- 언급 금지: {exclude_str}
+
+[해시태그]
+- {hashtag_style} 스타일 / 총 {hashtag_count}개
+
+[출력 — JSON만, 다른 텍스트 없이]
 {{
-  "caption": "캡션 내용 (줄바꿈은 \\n 사용)",
-  "hashtags": ["#해시태그1", "#해시태그2", ...],
-  "cta": "CTA 문구"
+  "caption": "첫 문장에 스타일명 포함, {caption_len}, 자연스러운 말투",
+  "hashtags": ["#페이드컷", "#바버샵", ... 총 {hashtag_count}개],
+  "cta": "예약 유도 문구"
 }}"""
 
     # ── 유저 프롬프트 ──
@@ -133,10 +186,16 @@ def _build_prompt(
     if promo:
         parts.append(f"[바버샵 홍보 포인트]\n{promo}")
 
-    # ↓ 여기에 추가 (트렌드 블록 바로 다음)
-    brand_diff = brand_settings.get("brand_differentiation", "")
+    # 샵 차별점 - shop_intro 있을 때만 반영 
+    brand_diff = brand_settings.get("brand_differentiation", "").strip()
     if brand_diff:
-        parts.append(f"[우리 샵 차별점 - 반드시 언급]\n{brand_diff}")
+        parts.append(f"[우리 샵 차별점 - 첫 문장에 자연스럽게 녹여줘]\n{brand_diff}")
+
+    # 실제 검색 스니펫 - 사람들이 실제로 쓰는 말투 참고용
+    raw_snippets = trend_data.get("raw_snippets", [])
+    if raw_snippets:
+        snippet_text = "\n".join(f"- {s}" for s in raw_snippets[:3])
+        parts.append(f"[실제 검색에서 수집한 표현 - 말투 참고만, 그대로 복붙 금지]\n{snippet_text}")
 
     # 2. 선택된 사진 스타일
     if selected_photos:
@@ -153,23 +212,26 @@ def _build_prompt(
         tone_rules       = rag_context.get("tone_rules", "")
         examples         = rag_context.get("examples", [])
         hashtag_patterns = rag_context.get("hashtag_patterns", [])
-        rag_source       = rag_context.get("source", "fallback")
+        
+        if hashtag_patterns:
+            parts.append(f"[자주 쓰는 해시태그]\n{' '.join(hashtag_patterns[:10])}")
 
+        # 성과 인사이트 
+        if rag_context.get("performance_insights"):
+            parts.append(f"[과거 성과 패턴 - 이 패턴대로 써줘]\n{rag_context['performance_insights']}")
+            
         if tone_rules:
             parts.append(f"[이 샵의 말투 패턴]\n{tone_rules}")
 
         if examples:
-            ex_text = f"[과거 게시물 예시 - {rag_source}]\n"
+            ex_text = f"[이 샵의 과거 게시물 — 이 말투와 비슷하게 써줘]\n"
             for i, ex in enumerate(examples[:3], 1):
                 caption  = ex.get("caption", "")
                 hashtags = ex.get("hashtags", [])
                 ex_text += f"{i}. {caption[:80]}{'...' if len(caption) > 80 else ''}\n"
                 if hashtags:
                     ex_text += f"   해시태그: {' '.join(hashtags[:5])}\n"
-            parts.append(ex_text)
-
-        if hashtag_patterns:
-            parts.append(f"[자주 쓰는 해시태그]\n{' '.join(hashtag_patterns[:10])}")
+            parts.append(ex_text) 
 
     # 4. 최근 게시물 말투 참고
     if recent_posts:
@@ -185,40 +247,101 @@ def _build_prompt(
         parts.append(
             f"[이전 초안 - 수정 필요]\n{prev_caption}\n\n"
             f"[수정 요청]\n{feedback}\n\n"
-            f"위 피드백을 반영해서 더 나은 캡션으로 재작성해줘."
+            f"마케터 관점으로 재작성: 문의율 올리는 데 집중."
         )
     else:
-        parts.append("위 내용을 바탕으로 인스타그램 게시물을 작성해줘.")
+        parts.append(
+            "위 내용 참고해서 게시물 써줘.\n"
+            "체크리스트:\n"
+            "✅ 첫 문장에 메인 키워드 배치\n"
+            "✅ 타겟 고객 니즈 자극\n"
+            "✅ 긴박감 있는 CTA\n"
+            "✅ 검색량 높은 해시태그 우선 배치"
+        )
 
     user_prompt = "\n\n".join(parts)
     return system_prompt, user_prompt
 
 
-# [검증] 금칙어 자동 제거
+# 할루시네이션 방지 - 바버샵 무관 주제 키워드
+_FORBIDDEN_TOPICS = [
+    "레이어컷", "펌", "염색", "여성", "헤어숍", "미용실",
+    "네일", "왁싱", "속눈썹", "피부", "스킨케어",
+]
+
+# 과장 표현 금지
+_FORBIDDEN_EXAGGERATIONS = [
+    "최고의", "완벽한", "세계 최초", "혁신적인", "압도적인",
+    "독보적인", "전국 1위", "업계 최고",
+]
+
+
+# [검증] 금칙어 + 할루시네이션 자동 제거
 def _validate_and_clean(result: dict, brand_settings: dict) -> dict:
     """
-    금칙어 검증 + 자동 제거
+    AG-042 강화: 금칙어 + 주제 이탈 + 과장 표현 3중 검사
 
-    GPT가 금칙어를 포함했을 경우 자동으로 제거.
-    완전 제거가 불가능한 경우 경고 로그만 출력.
+    1) 금칙어 (브랜드 설정)  → 자동 제거
+    2) 주제 이탈 키워드      → 자동 제거 + 경고
+    3) 과장 표현             → 자동 제거 + 경고
     """
+    # forbidden_words 리스트 처리
     forbidden_words = brand_settings.get("forbidden_words", [])
-    caption         = result.get("caption", "")
-    found           = []
+    if isinstance(forbidden_words, str):
+        forbidden_words = [w.strip() for w in forbidden_words.split(",")]
 
+    caption = result.get("caption", "")
+
+    # 0) 할루시네이션 패턴 감지 → 재생성 신호 (제거 말고 플래그)
+    import re
+    hallucination_patterns = [
+        (r'\d+년\s*경력',   "경력 연수 할루시네이션"),
+        (r'\d+자리\s*남',   "예약 현황 할루시네이션"),
+        (r'마감\s*임박',     "마감 임박 할루시네이션"),
+        (r'오늘만\s*할인',   "근거없는 할인 할루시네이션"),
+    ]
+    for pattern, label in hallucination_patterns:
+        if re.search(pattern, caption):
+            print(f"[post_writer] ⚠️  {label} 감지 → needs_retry=True")
+            result["needs_retry"] = True
+            result["retry_reason"] = label
+            return result
+
+    # 1) 금칙어 제거
+    found_forbidden = []
     for word in forbidden_words:
         if word in caption:
-            found.append(word)
+            found_forbidden.append(word)
             caption = caption.replace(word, "")
+    if found_forbidden:
+        print(f"[post_writer] AG-042 금칙어 제거: {found_forbidden}")
 
-    if found:
-        print(f"[post_writer] ⚠️ 금칙어 발견 후 제거: {found}")
-        result["caption"] = caption.strip()
+    # 2) 주제 이탈 제거
+    found_topics = []
+    for word in _FORBIDDEN_TOPICS:
+        if word in caption:
+            found_topics.append(word)
+            caption = caption.replace(word, "")
+    if found_topics:
+        print(f"[post_writer] AG-042 주제 이탈 키워드 제거: {found_topics}")
 
+    # 3) 과장 표현 제거
+    found_exaggerations = []
+    for word in _FORBIDDEN_EXAGGERATIONS:
+        if word in caption:
+            found_exaggerations.append(word)
+            caption = caption.replace(word, "")
+    if found_exaggerations:
+        print(f"[post_writer] AG-042 과장 표현 제거: {found_exaggerations}")
+
+    result["caption"] = caption.strip()
+
+    # 해시태그에서도 금칙어 + 주제 이탈 제거
+    all_banned = forbidden_words + _FORBIDDEN_TOPICS
     hashtags = result.get("hashtags", [])
     result["hashtags"] = [
         tag for tag in hashtags
-        if not any(word in tag for word in forbidden_words)
+        if not any(word in tag for word in all_banned)
     ]
 
     return result
@@ -264,90 +387,3 @@ def _init_kernel(tier: str = "mini") -> Kernel:
         api_key=os.getenv("AZURE_OPENAI_KEY")
     ))
     return kernel
-
-
-# [목업 테스트] 단독 실행용
-if __name__ == "__main__":
-    import asyncio
-    from dotenv import load_dotenv
-    load_dotenv()
-
-    mock_trend = {
-        "trend": "2026년 봄 페이드컷(fade cut)과 사이드파트(side part) 인기 상승 중",
-        "weather": "맑음 18도, 봄 시즌",
-        "promo": "봄 신규 고객 이벤트"
-    }
-
-    mock_photos = [
-        {"id": "photo_001", "style_tags": ["fade_cut", "side_part"]},
-        {"id": "photo_002", "style_tags": ["slick_back"]}
-    ]
-
-    mock_brand = {
-        "brand_tone": "친근하고 편안한 말투",
-        "forbidden_words": ["저렴", "할인"],
-        "cta": "DM으로 예약 문의주세요",
-        "feed_style": {
-            "emoji_usage": "자주",
-            "caption_length": "2~4줄",
-            "hashtag_count": 10
-        }
-    }
-
-    mock_recent_posts = [
-        {
-            "caption": "봄이 왔어요! 새로운 스타일로 변신해볼까요? ✂️",
-            "hashtags": ["#바버샵", "#페이드컷", "#봄헤어"]
-        }
-    ]
-
-    # RAG Fallback 컨텍스트 목업
-    mock_rag = {
-        "examples": [
-            {
-                "caption": "깔끔한 페이드컷으로 봄을 맞이해요 🌿",
-                "hashtags": ["#바버샵", "#페이드컷"]
-            }
-        ],
-        "tone_rules": "친근한 말투, 이모지 자주 사용",
-        "hashtag_patterns": ["#바버샵", "#페이드컷", "#남성헤어"],
-        "cta_pattern": "DM으로 예약 문의주세요",
-        "source": "fallback"
-    }
-
-    async def test():
-        print("=" * 50)
-        print("[테스트 1] 최초 작성")
-        print("=" * 50)
-        result = await post_writer_agent(
-            shop_id="shop_test_001",
-            trend_data=mock_trend,
-            selected_photos=mock_photos,
-            brand_settings=mock_brand,
-            recent_posts=mock_recent_posts,
-            rag_context=mock_rag
-        )
-        print(f"\n[결과]")
-        print(f"  캡션:     {result['caption']}")
-        print(f"  해시태그: {result['hashtags']}")
-        print(f"  CTA:      {result['cta']}")
-
-        print("\n" + "=" * 50)
-        print("[테스트 2] 재작성 (피드백 반영)")
-        print("=" * 50)
-        result2 = await post_writer_agent(
-            shop_id="shop_test_001",
-            trend_data=mock_trend,
-            selected_photos=mock_photos,
-            brand_settings=mock_brand,
-            recent_posts=mock_recent_posts,
-            rag_context=mock_rag,
-            previous_draft=result,
-            feedback="브랜드 톤 점수 0.65 미달. 더 친근한 말투로 재조정 필요."
-        )
-        print(f"\n[재작성 결과]")
-        print(f"  캡션:     {result2['caption']}")
-        print(f"  해시태그: {result2['hashtags']}")
-        print(f"  CTA:      {result2['cta']}")
-
-    asyncio.run(test())

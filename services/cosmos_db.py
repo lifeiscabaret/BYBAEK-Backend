@@ -1,17 +1,6 @@
-"""
-기능: Cosmos DB(NoSQL) 데이터 접근 및 비즈니스 로직 처리
-작성자: jiyeon back
-최초 생성: 2026. 02. 24.
-버전: 1.0
-
-[Modification Information]
-DATE        AUTHOR          NOTE
------------------------------------------------------------
-2026.02.24  jiyeon back     최초 생성 및 기본 CRUD 구현
-"""
-
 from services.cosmos_client import get_cosmos_container
 import logging
+import uuid
 from datetime import datetime, timedelta
 from azure.cosmos.errors import CosmosResourceNotFoundError
 from services.blob_storage import delete_blob
@@ -55,8 +44,9 @@ def get_shop_location(shop_id: str) -> dict:
     container = get_cosmos_container("Shop")
     
     try:
-        query = f"SELECT c.location, c.city FROM c WHERE c.shop_id = '{shop_id}'"
-        items = list(container.query_items(query=query, enable_cross_partition_query=True))
+        query = "SELECT c.location, c.city FROM c WHERE c.shop_id = @shop_id"
+        parameters = [{"name": "@shop_id", "value": shop_id}]
+        items = list(container.query_items(query=query, parameters=parameters, enable_cross_partition_query=True))
         
         if items:
             city = items[0].get("city") or "서울"
@@ -165,6 +155,7 @@ def save_photo(shop_id: str, photo_data: dict) -> bool:
         "id": photo_data['photo_id'],
         "shop_id": shop_id,
         "blob_url": photo_data['blob_url'], 
+        "onedrive_url": photo_data['onedrive_url'],
         "original_name": photo_data['name'],
         "used_yn": False,
         "created_at": photo_data['last_modified']
@@ -202,7 +193,7 @@ def get_onboarding(shop_id: str) -> dict:
             "hashtag_style", "cta", "shop_intro", 
             "forbidden_words", "locale", "city", "language",
             "is_kakao_connected", "is_insta_connected", "is_gmail_connected",
-            "rag_reference"
+            "rag_reference", "is_ms_connected", "owner_email" ,"district"
         ]
 
         filtered_shop_info = {k: shop_item.get(k) for k in allowed_keys if k in shop_item}
@@ -225,10 +216,11 @@ def get_all_photos_by_shop(shop_id: str) -> list:
         list: 조회된 사진 객체 리스트
     """
     container = get_cosmos_container("Photo")
-    query = f"SELECT * FROM c WHERE c.shop_id = '{shop_id}'"
-    
+    query = "SELECT * FROM c WHERE c.shop_id = @shop_id"
+    parameters = [{"name": "@shop_id", "value": shop_id}]
+
     try:
-        photos = list(container.query_items(query=query, enable_cross_partition_query=True))
+        photos = list(container.query_items(query=query, parameters=parameters, enable_cross_partition_query=True))
         return photos
     except Exception as e:
         logging.error(f"Photo 조회 중 오류 발생: {str(e)}")
@@ -298,31 +290,23 @@ def save_album(shop_id: str, album_id: str, photo_list: list, album_name: str = 
         bool: 저장 성공 여부
     """
     album_container = get_cosmos_container("Album")
-
     try:
-        current_time = datetime.utcnow()
-        current_time_iso = current_time.isoformat()
-        
-        # 1. ID 자동 생성: album_{shop_id}_{날짜_시간}
-        if not album_id:
-            # 예: album_shop123_20260224_153045
-            timestamp = current_time.strftime("%Y%m%d_%H%M%S")
-            album_id = f"album_{shop_id}_{timestamp}"
+        current_time_iso = datetime.utcnow().isoformat()
+         # 기존 photo_list
+        # new_photo_ids = [p.get('photo_id') for p in photo_list if p.get('photo_id')]
 
-        # 저장할 사진 ID 추출
-        new_photo_ids = [p.get('photo_id') for p in photo_list if p.get('photo_id')]
+        # 변경 예정
+        new_photo_ids = [p.get('photo_id') or p.get('id') for p in photo_list if p.get('photo_id') or p.get('id')]
 
         try:
-            # 기존 앨범 정보 조회
             album_item = album_container.read_item(item=album_id, partition_key=shop_id)
-            existing_ids = set(album_item.get("photo_ids", []))
-            existing_ids.update(new_photo_ids)
-            album_item["photo_ids"] = list(existing_ids)
-            album_item["album_name"] = album_name  # 이름 수정 반영
+            # [수정 포인트] set.update() 대신 프론트가 보낸 리스트로 통째로 교체합니다.
+            album_item["photo_ids"] = new_photo_ids 
+            album_item["album_name"] = album_name
             album_item["description"] = description
             album_item["updated_at"] = current_time_iso
         except Exception:
-            # 앨범이 없으면 신규 생성
+            # 신규 생성 로직은 동일
             album_item = {
                 "id": album_id,
                 "shop_id": shop_id,
@@ -335,9 +319,8 @@ def save_album(shop_id: str, album_id: str, photo_list: list, album_name: str = 
 
         album_container.upsert_item(body=album_item)
         return True
-
     except Exception as e:
-        logging.error(f"앨범별 사진 저장 실패 (shop_id: {shop_id}): {str(e)}")
+        print(f"Error: {e}")
         return False
 
 def get_album_list(shop_id: str) -> list:
@@ -410,7 +393,7 @@ def save_onboarding(shop_id: str, data: dict) -> bool:
         "hashtag_style", "cta", "shop_intro", 
         "forbidden_words", "locale", "city", "language",
         "is_kakao_connected", "is_insta_connected", "is_gmail_connected",
-        "rag_reference"
+        "rag_reference", "is_ms_connected", "owner_email" ,"district"
     ]
 
     try:
@@ -455,13 +438,11 @@ def get_post_by_shop(shop_id: str) -> list:
     # 2. 각 게시물에 대표 이미지 URL 추가
     for post in posts:
         photo_ids = post.get("photo_ids", [])
-        post["thumbnail_url"] = None  # 기본값 설정
+        post["thumbnail_url"] = None  #기본값
 
         if photo_ids:
             first_photo_id = photo_ids[0]
             try:
-                # Photo 컨테이너에서 해당 ID의 문서 조회
-                # partition key가 id와 같다면 read_item이 효율적입니다.
                 photo_item = photo_container.read_item(item=first_photo_id, partition_key=shop_id)
                 post["thumbnail_url"] = photo_item.get("blob_url")
             except Exception:
@@ -533,8 +514,8 @@ def save_post_data(shop_id: str, post_data: dict) -> bool:
         # 이미 id가 있으면(수정 건) 그대로 쓰고, 없으면 새로 생성합니다.
         post_id = post_data.get('id')
         if not post_id:
-            timestamp = current_time.strftime("%Y%m%d_%H%M%S")
-            post_id = f"post_{shop_id}_{timestamp}"
+            new_uuid = str(uuid.uuid4())
+            post_id = f"post_{new_uuid}"
             post_data['id'] = post_id
             post_data['created_at'] = current_time_iso
         else:
@@ -549,6 +530,27 @@ def save_post_data(shop_id: str, post_data: dict) -> bool:
         post_data['status'] = 'success'
         post_data['updated_at'] = current_time_iso
         
+        # caption 초안에서 수정되는 경우 받아와서 교체 필요
+        # hashtags
+        # photo_ids
+        # cta
+
+        # [추가] AI 생성 시점에 들어가는 데이터 (post_data에 미리 담겨와야 함)
+
+        post_data['trend_score'] = post_data.get('trend_score', 0)
+        post_data['caption_score'] = post_data.get('caption_score', 0)
+        post_data['model_used'] = post_data.get('model_used', '')
+        post_data['elapsed_seconds'] = post_data.get('elapsed_seconds', 0)
+
+        # [추가] 검토 프로세스 초기화
+        # 생성 시점 기준 + 24시간 등 로직에 따라 deadline 설정 가능
+        if 'review_deadline' not in post_data:
+            deadline = current_time + timedelta(hours=24) 
+            post_data['review_deadline'] = deadline.isoformat()
+            
+        post_data['result_notified'] = False  # 초기값
+        post_data['review_action'] = 'pending' # 검토 대기 상태
+
         container.upsert_item(body=post_data)
         return True
     except Exception as e:
@@ -610,27 +612,39 @@ def get_recent_posts(shop_id: str, limit: int = 3) -> list:
         logging.error(f"recent_posts 조회 실패: {str(e)}")
         return []
 
-def save_draft(shop_id: str, post_id: str, caption: str, hashtags: list, photo_ids: list, cta: str) -> bool:
+def save_draft(
+    shop_id: str,
+    post_id: str,
+    caption: str,
+    hashtags: list,
+    photo_ids: list,
+    cta: str,
+    review_action: str,
+    caption_score: float = 0.0,
+    retry_count: int = 0,
+    model_used: str = "mini"
+) -> bool:
     """
-    마케팅 게시물 확정 전 초안 상태로 데이터를 저장합니다.
+    마케팅 게시물 초안 저장 (품질 지표 포함)
 
     Args:
-        shop_id (str): 상점 고유 식별자
-        post_id (str): 게시물 고유 식별자
-        caption (str): 생성된 캡션 문구
-        hashtags (list): 추천 해시태그 리스트
-        photo_ids (list): 선택된 사진 ID 리스트
-        cta (str): 클릭 유도 문구
+        shop_id: 상점 고유 식별자
+        post_id: 게시물 고유 식별자
+        caption: 생성된 캡션
+        hashtags: 해시태그 리스트
+        photo_ids: 선택된 사진 ID 리스트
+        cta: 클릭 유도 문구
+        review_action: 검토 상태
+        caption_score: 캡션 품질 점수 (0.0~1.0)
+        retry_count: 재시도 횟수
+        model_used: 사용된 모델 (mini/full)
 
     Returns:
         bool: 저장 성공 여부
     """
     container = get_cosmos_container("Post")
-
     now_iso = datetime.utcnow().isoformat()
-    
-    # 초안(Draft)은 보통 새로 생성되는 경우가 많지만, 
-    # 기존 초안을 덮어쓸 때를 대비해 로직을 구성합니다.
+
     try:
         try:
             existing_item = container.read_item(item=post_id, partition_key=shop_id)
@@ -645,16 +659,48 @@ def save_draft(shop_id: str, post_id: str, caption: str, hashtags: list, photo_i
             "hashtags": hashtags,
             "photo_ids": photo_ids,
             "cta": cta,
-            "status": "pending",
-            "created_at": created_at,  # 생성 시간 유지
-            "updated_at": now_iso       # 수정 시간 갱신
+            "created_at": created_at,
+            "updated_at": now_iso,
+            "review_action": review_action,
+            "reviewed_at": now_iso,
+            "status": "success" if review_action in ['ok', 'auto_approved'] else "pending",
+            # 품질 지표
+            "metrics": {
+                "caption_score": caption_score,
+                "retry_count": retry_count,
+                "model_used": model_used
+            }
         }
-        
+
         container.upsert_item(body=draft_data)
+        logging.info(f"초안 저장 완료 → post_id={post_id}, score={caption_score}, retry={retry_count}, model={model_used}")
         return True
     except Exception as e:
         logging.error(f"초안 저장 실패 (post_id: {post_id}): {str(e)}")
         return False
+
+def get_draft(shop_id: str, post_id: str) -> dict:
+    """
+    저장된 마케팅 게시물 초안 데이터를 조회합니다.
+
+    Args:
+        shop_id (str): 상점 고유 식별자 (Partition Key)
+        post_id (str): 게시물 고유 식별자 (Item ID)
+
+    Returns:
+        dict: 조회된 초안 데이터 객체. 데이터를 찾지 못하거나 에러 발생 시 None 반환.
+    """
+    container = get_cosmos_container("Post")
+
+    try:
+        draft_item = container.read_item(item=post_id, partition_key=shop_id)
+        
+        logging.info(f"초안 조회 성공 (post_id: {post_id})")
+        return draft_item
+
+    except Exception as e:
+        logging.error(f"초안 조회 실패 (post_id: {post_id}): {str(e)}")
+        return None
 
 def save_photo_meta(shop_id: str, doc: dict) -> bool:
     """
@@ -674,6 +720,7 @@ def save_photo_meta(shop_id: str, doc: dict) -> bool:
         existing_item = container.read_item(item=photo_id, partition_key=shop_id)
         existing_item.update({
             "fade_cut_score": doc.get("fade_cut_score", 0),
+            "detected_angle": doc.get("detected_angle", "unknown"),
             "style_tags": doc.get("style_tags", []),
             "is_usable": doc.get("is_usable", False),
             "updated_at": datetime.utcnow().isoformat()
@@ -763,3 +810,149 @@ def remove_photo_from_all_albums(shop_id: str, photo_id: str):
 
     except Exception as e:
         logging.error(f"앨범 내 사진 참조 제거 중 오류 발생: {str(e)}")
+
+def get_album(shop_id: str, album_id: str) -> dict:
+    """
+    특정 앨범(album_id)의 메타데이터 정보를 단일 조회합니다.
+    """
+    album_container = get_cosmos_container("Album")
+    try:
+        # id가 album_id이고 partition_key가 shop_id인 아이템 조회
+        album = album_container.read_item(item=album_id, partition_key=shop_id)
+        return album
+    except Exception as e:
+        logging.error(f"단일 앨범 조회 실패 (album_id: {album_id}): {str(e)}")
+        return None
+    
+def get_photo_by_id(shop_id: str, photo_id: str) -> dict:
+    """
+    특정 사진(photo_id)의 상세 정보(blob_url, 이름 등)를 단일 조회합니다.
+    """
+    photo_container = get_cosmos_container("Photo")
+    try:
+        # Photo 컨테이너에서 사진 상세 정보 조회
+        photo_item = photo_container.read_item(item=photo_id, partition_key=shop_id)
+        return photo_item
+    except Exception as e:
+        logging.error(f"단일 사진 조회 실패 (photo_id: {photo_id}): {str(e)}")
+        return None
+    
+def save_auth(shop_id: str, auth_data: dict):
+    """
+    상점의 인증 정보(MS, 인스타그램 토큰 등)를 저장하거나 업데이트합니다.
+    """
+    container = get_cosmos_container("Shop")
+    try:
+        # 1. 기존 데이터가 있는지 먼저 확인
+        try:
+            item = container.read_item(item=shop_id, partition_key=shop_id)
+        except Exception:
+            item = {"id": shop_id, "shop_id": shop_id} # 없으면 기본 구조 생성
+
+        # 2. 전달받은 인증 데이터 병합
+        item.update(auth_data)
+        item["updated_at"] = datetime.utcnow().isoformat()
+
+        # 3. 저장 (Upsert)
+        container.upsert_item(item)
+        logging.info(f"인증 정보 저장 완료: {shop_id}")
+        return True
+    except Exception as e:
+        logging.error(f"인증 정보 저장 실패 ({shop_id}): {str(e)}")
+        return False
+
+def get_auth(shop_id: str):
+    """
+    상점의 인증 정보를 조회합니다.
+    """
+    container = get_cosmos_container("Shop")
+    try:
+        item = container.read_item(item=shop_id, partition_key=shop_id)
+        # 보안상 필요한 필드만 골라서 반환하거나 전체 반환
+        return item
+    except Exception as e:
+        logging.error(f"인증 정보 조회 실패 ({shop_id}): {str(e)}")
+        return None
+    
+def get_shop_info(shop_id: str) -> dict:
+    """
+    [추가] 스케줄러가 상점의 'insta_upload_time' 등을 확인하기 위해 
+    Shop 컨테이너에서 데이터를 읽어옵니다.
+    """
+    container = get_cosmos_container("Shop")
+    try:
+        # id와 partition_key가 모두 shop_id인 아이템 조회
+        shop_item = container.read_item(item=shop_id, partition_key=shop_id)
+        return shop_item
+    except Exception as e:
+        logging.error(f"상점 설정 조회 실패 (shop_id: {shop_id}): {str(e)}")
+        return None
+ 
+def update_schedule_settings(shop_id: str, upload_time: str, timezone: str = "Asia/Seoul") -> bool:
+    """
+    [추가] 사장님이 수정한 예약 시간을 Shop 컨테이너에 반영합니다.
+    """
+    container = get_cosmos_container("Shop")
+    try:
+        # 1. 기존 데이터 먼저 읽기
+        shop_item = container.read_item(item=shop_id, partition_key=shop_id)
+        # 2. 시간 설정 업데이트 (필드명은 온보딩 규격에 맞춤)
+        shop_item["insta_upload_time"] = upload_time
+        shop_item["insta_upload_time_slot"] = timezone
+        shop_item["updated_at"] = datetime.utcnow().isoformat()
+        # 3. 저장
+        container.upsert_item(body=shop_item)
+        return True
+    except Exception as e:
+        logging.error(f"스케줄 설정 저장 실패 (shop_id: {shop_id}): {str(e)}")
+        return False
+def get_all_shops() -> list:
+    """
+    스케줄러가 자동 업로드 대상 샵을 찾기 위해
+    Shop 컨테이너의 전체 샵 목록을 조회합니다.
+
+    Returns:
+        list: 전체 샵 데이터 리스트
+    """
+    container = get_cosmos_container("Shop")
+    query = "SELECT c.id, c.shop_id, c.insta_upload_time, c.insta_auto_upload_yn FROM c"
+    try:
+        items = list(container.query_items(
+            query=query,
+            enable_cross_partition_query=True
+        ))
+        return items
+    except Exception as e:
+        logging.error(f"전체 샵 목록 조회 실패: {str(e)}")
+        return []
+    
+def get_recent_drafts_with_scores(shop_id: str, limit: int = 20) -> list:
+    """caption_score가 기록된 최근 게시물 초안 조회"""
+    container = get_cosmos_container("Post")
+    query = f"""
+        SELECT c.id, c.caption, c.hashtags, c.metrics.caption_score AS caption_score, c.model_used, c.created_at
+        FROM c
+        WHERE c.shop_id = '{shop_id}'
+        AND IS_DEFINED(c.metrics.caption_score)
+        ORDER BY c._ts DESC
+        OFFSET 0 LIMIT {limit}
+    """
+    return list(container.query_items(query=query, enable_cross_partition_query=True))
+
+
+def save_rejection_log(shop_id: str, doc: dict) -> None:
+    """사진 탈락 로그 저장"""
+    container = get_cosmos_container("RejectionLog")
+    container.upsert_item(doc)
+
+
+def get_rejection_logs(shop_id: str, limit: int = 50) -> list:
+    """샵별 탈락 로그 조회"""
+    container = get_cosmos_container("RejectionLog")
+    query = f"""
+        SELECT * FROM c
+        WHERE c.shop_id = '{shop_id}'
+        ORDER BY c._ts DESC
+        OFFSET 0 LIMIT {limit}
+    """
+    return list(container.query_items(query=query, enable_cross_partition_query=True))
