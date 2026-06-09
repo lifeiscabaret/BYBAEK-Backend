@@ -22,6 +22,7 @@ import os
 import traceback
 from typing import Dict, List, Optional
 
+import msal
 import requests
 from azure.storage.queue import QueueClient
 from fastapi import APIRouter, HTTPException, Request, status
@@ -188,6 +189,98 @@ def enqueue_photo_batches(
 
 
 # ──────────────────────────────────────────
+# 토큰 헬퍼 (스케줄러/내부 호출용)
+# ──────────────────────────────────────────
+
+def _acquire_graph_token_from_refresh(refresh_token: str) -> str:
+    """
+    저장된 refresh_token으로 Graph access_token 발급.
+    스케줄러처럼 request 헤더 토큰(x-ms-token-aad-access-token)이
+    없는 경우에만 사용한다.
+    (Easy Auth offline_access 스코프로 저장된 refresh_token 필요)
+    """
+    tenant_id     = os.getenv("AZURE_TENANT_ID")
+    client_id     = os.getenv("AZURE_CLIENT_ID")
+    client_secret = os.getenv("AZURE_CLIENT_SECRET")
+
+    app = msal.ConfidentialClientApplication(
+        client_id=client_id,
+        authority=f"https://login.microsoftonline.com/{tenant_id}",
+        client_credential=client_secret,
+    )
+    result = app.acquire_token_by_refresh_token(
+        refresh_token,
+        scopes=["https://graph.microsoft.com/.default"],
+    )
+    access_token = result.get("access_token")
+    if not access_token:
+        raise RuntimeError(
+            f"Graph 토큰 갱신 실패: {result.get('error_description', result)}"
+        )
+    return access_token
+
+
+# ──────────────────────────────────────────
+# 동기화 코어 (엔드포인트 / 스케줄러 공용)
+# ──────────────────────────────────────────
+
+def _run_photo_sync(shop_id: str, token: str, delta_link: Optional[str]) -> dict:
+    """
+    OneDrive Delta 동기화 코어 로직.
+    변경된 사진을 수집해 큐에 등록하고 delta_link를 갱신한다.
+    엔드포인트(헤더 토큰)와 스케줄러(refresh 토큰) 양쪽에서 공용으로 호출.
+    Returns: {success, queued, batches, message}
+    """
+    container_name = os.getenv("AZURE_BLOB_CONTAINER_NAME", "photos")
+    logger.info(f"[onedrive] 동기화 시작 → shop_id={shop_id}")
+
+    drive_id = get_user_drive_id(token)
+    photos, next_delta_link = collect_delta_photos(token, drive_id, delta_link)
+
+    if not photos:
+        return {
+            "success": True, "queued": 0, "batches": 0,
+            "message": "변경된 사진이 없습니다.",
+        }
+
+    queue_client = get_queue_client()
+    batches = enqueue_photo_batches(
+        queue_client, photos, shop_id, drive_id, token, container_name
+    )
+
+    if next_delta_link:
+        try:
+            update_shop_onedrive_info(shop_id, {"delta_link": next_delta_link})
+            logger.info("[onedrive] Delta Link 저장 완료")
+        except Exception as e:
+            logger.error(f"[onedrive] Delta Link 저장 실패: {e}")
+
+    logger.info(f"[onedrive] 큐 등록 완료 → {len(photos)}장 / {batches}개 배치")
+    return {
+        "success": True,
+        "queued": len(photos),
+        "batches": batches,
+        "message": f"{len(photos)}장을 큐에 등록했습니다. 백그라운드에서 처리됩니다.",
+    }
+
+
+async def sync_photos_internal(shop_id: str) -> dict:
+    """
+    스케줄러/내부 호출용 OneDrive 동기화.
+    request 헤더가 없으므로 DB에 저장된 refresh_token으로 Graph 토큰을
+    발급받아 동기화한다. refresh_token이 없으면 재연동이 필요하다.
+    """
+    from services.cosmos_db import get_auth
+    shop_data = get_auth(shop_id) or {}
+    refresh_token = shop_data.get("refresh_token") or shop_data.get("one_refresh_token")
+    if not refresh_token:
+        raise RuntimeError("refresh_token 없음 → OneDrive 재연동 필요")
+
+    token = _acquire_graph_token_from_refresh(refresh_token)
+    return _run_photo_sync(shop_id, token, shop_data.get("one_delta_link"))
+
+
+# ──────────────────────────────────────────
 # 메인 엔드포인트
 # ──────────────────────────────────────────
 
@@ -204,45 +297,13 @@ def sync_onedrive_photos(req: SyncPhotosRequest, request: Request) -> SyncPhotos
             raise HTTPException(status_code=401, detail="MS 로그인 필요.")
 
         shop_id = request.headers.get("X-MS-CLIENT-PRINCIPAL-ID", "unknown")
-        # refresh_token: Worker에서 토큰 만료 시 갱신용 (개인 MS 계정 포함)
-        container_name = os.getenv("AZURE_BLOB_CONTAINER_NAME", "photos")
-
-        logger.info(f"[onedrive] 동기화 시작 → shop_id={shop_id}")
-
-        drive_id = get_user_drive_id(token)
 
         from services.cosmos_db import get_auth
         shop_data = get_auth(shop_id)
         delta_link = shop_data.get("one_delta_link") if shop_data else None
 
-        photos, next_delta_link = collect_delta_photos(token, drive_id, delta_link)
-
-        if not photos:
-            return SyncPhotosResponse(
-                success=True, queued=0, batches=0,
-                message="변경된 사진이 없습니다."
-            )
-
-        queue_client = get_queue_client()
-        batches = enqueue_photo_batches(
-            queue_client, photos, shop_id, drive_id, token, container_name
-        )
-
-        if next_delta_link:
-            try:
-                update_shop_onedrive_info(shop_id, {"delta_link": next_delta_link})
-                logger.info("[onedrive] Delta Link 저장 완료")
-            except Exception as e:
-                logger.error(f"[onedrive] Delta Link 저장 실패: {e}")
-
-        logger.info(f"[onedrive] 큐 등록 완료 → {len(photos)}장 / {batches}개 배치")
-
-        return SyncPhotosResponse(
-            success=True,
-            queued=len(photos),
-            batches=batches,
-            message=f"{len(photos)}장을 큐에 등록했습니다. 백그라운드에서 처리됩니다."
-        )
+        result = _run_photo_sync(shop_id, token, delta_link)
+        return SyncPhotosResponse(**result)
 
     except HTTPException:
         raise
