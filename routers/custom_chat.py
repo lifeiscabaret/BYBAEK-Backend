@@ -13,7 +13,8 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import List
-from openai import AsyncAzureOpenAI
+import anthropic
+
 
 router = APIRouter()
 
@@ -94,14 +95,11 @@ async def generate_chat_stream(shop_id: str, message: str, photo_ids: List[str])
     트렌드 조회 → 브랜드 설정 조회 → 캡션 스트리밍 생성.
     출력: caption + hashtags + cta JSON 스트림.
     """
-    endpoint   = os.getenv("AZURE_OPENAI_ENDPOINT")
-    api_key    = os.getenv("AZURE_OPENAI_KEY")
-    deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT_MINI") or \
-                 os.getenv("AZURE_OPENAI_DEPLOYMENT_FULL") or \
-                 os.getenv("AZURE_OPENAI_DEPLOYMENT")
+    api_key  = os.getenv("AZURE_CLAUDE_KEY")
+    base_url = "https://bybaek-claude-swedencen-resource.services.ai.azure.com/anthropic"
 
-    if not endpoint or not api_key or not deployment:
-        yield "[❌ Azure OpenAI 환경변수가 설정되지 않았습니다.]"
+    if not api_key:
+        yield "[❌ AZURE_CLAUDE_KEY 환경변수가 설정되지 않았습니다.]"
         return
 
     # 1. 트렌드 + 브랜드 설정 병렬 조회
@@ -184,28 +182,23 @@ async def generate_chat_stream(shop_id: str, message: str, photo_ids: List[str])
 
     user_prompt = "\n\n".join(user_parts)
 
-    # 6. 스트리밍 생성
-    client = AsyncAzureOpenAI(
-        azure_endpoint=endpoint,
+    # 6. 스트리밍 생성 (Claude Sonnet 4.6)
+    client = anthropic.Anthropic(
+        base_url=base_url,
         api_key=api_key,
-        api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2024-02-01")
+        default_headers={"api-key": api_key}
     )
 
     try:
-        response = await client.chat.completions.create(
-            model=deployment,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user",   "content": user_prompt}
-            ],
-            stream=True,
+        with client.messages.stream(
+            model="claude-sonnet-4-6",
+            max_tokens=600,
             temperature=0.7,
-            max_tokens=600
-        )
-
-        async for chunk in response:
-            if chunk.choices and chunk.choices[0].delta.content:
-                yield chunk.choices[0].delta.content
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_prompt}]
+        ) as stream:
+            for text in stream.text_stream:
+                yield text
 
     except Exception as e:
         print(f"[custom_chat] 스트리밍 오류: {e}")
