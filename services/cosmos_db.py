@@ -341,7 +341,7 @@ def save_post_data(shop_id: str, post_data: dict) -> bool:
         logging.error(f"마케팅 데이터 저장 실패 (shop_id: {shop_id}): {str(e)}")
         return False
 
-def get_top_photos(shop_id: str, limit: int = 20) -> list:
+def get_top_photos(shop_id: str, limit: int = 50) -> list:
     container = get_cosmos_container("Photo")
     query = """
         SELECT TOP @limit * FROM c 
