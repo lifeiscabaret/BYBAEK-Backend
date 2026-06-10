@@ -33,7 +33,7 @@ async def photo_select_agent(
         return []
 
     # STEP 1: 14일 중복 방지 + 각도별 분류
-    categorized = _categorize_by_angle(photo_candidates)
+    categorized = _categorize_by_angle(photo_candidates, max_count=max_photos)
 
     # 원장님 피드백 학습 적용 ← 추가
     from agents.photo_feedback import get_shop_weakness_profile, apply_weakness_to_selection
@@ -69,7 +69,7 @@ async def photo_select_agent(
     return selected
 
 
-def _categorize_by_angle(candidates: list) -> dict:
+def _categorize_by_angle(candidates: list, max_count: int = 5) -> dict:
     """
     사진을 각도별로 분류
     
@@ -122,22 +122,35 @@ def _categorize_by_angle(candidates: list) -> dict:
     front.sort(key=lambda x: x.get("_sort_score", 0), reverse=True)
     vibe.sort(key=lambda x: x.get("_vibe_score", 0), reverse=True)
     
-    # 쿨다운 완화: 모든 카테고리가 비어있으면 가장 오래된 사진 사용
-    if not back_side and not front and not vibe:
-        print("[photo_select] 쿨다운 완화 → 가장 오래된 사진 사용")
+    # 쿨다운 완화: 쿨다운 미적용 사진이 max_count보다 부족하면
+    # 부족분을 가장 오래된(used_at 기준) 사진으로 보충해 max_count까지 확보
+    categorized_ids = {p["id"] for p in back_side + front + vibe}
+    if len(categorized_ids) < max_count:
+        needed = max_count - len(categorized_ids)
+        print(f"[photo_select] 쿨다운 완화 → 부족분 {needed}장을 가장 오래된 사진으로 보충 "
+              f"(쿨다운 미적용 {len(categorized_ids)}장, 목표 {max_count}장)")
         sorted_by_used = sorted(
             candidates,
             key=lambda x: x.get("used_at") or "2000-01-01T00:00:00"
         )
-        oldest = sorted_by_used[:5]
-        for photo in oldest:
+        supplement = [p for p in sorted_by_used if p["id"] not in categorized_ids][:needed]
+        for photo in supplement:
             angle = photo.get("detected_angle", "unknown")
+            scores = photo.get("scores", {})
             if angle == "back_side":
+                photo["_sort_score"] = scores.get("fade_gradient_clarity", 0)
                 back_side.append(photo)
             elif angle == "front":
+                photo["_sort_score"] = scores.get("styling_appeal", 0)
                 front.append(photo)
             else:
+                photo["_vibe_score"] = scores.get("model_vibe", 0)
                 vibe.append(photo)
+
+        # 보충분 반영 후 재정렬
+        back_side.sort(key=lambda x: x.get("_sort_score", 0), reverse=True)
+        front.sort(key=lambda x: x.get("_sort_score", 0), reverse=True)
+        vibe.sort(key=lambda x: x.get("_vibe_score", 0), reverse=True)
 
     return {
         "back_side": back_side,
