@@ -1,10 +1,7 @@
 import os
 import json
+import anthropic
 from datetime import datetime, timezone, timedelta
-
-from semantic_kernel import Kernel
-from semantic_kernel.connectors.ai.open_ai import AzureChatCompletion
-from semantic_kernel.contents import ChatHistory
 
 REUSE_COOLDOWN_DAYS = 14
 
@@ -35,26 +32,13 @@ async def photo_select_agent(
     # STEP 1: 14일 중복 방지 + 각도별 분류
     categorized = _categorize_by_angle(photo_candidates, max_count=max_photos)
 
-    # 원장님 피드백 학습 적용 ← 추가
-    from agents.photo_feedback import get_shop_weakness_profile, apply_weakness_to_selection
-    weakness_profile = await get_shop_weakness_profile(shop_id)
-    categorized["back_side"] = await apply_weakness_to_selection(
-        categorized["back_side"], weakness_profile
-    )
-    categorized["front"] = await apply_weakness_to_selection(
-        categorized["front"], weakness_profile
-    )
-    
     print(f"[photo_select] 각도별 분류 완료:")
     print(f"  - 뒷면/측면 (페이드): {len(categorized['back_side'])}장")
     print(f"  - 앞면 (스타일링): {len(categorized['front'])}장")
     print(f"  - 분위기: {len(categorized['vibe'])}장")
-    print(f"  - 약점 프로파일: {weakness_profile.get('top_weakness', '없음')}")  # ← 추가
 
     # STEP 2: 원장님 조합 패턴 적용
-    kernel = _init_kernel()
     selected = await _apply_director_pattern(
-        kernel=kernel,
         categorized=categorized,
         trend_data=trend_data,
         brand_settings=brand_settings,
@@ -70,16 +54,6 @@ async def photo_select_agent(
 
 
 def _categorize_by_angle(candidates: list, max_count: int = 5) -> dict:
-    """
-    사진을 각도별로 분류
-    
-    Returns:
-        {
-            "back_side": [...],  # 뒷면/측면 (페이드 그라데이션)
-            "front": [...],      # 앞면 (스타일링)
-            "vibe": [...]        # 분위기 (model_vibe 점수 높은 것)
-        }
-    """
     now_kst = datetime.now(timezone(timedelta(hours=9)))
     
     back_side = []
@@ -87,7 +61,6 @@ def _categorize_by_angle(candidates: list, max_count: int = 5) -> dict:
     vibe = []
     
     for photo in candidates:
-        # 14일 중복 방지
         used_at = photo.get("used_at")
         if used_at:
             used_at_str = used_at.replace("Z", "+00:00")
@@ -98,32 +71,24 @@ def _categorize_by_angle(candidates: list, max_count: int = 5) -> dict:
             if days_ago < REUSE_COOLDOWN_DAYS:
                 continue
         
-        # 각도 분류
         angle = photo.get("detected_angle", "unknown")
         scores = photo.get("scores", {})
         
         if angle == "back_side":
-            # 페이드 그라데이션 점수 순 정렬
             photo["_sort_score"] = scores.get("fade_gradient_clarity", 0)
             back_side.append(photo)
-            
         elif angle == "front":
-            # 스타일링 점수 순 정렬
             photo["_sort_score"] = scores.get("styling_appeal", 0)
             front.append(photo)
         
-        # model_vibe 높은 것은 분위기용으로
         if scores.get("model_vibe", 0) >= 4:
             photo["_vibe_score"] = scores.get("model_vibe", 0)
             vibe.append(photo)
     
-    # 정렬
     back_side.sort(key=lambda x: x.get("_sort_score", 0), reverse=True)
     front.sort(key=lambda x: x.get("_sort_score", 0), reverse=True)
     vibe.sort(key=lambda x: x.get("_vibe_score", 0), reverse=True)
     
-    # 쿨다운 완화: 쿨다운 미적용 사진이 max_count보다 부족하면
-    # 부족분을 가장 오래된(used_at 기준) 사진으로 보충해 max_count까지 확보
     categorized_ids = {p["id"] for p in back_side + front + vibe}
     if len(categorized_ids) < max_count:
         needed = max_count - len(categorized_ids)
@@ -147,46 +112,26 @@ def _categorize_by_angle(candidates: list, max_count: int = 5) -> dict:
                 photo["_vibe_score"] = scores.get("model_vibe", 0)
                 vibe.append(photo)
 
-        # 보충분 반영 후 재정렬
         back_side.sort(key=lambda x: x.get("_sort_score", 0), reverse=True)
         front.sort(key=lambda x: x.get("_sort_score", 0), reverse=True)
         vibe.sort(key=lambda x: x.get("_vibe_score", 0), reverse=True)
 
-    return {
-        "back_side": back_side,
-        "front": front,
-        "vibe": vibe
-    }
+    return {"back_side": back_side, "front": front, "vibe": vibe}
 
 
 async def _apply_director_pattern(
-    kernel: Kernel,
     categorized: dict,
     trend_data: dict,
     brand_settings: dict,
     min_count: int,
     max_count: int
 ) -> list:
-    """
-    원장님 조합 패턴 적용
-    
-    기본 조합 (4장):
-    - 페이드 2장 (뒷면/측면)
-    - 스타일링 1장 (앞모습)
-    - 분위기 1장
-    
-    확장 (5~20장):
-    - 위 비율 유지하면서 확장
-    """
-    
-    # 기본 조합 구성
     fade_2 = categorized["back_side"][:2]
     style_1 = categorized["front"][:1]
     vibe_1 = categorized["vibe"][:1]
     
     base_selection = fade_2 + style_1 + vibe_1
     
-    # 중복 제거 (vibe에 이미 포함된 사진 제외)
     seen_ids = set()
     deduped = []
     for p in base_selection:
@@ -196,20 +141,17 @@ async def _apply_director_pattern(
     base_selection = deduped
     selected_ids = seen_ids
     
-    # min 미달 시 보충
     if len(base_selection) < min_count:
         remaining = [p for p in categorized["back_side"] + categorized["front"] + categorized["vibe"]
                     if p["id"] not in selected_ids]
         base_selection += remaining[:min_count - len(base_selection)]
     
-    # max 초과 시 자르기
     if len(base_selection) > max_count:
         base_selection = base_selection[:max_count]
     
-    # max가 5장 이상이면 GPT에게 확장 전략 물어보기
     if max_count >= 5 and len(base_selection) < max_count:
         expanded = await _gpt_expand_selection(
-            kernel, base_selection, categorized, trend_data, brand_settings, max_count
+            base_selection, categorized, trend_data, brand_settings, max_count
         )
         return expanded
     
@@ -218,25 +160,15 @@ async def _apply_director_pattern(
 
 
 async def _gpt_expand_selection(
-    kernel, base_selection, categorized, trend_data, brand_settings, max_count
+    base_selection, categorized, trend_data, brand_settings, max_count
 ) -> list:
-    """
-    GPT가 기본 조합을 확장 (5~20장)
-    
-    원장님 비율 유지:
-    - 페이드 40%
-    - 스타일링 20%
-    - 분위기 20%
-    - 트렌드 매칭 20%
-    """
-    
     already_selected = {p["id"] for p in base_selection}
     
-    # 추가 후보
     additional_candidates = [
         p for p in categorized["back_side"] + categorized["front"] + categorized["vibe"]
         if p["id"] not in already_selected
-    ][:10]  # GPT에 최대 10장만 전달
+    ][:10]
+
     rag_reference = brand_settings.get("rag_reference", "")
     reference_line = f"\n[레퍼런스 샵 스타일]\n{rag_reference}\n이 샵의 피드 톤/구도를 참고해서 선택해줘." if rag_reference else ""
 
@@ -268,35 +200,33 @@ async def _gpt_expand_selection(
 }}
 """
 
-    chat_history = ChatHistory()
-    chat_history.add_user_message(prompt)
-
     try:
-        chat_service = kernel.get_service("azure_openai")
-        response = await chat_service.get_chat_message_content(
-            chat_history=chat_history,
-            settings=chat_service.instantiate_prompt_execution_settings()
+        client = anthropic.Anthropic(
+            base_url="https://bybaek-claude-swedencen-resource.services.ai.azure.com/anthropic",
+            api_key=os.getenv("AZURE_CLAUDE_KEY"),
+            default_headers={"api-key": os.getenv("AZURE_CLAUDE_KEY")}
         )
-
-        raw = str(response).strip()
+        response = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=300,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        raw = response.content[0].text.strip()
         raw = raw.replace("```json", "").replace("```", "").strip()
         result = json.loads(raw)
 
         add_ids = result.get("add_photo_ids", [])
         reason = result.get("reason", "")
-        print(f"[photo_select] GPT 확장 → {len(add_ids)}장 추가 | 이유: {reason}")
+        print(f"[photo_select] Claude 확장 → {len(add_ids)}장 추가 | 이유: {reason}")
 
-        # 실제 사진 추가
         id_to_photo = {p["id"]: p for p in additional_candidates}
         additional = [id_to_photo[pid] for pid in add_ids if pid in id_to_photo]
         
         final = base_selection + additional
 
-        # max 초과 시 자르기
         if len(final) > max_count:
             final = final[:max_count]
 
-        # GPT 확장 후에도 max_count 미달이면 남은 후보로 자동 보충
         if len(final) < max_count:
             all_remaining = [
                 p for p in categorized["back_side"] + categorized["front"] + categorized["vibe"]
@@ -309,8 +239,7 @@ async def _gpt_expand_selection(
         return final
 
     except Exception as e:
-        print(f"[photo_select] GPT 확장 실패 ({e}) → 기본 조합만 사용")
-        # 실패해도 남은 후보로 max_count까지 채움
+        print(f"[photo_select] Claude 확장 실패 ({e}) → 기본 조합만 사용")
         all_remaining = [
             p for p in categorized["back_side"] + categorized["front"] + categorized["vibe"]
             if p["id"] not in {x["id"] for x in base_selection}
@@ -331,18 +260,3 @@ async def _update_used_at(shop_id: str, selected: list):
             save_photo_meta(shop_id, doc)
         except Exception as e:
             print(f"[photo_select] used_at 업데이트 실패 ({photo.get('id')}): {e}")
-
-
-def _init_kernel() -> Kernel:
-    deployment = os.getenv(
-        "AZURE_OPENAI_DEPLOYMENT_MINI",
-        os.getenv("AZURE_OPENAI_DEPLOYMENT")
-    )
-    kernel = Kernel()
-    kernel.add_service(AzureChatCompletion(
-        service_id="azure_openai",
-        deployment_name=deployment,
-        endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
-        api_key=os.getenv("AZURE_OPENAI_KEY")
-    ))
-    return kernel
