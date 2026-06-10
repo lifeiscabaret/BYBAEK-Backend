@@ -43,7 +43,7 @@ async def post_writer_agent(
     )
 
     try:
-        response = client.messages.create(
+        response = await client.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=600,
             temperature=0.85,   # 자연스러운 말투 + 일관성 균형
@@ -63,7 +63,7 @@ async def post_writer_agent(
             reason = result.get("retry_reason", "할루시네이션")
             print(f"[post_writer] {reason} 감지 → 재시도 (feedback 주입)")
             feedback_msg = f"이전 캡션에서 '{reason}'이 감지됐어. 확인되지 않은 사실은 절대 쓰지 마."
-            response2 = client.messages.create(
+            response2 = await client.messages.create(
                 model="claude-sonnet-4-6",
                 max_tokens=600,
                 temperature=0.85,
@@ -451,9 +451,10 @@ def _fallback_draft(brand_settings: dict, trend_data: dict) -> dict:
 
 # [Claude 클라이언트 초기화]
 def _init_claude_client():
-    # Claude Sonnet 4.6 (Azure Foundry) - anthropic SDK 직접 호출
-    return anthropic.Anthropic(
+    # Claude Sonnet 4.6 (Azure Foundry) - anthropic SDK 직접 호출 (비동기)
+    return anthropic.AsyncAnthropic(
         base_url="https://bybaek-claude-swedencen-resource.services.ai.azure.com/anthropic",
         api_key=os.getenv("AZURE_CLAUDE_KEY"),
-        default_headers={"api-key": os.getenv("AZURE_CLAUDE_KEY")}
+        default_headers={"api-key": os.getenv("AZURE_CLAUDE_KEY")},
+        timeout=anthropic.Timeout(30.0)
     )
