@@ -291,16 +291,32 @@ async def _gpt_expand_selection(
         additional = [id_to_photo[pid] for pid in add_ids if pid in id_to_photo]
         
         final = base_selection + additional
-        
+
         # max 초과 시 자르기
         if len(final) > max_count:
             final = final[:max_count]
-        
+
+        # GPT 확장 후에도 max_count 미달이면 남은 후보로 자동 보충
+        if len(final) < max_count:
+            all_remaining = [
+                p for p in categorized["back_side"] + categorized["front"] + categorized["vibe"]
+                if p["id"] not in {x["id"] for x in final}
+            ]
+            fill = all_remaining[:max_count - len(final)]
+            final += fill
+            print(f"[photo_select] 자동 보충 → {len(fill)}장 추가 (최종 {len(final)}장)")
+
         return final
 
     except Exception as e:
         print(f"[photo_select] GPT 확장 실패 ({e}) → 기본 조합만 사용")
-        return base_selection
+        # 실패해도 남은 후보로 max_count까지 채움
+        all_remaining = [
+            p for p in categorized["back_side"] + categorized["front"] + categorized["vibe"]
+            if p["id"] not in {x["id"] for x in base_selection}
+        ]
+        fill = all_remaining[:max_count - len(base_selection)]
+        return base_selection + fill
 
 
 async def _update_used_at(shop_id: str, selected: list):
