@@ -5,6 +5,7 @@ import requests
 from io import BytesIO
 import os
 import json
+import time
 import asyncio
 import uuid
 from typing import TypedDict, Literal, Optional
@@ -24,6 +25,19 @@ from agents.performance_feedback import node_fetch_performance, inject_performan
 QUALITY_THRESHOLD = 0.7
 MAX_RETRY         = 2
 MIN_PHOTO_COUNT   = 1
+
+
+async def _timed(stage: str, coro):
+    """단계별 소요 시간 측정용 계측 래퍼.
+    실행 흐름은 그대로 두고 [TIMING] 로그만 남긴다.
+    예외가 나도 finally에서 소요 시간을 기록한다.
+    """
+    start = time.perf_counter()
+    try:
+        return await coro
+    finally:
+        elapsed = time.perf_counter() - start
+        print(f"[TIMING] {stage} → {elapsed:.2f}s")
 
 
 class PostState(TypedDict):
@@ -63,12 +77,14 @@ async def node_classify(state: PostState) -> PostState:
 
 async def node_fetch_data(state: PostState) -> PostState:
     print(f"[orchestrator_v2] node_fetch_data → shop_id={state['shop_id']}")
+    _fetch_start = time.perf_counter()
     trend_data, brand_settings, photo_candidates, recent_posts = await asyncio.gather(
-        web_search_agent(state["shop_id"]),
-        _get_brand_settings(state["shop_id"]),
-        _get_photo_candidates(state["shop_id"]),
-        _get_recent_posts(state["shop_id"])
+        _timed("2.web_search_agent", web_search_agent(state["shop_id"])),
+        _timed("1._get_brand_settings", _get_brand_settings(state["shop_id"])),
+        _timed("_get_photo_candidates", _get_photo_candidates(state["shop_id"])),
+        _timed("_get_recent_posts", _get_recent_posts(state["shop_id"]))
     )
+    print(f"[TIMING] node_fetch_data (gather 전체) → {time.perf_counter() - _fetch_start:.2f}s")
     return {
         **state,
         "trend_data":       trend_data,
@@ -81,14 +97,14 @@ async def node_fetch_data(state: PostState) -> PostState:
 
 async def node_evaluate_trend(state: PostState) -> PostState:
     kernel = _init_kernel(state["tier"])
-    score  = await _evaluate_trend(kernel, state["trend_data"])
+    score  = await _timed("aux.evaluate_trend(Azure)", _evaluate_trend(kernel, state["trend_data"]))
     print(f"[orchestrator_v2] node_evaluate_trend → score={score:.2f}, retries={state.get('trend_retries', 0)}")
     return {**state, "trend_score": score}
 
 
 async def node_retry_trend(state: PostState) -> PostState:
     retries    = state.get("trend_retries", 0) + 1
-    trend_data = await web_search_agent(state["shop_id"], force_refresh=True)
+    trend_data = await _timed("2.web_search_agent(retry)", web_search_agent(state["shop_id"], force_refresh=True))
     print(f"[orchestrator_v2] node_retry_trend → 재시도 {retries}/{MAX_RETRY}")
     return {**state, "trend_data": trend_data, "trend_retries": retries}
 
@@ -100,34 +116,34 @@ async def node_select_photos(state: PostState) -> PostState:
         print(f"[orchestrator_v2] node_select_photos → manual, {len(photo_ids)}장")
         selected = await _get_photos_by_ids(state["shop_id"], photo_ids)
     else:
-        selected = await photo_select_agent(
+        selected = await _timed("3.photo_select", photo_select_agent(
             shop_id=state["shop_id"],
             trend_data=state["trend_data"],
             photo_candidates=state["photo_candidates"],
             brand_settings=state["brand_settings"]
-        )
+        ))
         if len(selected) < MIN_PHOTO_COUNT:
             print(f"[orchestrator_v2] 사진 부족 ({len(selected)}장) → 날짜 확장")
             extended = await _get_photo_candidates(state["shop_id"], extend_days=30)
-            selected = await photo_select_agent(
+            selected = await _timed("3.photo_select(extended)", photo_select_agent(
                 shop_id=state["shop_id"],
                 trend_data=state["trend_data"],
                 photo_candidates=extended,
                 brand_settings=state["brand_settings"]
-            )
+            ))
     print(f"[orchestrator_v2] node_select_photos → {len(selected)}장 선택")
     return {**state, "selected_photos": selected}
 
 
 async def node_search_rag(state: PostState) -> PostState:
     print(f"[orchestrator_v2] node_search_rag → 시작")
-    rag_context = await search_rag_context(
+    rag_context = await _timed("4.rag_tool", search_rag_context(
         shop_id=state["shop_id"],
         trend_data=state["trend_data"],
         selected_photos=state["selected_photos"],
         brand_settings=state["brand_settings"],
         recent_posts=state["recent_posts"]
-    )
+    ))
     rag_context = await inject_performance_to_rag(rag_context, state.get("performance_history", {}))
     return {**state, "rag_context": rag_context}
 
@@ -141,7 +157,7 @@ async def node_write_post(state: PostState) -> PostState:
             f"브랜드 톤 점수 {state.get('caption_score', 0):.2f} 미달. 금칙어 제거 및 톤 재조정 필요."
             if previous_draft else None
         )
-        post_draft = await post_writer_agent(
+        post_draft = await _timed(f"5.post_writer_agent(Claude, tier={state['tier']}, retry={retries})", post_writer_agent(
             shop_id=state["shop_id"],
             trend_data=state["trend_data"],
             selected_photos=state["selected_photos"],
@@ -151,8 +167,8 @@ async def node_write_post(state: PostState) -> PostState:
             previous_draft=previous_draft,
             feedback=feedback,
             user_request=state.get("message")
-        )
-        caption_score = await _evaluate_caption(kernel, post_draft, state["brand_settings"])
+        ))
+        caption_score = await _timed("6._evaluate_caption(Azure)", _evaluate_caption(kernel, post_draft, state["brand_settings"]))
         print(f"[orchestrator_v2] node_write_post → score={caption_score:.2f}, retries={retries}")
         return {**state, "post_draft": post_draft, "caption_score": caption_score}
     except Exception as e:
@@ -268,7 +284,9 @@ async def run_pipeline(shop_id: str, trigger: str, photo_ids: list = None, messa
         "performance_history": {}
     }
     print(f"[orchestrator_v2] 파이프라인 시작 → shop_id={shop_id}, trigger={trigger}")
+    _pipeline_start = time.perf_counter()
     final_state = await app.ainvoke(initial_state)
+    print(f"[TIMING] ===== run_pipeline TOTAL → {time.perf_counter() - _pipeline_start:.2f}s =====")
     return {
         "post_id":    final_state["post_id"],
         "caption":    final_state["post_draft"].get("caption", ""),
