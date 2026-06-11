@@ -201,12 +201,12 @@ async def _gpt_expand_selection(
 """
 
     try:
-        client = anthropic.Anthropic(
+        client = anthropic.AsyncAnthropic(
             base_url="https://bybaek-claude-swedencen-resource.services.ai.azure.com/anthropic",
             api_key=os.getenv("AZURE_CLAUDE_KEY"),
             default_headers={"api-key": os.getenv("AZURE_CLAUDE_KEY")}
         )
-        response = client.messages.create(
+        response = await client.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=300,
             messages=[{"role": "user", "content": prompt}]
