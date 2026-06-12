@@ -526,7 +526,7 @@ async def _auto_upload_instagram(shop_id, post_id, post_draft, selected_photos):
         print(f"[orchestrator_v2] 자동 업로드 → {len(image_urls)}장")
 
         from routers.instagram import publish_photos
-        media_id = publish_photos(insta_user_id, insta_access_token, image_urls, full_caption)
+        media_id = await publish_photos(insta_user_id, insta_access_token, image_urls, full_caption)
 
         save_post_data(shop_id, {
             "id":                 post_id,
