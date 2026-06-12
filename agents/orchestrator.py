@@ -563,7 +563,7 @@ async def _auto_upload_instagram(
 
         # 4. Instagram 업로드 호출
         from routers.instagram import publish_photos
-        media_id = publish_photos(insta_user_id, insta_access_token, image_urls, full_caption)
+        media_id = await publish_photos(insta_user_id, insta_access_token, image_urls, full_caption)
 
         # 5. 업로드 결과 저장
         save_post_data(shop_id, {

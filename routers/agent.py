@@ -172,7 +172,7 @@ async def _handle_upload(shop_id: str, post_id: str, edited_caption: str = None)
     instagram_media_id = None
     if insta_user_id and access_token and image_urls:
         from routers.instagram import publish_photos
-        instagram_media_id = publish_photos(insta_user_id, access_token, image_urls, full_caption)
+        instagram_media_id = await publish_photos(insta_user_id, access_token, image_urls, full_caption)
         print(f"[agent] 인스타 업로드 성공 → media_id={instagram_media_id}")
     else:
         raise ValueError(f"업로드 조건 미충족: user={bool(insta_user_id)}, token={bool(access_token)}, urls={bool(image_urls)}")
