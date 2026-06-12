@@ -1,15 +1,15 @@
 """
 BYBAEK Orchestrator v2 — LangGraph StateGraph 기반
 """
-import requests
-from io import BytesIO
+# import requests
+# from io import BytesIO
 import os
 import json
 import time
 import asyncio
 import uuid
 from typing import TypedDict, Literal, Optional
-from PIL import Image
+# from PIL import Image
 
 from langgraph.graph import StateGraph, END
 from semantic_kernel import Kernel
@@ -414,7 +414,7 @@ JSON만 반환:
 
 async def _get_brand_settings(shop_id: str) -> dict:
     from services.cosmos_db import get_onboarding
-    data = get_onboarding(shop_id)
+    data = await asyncio.to_thread(get_onboarding, shop_id)
     if not data:
         return {
             "brand_tone":      "친근하고 편안한 말투",
@@ -461,25 +461,26 @@ async def _get_brand_settings(shop_id: str) -> dict:
 
 async def _get_photo_candidates(shop_id: str, extend_days: int = 0) -> list:
     from services.cosmos_db import get_top_photos
-    limit = 20 if extend_days == 0 else 40
-    return get_top_photos(shop_id, limit=limit)
+    limit = 50 if extend_days == 0 else 80
+    return await asyncio.to_thread(get_top_photos, shop_id, limit=limit)
 
 
 async def _get_recent_posts(shop_id: str) -> list:
     from services.cosmos_db import get_recent_posts
-    return get_recent_posts(shop_id, limit=3)
+    return await asyncio.to_thread(get_recent_posts, shop_id, limit=3)
 
 
 async def _get_photos_by_ids(shop_id: str, photo_ids: list) -> list:
     from services.cosmos_db import get_all_photos_by_shop
-    all_photos = get_all_photos_by_shop(shop_id)
+    all_photos = await asyncio.to_thread(get_all_photos_by_shop, shop_id)
     return [p for p in all_photos if p.get("id") in photo_ids]
 
 
 async def _save_draft(shop_id, post_id, post_draft, selected_photos,
                       caption_score=0.0, retry_count=0, model_used="mini"):
     from services.cosmos_db import save_draft
-    save_draft(
+    await asyncio.to_thread(
+        save_draft,
         shop_id=shop_id, post_id=post_id,
         caption=post_draft.get("caption", ""),
         hashtags=post_draft.get("hashtags", []),
@@ -495,7 +496,7 @@ async def _save_draft(shop_id, post_id, post_draft, selected_photos,
 async def _auto_upload_instagram(shop_id, post_id, post_draft, selected_photos):
     try:
         from services.cosmos_db import get_auth, save_post_data
-        shop_auth = get_auth(shop_id)
+        shop_auth = await asyncio.to_thread(get_auth, shop_id)
         if not shop_auth:
             return False
 
@@ -528,7 +529,7 @@ async def _auto_upload_instagram(shop_id, post_id, post_draft, selected_photos):
         from routers.instagram import publish_photos
         media_id = await publish_photos(insta_user_id, insta_access_token, image_urls, full_caption)
 
-        save_post_data(shop_id, {
+        await asyncio.to_thread(save_post_data, shop_id, {
             "id":                 post_id,
             "caption":            caption,
             "hashtags":           hashtags,
@@ -547,7 +548,7 @@ async def _auto_upload_instagram(shop_id, post_id, post_draft, selected_photos):
 async def _send_push_notification(shop_id, post_id, post_draft):
     try:
         from services.cosmos_db import get_auth
-        shop_auth   = get_auth(shop_id) or {}
+        shop_auth   = await asyncio.to_thread(get_auth, shop_id) or {}
         owner_email = shop_auth.get("owner_email") or shop_auth.get("gmail")
         if not owner_email: return
         from services.email_service import send_draft_notification
