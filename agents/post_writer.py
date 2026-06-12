@@ -1,7 +1,34 @@
 import os
 import json
 import re
+from string import Template
 import anthropic
+
+# 프롬프트 파일 디렉터리 (프로젝트 루트/prompts)
+_PROMPT_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "prompts")
+# 파일 내용 캐시 (반복 디스크 IO 방지)
+_PROMPT_CACHE: dict = {}
+
+
+def _load_prompt_file(rel_path: str) -> str:
+    """prompts/ 하위 파일을 읽어서 반환. 없으면 빈 문자열."""
+    if rel_path in _PROMPT_CACHE:
+        return _PROMPT_CACHE[rel_path]
+    path = os.path.join(_PROMPT_DIR, rel_path)
+    try:
+        with open(path, encoding="utf-8") as f:
+            content = f.read()
+    except FileNotFoundError:
+        print(f"[post_writer] 프롬프트 파일 없음 → {path}")
+        content = ""
+    _PROMPT_CACHE[rel_path] = content
+    return content
+
+
+def _strip_comments(text: str) -> str:
+    """'#'로 시작하는 마커/주석 줄을 제거하고 양끝 공백 정리."""
+    lines = [ln for ln in text.splitlines() if not ln.lstrip().startswith("#")]
+    return "\n".join(lines).strip()
 
 # [메인] orchestrator에서 호출
 async def post_writer_agent(
@@ -188,41 +215,32 @@ def _build_prompt(
             insta_style_block = "\n\n[이 사장님의 실제 인스타 말투 - 이 말투와 동일하게 써줘]\n" + "\n".join(lines)
             insta_style_block += "\n⚠️ 위 실제 말투 예시와 최대한 동일하게. 광고체('어울립니다', '완성됩니다' 등) 절대 금지."
 
-    # 시스템 프롬프트 구성
-    system_prompt = f"""너는 바버샵 사장님 대신 인스타 게시물을 써주는 사람이야.
-사장님이 바빠서 직접 못 쓰니까 네가 대신 쓰는 거야.
-{shop_intro_line}{insta_style_block}
+    # 시스템 프롬프트 구성 — prompts/post_writer/system.md 에서 로드 후 치환
+    # few-shot 예시(good/bad)는 examples/ 파일에서 주입
+    # '#' 주석 줄은 파일 마커용이므로 프롬프트에서 제외 (예: 예시 비어있을 때)
+    good_captions = _strip_comments(_load_prompt_file("examples/good_captions.md"))
+    bad_captions  = _strip_comments(_load_prompt_file("examples/bad_captions.md"))
+    good_block = f"{good_captions}\n\n" if good_captions else ""
+    bad_block  = f"{bad_captions}\n\n"  if bad_captions  else ""
 
-[절대 금지]
-- shop_intro에 없는 경력 연수 지어내기 — DB에 없으면 절대 쓰지 마
-- 예약 현황 지어내기 ("오늘 3자리 남음" 등) — 실제 현황 모름
-- "정교한", "선사하는", "완성하는", "트렌디한" 같은 AI 냄새 나는 표현
-- 수상 이력, 인증, 특허 — 확인 안 된 거 절대 쓰지 마
-
-[말투 - 이 톤들을 혼합해서 자연스럽게]
-- 실제 바버샵 사장님이 인스타에 쓸 법한 말투로 — 짧고 편하게
-- 브랜드 톤: {brand_tone}
-- 이모지: {emoji_usage}
-- 길이: {caption_len}
-
-[내용 범위]
-- 전문 스타일: {preferred_str}
-- 금칙어: {forbidden_str}
-- 언급 금지: {exclude_str}
-
-[해시태그 - 총 {hashtag_count}개]
-- 방향: {hashtag_style}
-- 위 방향에 명시된 키워드(지역명, 영문 등)는 반드시 포함할 것
-- 필수 포함 (반드시): {must_hashtag_str if must_hashtag_str else "없음"}
-
-[CTA - {cta_instruction}]
-
-[출력 — JSON만, 다른 텍스트 없이]
-{{
-  "caption": "첫 문장에 스타일명 포함, {caption_len}, 자연스러운 말투",
-  "hashtags": ["#페이드컷", "#바버샵", ... 총 {hashtag_count}개],
-  "cta": "{cta_fixed if cta_fixed else '예약 유도 문구'}"
-}}"""
+    system_template = _load_prompt_file("post_writer/system.md")
+    system_prompt = Template(system_template).safe_substitute(
+        shop_intro_line=shop_intro_line,
+        insta_style_block=insta_style_block,
+        brand_tone=brand_tone,
+        emoji_usage=emoji_usage,
+        caption_len=caption_len,
+        preferred_str=preferred_str,
+        forbidden_str=forbidden_str,
+        exclude_str=exclude_str,
+        hashtag_count=hashtag_count,
+        hashtag_style=hashtag_style,
+        must_hashtag_str=must_hashtag_str if must_hashtag_str else "없음",
+        cta_instruction=cta_instruction,
+        cta_fixed=cta_fixed if cta_fixed else "예약 유도 문구",
+        good_captions_block=good_block,
+        bad_captions_block=bad_block,
+    )
 
     # ── 유저 프롬프트 ──
     parts = []
