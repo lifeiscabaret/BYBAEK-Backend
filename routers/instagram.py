@@ -244,6 +244,11 @@ async def publish_photos(ig_user_id: str, access_token: str,
     사진 수에 따라 단일/캐러셀 자동 분기.
     업로드 전 비율 자동 정규화 (4:5 ~ 1.91:1 범위 벗어나면 중앙 크롭).
     """
+    # 캐러셀 API 한도(10장) 안전장치 — 정규화/컨테이너 생성 전에 상위 10장으로 제한
+    if len(image_urls) > 10:
+        print(f"[instagram] 캐러셀 API 한도 초과({len(image_urls)}장) → 상위 10장으로 제한")
+        image_urls = image_urls[:10]
+
     # 비율 정규화 (범위 벗어난 사진만 크롭 후 임시 URL 생성)
     normalized_urls = [await _normalize_aspect_ratio(url) for url in image_urls]
     temp_urls       = [u for u in normalized_urls if "temp_cropped/" in u]
