@@ -1,10 +1,10 @@
+import asyncio
 import io
 import os
-import time
 import uuid
 from typing import Optional
 
-import requests
+import httpx
 from fastapi import APIRouter, HTTPException, status
 from PIL import Image
 from pydantic import BaseModel, HttpUrl
@@ -35,7 +35,7 @@ class InstagramPhotoPublishResponse(BaseModel):
 
 # ── 비율 정규화 ───────────────────────────────────────────────────────────────
 
-def _normalize_aspect_ratio(blob_url: str) -> str:
+async def _normalize_aspect_ratio(blob_url: str) -> str:
     """
     이미지 비율이 Instagram 허용 범위(4:5 ~ 1.91:1)를 벗어나면
     중앙 크롭 후 Blob Storage에 임시 저장하고 새 URL 반환.
@@ -49,7 +49,8 @@ def _normalize_aspect_ratio(blob_url: str) -> str:
 
     try:
         sas_url = _generate_sas_url(blob_url)
-        resp = requests.get(sas_url, timeout=30)
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(sas_url, timeout=30)
         resp.raise_for_status()
         img = Image.open(io.BytesIO(resp.content)).convert("RGB")
     except Exception as e:
@@ -131,9 +132,10 @@ def _cleanup_temp_blobs(urls: list[str]):
 
 # ── Graph API 헬퍼 ────────────────────────────────────────────────────────────
 
-def graph_post(endpoint: str, headers: dict, data: dict) -> dict:
+async def graph_post(endpoint: str, headers: dict, data: dict) -> dict:
     url  = f"{GRAPH_BASE}{endpoint}"
-    resp = requests.post(url, headers=headers, data=data, timeout=60)
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(url, headers=headers, data=data, timeout=60)
     try:
         body = resp.json()
     except Exception:
@@ -152,9 +154,10 @@ def graph_post(endpoint: str, headers: dict, data: dict) -> dict:
     return body
 
 
-def graph_get(endpoint: str, headers: dict, params: dict) -> dict:
+async def graph_get(endpoint: str, headers: dict, params: dict) -> dict:
     url  = f"{GRAPH_BASE}{endpoint}"
-    resp = requests.get(url, headers=headers, params=params, timeout=60)
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(url, headers=headers, params=params, timeout=60)
     try:
         body = resp.json()
     except Exception:
@@ -173,12 +176,12 @@ def graph_get(endpoint: str, headers: dict, params: dict) -> dict:
     return body
 
 
-def wait_until_ready(ig_user_id: str, creation_id: str, access_token: str) -> None:
+async def wait_until_ready(ig_user_id: str, creation_id: str, access_token: str) -> None:
     """컨테이너 처리 완료될 때까지 폴링."""
     headers = {"Authorization": f"Bearer {access_token}"}
     for attempt in range(publish_check_retries):
-        body        = graph_get(f"/{creation_id}", headers=headers,
-                                params={"fields": "status_code", "access_token": access_token})
+        body        = await graph_get(f"/{creation_id}", headers=headers,
+                                      params={"fields": "status_code", "access_token": access_token})
         status_code = body.get("status_code")
         logger.info(f"[instagram] 컨테이너 상태 ({attempt+1}/{publish_check_retries}): {status_code}")
         if status_code == "FINISHED":
@@ -186,14 +189,14 @@ def wait_until_ready(ig_user_id: str, creation_id: str, access_token: str) -> No
         if status_code == "ERROR":
             raise HTTPException(status_code=500,
                 detail={"message": "Instagram 미디어 처리 실패", "response": body})
-        time.sleep(publish_check_interval_sec)
+        await asyncio.sleep(publish_check_interval_sec)
     raise HTTPException(status_code=500,
         detail={"message": f"Instagram 미디어 처리 타임아웃 ({publish_check_retries * publish_check_interval_sec}초 초과)"})
 
 
-def create_image_container(ig_user_id: str, access_token: str,
-                           image_url: str, is_carousel_item: bool = False,
-                           caption: str = None) -> str:
+async def create_image_container(ig_user_id: str, access_token: str,
+                                 image_url: str, is_carousel_item: bool = False,
+                                 caption: str = None) -> str:
     headers = {"Content-Type": "application/json", "Authorization": f"Bearer {access_token}"}
     data    = {"image_url": str(image_url)}
     if is_carousel_item:
@@ -201,7 +204,7 @@ def create_image_container(ig_user_id: str, access_token: str,
     elif caption:
         data["caption"] = caption
 
-    result     = graph_post(f"/{ig_user_id}/media", headers=headers, data=data)
+    result     = await graph_post(f"/{ig_user_id}/media", headers=headers, data=data)
     creation_id = result.get("id")
     if not creation_id:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -209,12 +212,12 @@ def create_image_container(ig_user_id: str, access_token: str,
     return creation_id
 
 
-def create_carousel_container(ig_user_id: str, access_token: str,
-                              container_ids: list[str], caption: str) -> str:
+async def create_carousel_container(ig_user_id: str, access_token: str,
+                                    container_ids: list[str], caption: str) -> str:
     headers = {"Content-Type": "application/json", "Authorization": f"Bearer {access_token}"}
     data    = {"caption": caption, "media_type": "CAROUSEL", "children": ",".join(container_ids)}
 
-    result      = graph_post(f"/{ig_user_id}/media", headers=headers, data=data)
+    result      = await graph_post(f"/{ig_user_id}/media", headers=headers, data=data)
     creation_id = result.get("id")
     if not creation_id:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -222,10 +225,10 @@ def create_carousel_container(ig_user_id: str, access_token: str,
     return creation_id
 
 
-def publish_container(ig_user_id: str, creation_id: str, access_token: str) -> str:
+async def publish_container(ig_user_id: str, creation_id: str, access_token: str) -> str:
     headers  = {"Content-Type": "application/json", "Authorization": f"Bearer {access_token}"}
     data     = {"creation_id": creation_id}
-    result   = graph_post(f"/{ig_user_id}/media_publish", headers=headers, data=data)
+    result   = await graph_post(f"/{ig_user_id}/media_publish", headers=headers, data=data)
     media_id = result.get("id")
     if not media_id:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -235,32 +238,32 @@ def publish_container(ig_user_id: str, creation_id: str, access_token: str) -> s
 
 # ── 메인 업로드 함수 ──────────────────────────────────────────────────────────
 
-def publish_photos(ig_user_id: str, access_token: str,
-                   image_urls: list, caption: str) -> str:
+async def publish_photos(ig_user_id: str, access_token: str,
+                         image_urls: list, caption: str) -> str:
     """
     사진 수에 따라 단일/캐러셀 자동 분기.
     업로드 전 비율 자동 정규화 (4:5 ~ 1.91:1 범위 벗어나면 중앙 크롭).
     """
     # 비율 정규화 (범위 벗어난 사진만 크롭 후 임시 URL 생성)
-    normalized_urls = [_normalize_aspect_ratio(url) for url in image_urls]
+    normalized_urls = [await _normalize_aspect_ratio(url) for url in image_urls]
     temp_urls       = [u for u in normalized_urls if "temp_cropped/" in u]
 
     try:
         if len(normalized_urls) == 1:
-            creation_id = create_image_container(ig_user_id, access_token,
-                                                 normalized_urls[0], is_carousel_item=False,
-                                                 caption=caption)
-            wait_until_ready(ig_user_id, creation_id, access_token)
-            media_id = publish_container(ig_user_id, creation_id, access_token)
+            creation_id = await create_image_container(ig_user_id, access_token,
+                                                       normalized_urls[0], is_carousel_item=False,
+                                                       caption=caption)
+            await wait_until_ready(ig_user_id, creation_id, access_token)
+            media_id = await publish_container(ig_user_id, creation_id, access_token)
             logger.info(f"[instagram] 단일 이미지 업로드 성공 → media_id={media_id}")
         else:
             container_ids = [
-                create_image_container(ig_user_id, access_token, url, is_carousel_item=True)
+                await create_image_container(ig_user_id, access_token, url, is_carousel_item=True)
                 for url in normalized_urls
             ]
-            creation_id = create_carousel_container(ig_user_id, access_token, container_ids, caption)
-            wait_until_ready(ig_user_id, creation_id, access_token)
-            media_id = publish_container(ig_user_id, creation_id, access_token)
+            creation_id = await create_carousel_container(ig_user_id, access_token, container_ids, caption)
+            await wait_until_ready(ig_user_id, creation_id, access_token)
+            media_id = await publish_container(ig_user_id, creation_id, access_token)
             logger.info(f"[instagram] 캐러셀 업로드 성공 ({len(normalized_urls)}장) → media_id={media_id}")
 
     finally:
@@ -275,7 +278,7 @@ def publish_photos(ig_user_id: str, access_token: str,
              status_code=status.HTTP_201_CREATED)
 async def upload(req: InstagramPhotoPublishRequest):
     # SAS URL 변환 제거 - _normalize_aspect_ratio 내부에서 처리
-    media_id = publish_photos(
+    media_id = await publish_photos(
         ig_user_id=req.user_id,
         access_token=req.access_token,
         image_urls=[str(url) for url in req.image_urls],  # 원본 URL 그대로
