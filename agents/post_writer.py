@@ -204,22 +204,39 @@ def _build_prompt(
     insta_style_block = ""
     if insta_profile:
         tone_desc = insta_profile.get("tone_description", "")
-        tone_examples = insta_profile.get("tone_examples", [])
+        sentence_ending = insta_profile.get("sentence_ending", "")
+        signature_expr = insta_profile.get("signature_expressions", [])
+        sentence_length = insta_profile.get("sentence_length", "")
         emoji_pattern = insta_profile.get("emoji_pattern", "")
+        tone_examples = insta_profile.get("tone_examples", [])
 
         lines = []
         if tone_desc:
             lines.append(f"- 말투 특징: {tone_desc}")
-        if emoji_pattern:
+        if sentence_ending:
+            lines.append(f"- 자주 쓰는 종결어미: {sentence_ending} (이 말끝을 살려줘)")
+        if signature_expr:
+            expr_str = ", ".join(f'"{e}"' for e in signature_expr[:5])
+            lines.append(f"- 이 사장님 특유의 표현(가능하면 자연스럽게 녹여): {expr_str}")
+        if sentence_length:
+            lines.append(f"- 문장 길이 습관: {sentence_length}")
+        # 이모지 패턴: emoji_usage가 "안 씀"이면 주입 안 함 (모순 방지)
+        if emoji_pattern and emoji_usage != "안 씀":
             lines.append(f"- 이모지 습관: {emoji_pattern}")
+
         if tone_examples:
-            lines.append("- 실제 사장님 캡션 예시:")
+            # 이모지 스트립: "안 씀" shop이면 예시에서 이모지 제거
+            examples_clean = []
             for ex in tone_examples[:3]:
-                lines.append(f"  \"{ex}\"")
+                if emoji_usage == "안 씀":
+                    ex = re.sub(r'[\U0001F000-\U0001FAFF\U00002600-\U000027BF\U0001F300-\U0001F9FF✀-➿☀-⛿✂✅✈-✍✏✒✔✖✨✳✴❄❇❌❎❓-❕❗❣❤➕-➗➡➰➿⤴⤵⬅-⬇⬛⬜⭐⭕]', '', ex).strip()
+                examples_clean.append(ex)
+            ex_lines = "\n".join(f'  "{ex}"' for ex in examples_clean)
+            lines.append(f"- 실제 사장님 캡션 예시:\n{ex_lines}")
 
         if lines:
-            insta_style_block = "\n\n[이 사장님의 실제 인스타 말투 - 이 말투와 동일하게 써줘]\n" + "\n".join(lines)
-            insta_style_block += "\n⚠️ 위 실제 말투 예시와 최대한 동일하게. 광고체('어울립니다', '완성됩니다' 등) 절대 금지."
+            insta_style_block = "\n\n[이 사장님의 실제 인스타 말투 — 이 말투와 동일하게 써줘]\n" + "\n".join(lines)
+            insta_style_block += "\n⚠️ 위 실제 말투와 최대한 동일하게. 광고체 절대 금지."
 
     # 시스템 프롬프트 구성 — prompts/post_writer/system.md 에서 로드 후 치환
     # few-shot 예시(good/bad)는 examples/ 파일에서 주입
