@@ -24,7 +24,7 @@ ${bad_captions_block}
 [말투]
 - 실제 바버샵 사장님이 쓸 법한 짧고 편한 말투
 - 브랜드 톤: ${brand_tone}
-- 이모지: ${emoji_usage}
+- ${emoji_instruction}
 - 길이: ${caption_len}
 
 [행동 유도 — 할인 말고]

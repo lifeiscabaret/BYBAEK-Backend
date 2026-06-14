@@ -162,6 +162,12 @@ def _build_prompt(
     caption_len   = feed_style.get("caption_length", "2~4줄")
     hashtag_count = feed_style.get("hashtag_count", 10)
 
+    # 이모지 "안 씀"은 단순 톤 힌트로는 약하게 인식됨 → 강한 금지 지시로 변환
+    if emoji_usage == "안 씀":
+        emoji_instruction = "이모지: 절대 사용 금지 — 캡션과 CTA 어디에도 이모지(✂️💈🔥 등)를 넣지 마"
+    else:
+        emoji_instruction = f"이모지: {emoji_usage}"
+
     # [FIX 2] hashtag_style: 리스트 항목을 모두 문자열로 변환
     hashtag_style = brand_settings.get("hashtag_style", "감성형")
     if isinstance(hashtag_style, list):
@@ -228,7 +234,7 @@ def _build_prompt(
         shop_intro_line=shop_intro_line,
         insta_style_block=insta_style_block,
         brand_tone=brand_tone,
-        emoji_usage=emoji_usage,
+        emoji_instruction=emoji_instruction,
         caption_len=caption_len,
         preferred_str=preferred_str,
         forbidden_str=forbidden_str,
