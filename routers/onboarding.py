@@ -11,6 +11,7 @@ from typing import List, Optional
 # from datetime import datetime
 from services.cosmos_db import save_onboarding as save_onboarding_db
 from services.cosmos_db import get_onboarding as get_onboarding_db
+from agents.insta_analyzer import analyze_instagram_history
 
 router = APIRouter()
 
@@ -184,6 +185,19 @@ class OnboardingRequest(BaseModel):
                 "is_insta_connected": True
             }
         }
+
+@router.post("/{shop_id}/reanalyze")
+async def reanalyze_insta_style(shop_id: str):
+    """인스타 과거 게시물 재분석 → insta_style_profile 갱신 (수동 트리거)"""
+    try:
+        result = await analyze_instagram_history(shop_id)
+        if result:
+            return {"status": "success", "profile": result}
+        return {"status": "failed", "message": "분석할 과거 게시물이 없거나 인스타 연동을 확인해주세요"}
+    except Exception as e:
+        print(f"[reanalyze] 실패: {e}")
+        return {"status": "failed", "message": "재분석 중 오류가 발생했습니다"}
+
 
 @router.post("/{shop_id}")
 async def save_onboarding_api(shop_id: str, data: OnboardingRequest):
