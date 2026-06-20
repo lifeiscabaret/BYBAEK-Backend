@@ -79,6 +79,7 @@ async def _get_brand_settings(shop_id: str) -> dict:
             "must_include_hashtags": to_list(shop.get("must_include_hashtags")),
             "cta":                   shop.get("cta", "DM으로 예약 문의주세요"),
             "shop_intro":            shop.get("shop_intro", ""),
+            "language":              shop.get("language", "ko"),
             "feed_style": {
                 "emoji_usage":    emoji_usage,
                 "caption_length": shop.get("caption_length", "2~4줄"),
@@ -128,6 +129,16 @@ async def generate_chat_stream(shop_id: str, message: str, photo_ids: List[str])
     hashtag_count = feed_style.get("hashtag_count", 10)
     caption_len   = feed_style.get("caption_length", "2~4줄")
 
+    # 출력 언어 지시 (레이어1: post_writer와 동일 로직. LANG_NAMES는 일단 각자 정의 — 공통 모듈화는 별도 리팩토링)
+    language = brand_settings.get("language", "ko")
+    LANG_NAMES = {"ko": "한국어", "en": "English", "ja": "日本語",
+                  "zh": "中文", "es": "Español"}
+    lang_name = LANG_NAMES.get(language, language)
+    if language != "ko":
+        lang_instruction = f"\n\n[출력 언어 — 매우 중요]\n반드시 {lang_name}로 캡션과 해시태그, CTA를 작성해줘. 자연스러운 {lang_name} 표현으로 쓰되, 바버샵 정체성과 마케팅 의도는 그대로 유지해."
+    else:
+        lang_instruction = ""
+
     # 3. 트렌드 컨텍스트 + 브랜드 추가 설정
     trend_summary = trend_data.get("trend", "") or trend_data.get("trend_summary", "")
     weather       = trend_data.get("weather", "")
@@ -160,7 +171,7 @@ async def generate_chat_stream(shop_id: str, message: str, photo_ids: List[str])
 - 길이: {caption_len}
 - 해시태그: {hashtag_count}개
 - 필수 해시태그 (반드시 포함): {must_hashtag_str}
-{f"[샵 소개 - 이 내용은 사실이므로 캡션에 자연스럽게 활용 가능]{chr(10)}{shop_intro}" if shop_intro else ""}
+{f"[샵 소개 - 이 내용은 사실이므로 캡션에 자연스럽게 활용 가능]{chr(10)}{shop_intro}" if shop_intro else ""}{lang_instruction}
 
 [출력 형식 — 이것만]
 {{
