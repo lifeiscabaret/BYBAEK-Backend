@@ -45,6 +45,7 @@ ${bad_captions_block}
 [CTA - ${cta_instruction}]
 
 ${good_captions_block}
+${lang_instruction}
 
 [출력 — JSON만, 다른 텍스트 없이]
 {

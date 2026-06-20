@@ -199,6 +199,16 @@ def _build_prompt(
     shop_intro = brand_settings.get("shop_intro", "").strip()
     shop_intro_line = f"\n[샵 소개 - 이 내용은 사실이므로 캡션에 자연스럽게 활용 가능]\n{shop_intro}" if shop_intro else ""
 
+    # ── 출력 언어 지시 (레이어1: 언어별 프롬프트 파일 없이 동적 주입) ──
+    language = brand_settings.get("language", "ko")
+    LANG_NAMES = {"ko": "한국어", "en": "English", "ja": "日本語",
+                  "zh": "中文", "es": "Español"}
+    lang_name = LANG_NAMES.get(language, language)
+    if language != "ko":
+        lang_instruction = f"\n\n[출력 언어 — 매우 중요]\n반드시 {lang_name}로 캡션과 해시태그, CTA를 작성해줘. 자연스러운 {lang_name} 표현으로 쓰되, 바버샵 정체성과 마케팅 의도는 그대로 유지해."
+    else:
+        lang_instruction = ""
+
     # insta_style_profile: 과거 게시물 분석 결과를 few-shot으로 주입
     insta_profile = brand_settings.get("insta_style_profile", {})
     insta_style_block = ""
@@ -210,21 +220,32 @@ def _build_prompt(
         emoji_pattern = insta_profile.get("emoji_pattern", "")
         tone_examples = insta_profile.get("tone_examples", [])
 
+        # 언어 안전장치: profile 분석 언어 != 출력 언어면
+        # 언어종속 필드(종결어미/특유표현/예시캡션)는 스킵, 구조적 특징만 주입
+        profile_lang = insta_profile.get("detected_language", "ko")
+        lang_mismatch = language != profile_lang
+
         lines = []
         if tone_desc:
             lines.append(f"- 말투 특징: {tone_desc}")
-        if sentence_ending:
-            lines.append(f"- 자주 쓰는 종결어미: {sentence_ending} (이 말끝을 살려줘)")
-        if signature_expr:
-            expr_str = ", ".join(f'"{e}"' for e in signature_expr[:5])
-            lines.append(f"- 이 사장님 특유의 표현(가능하면 자연스럽게 녹여): {expr_str}")
+
+        # 언어 일치할 때만 언어종속 필드 주입
+        if not lang_mismatch:
+            if sentence_ending:
+                lines.append(f"- 자주 쓰는 종결어미: {sentence_ending} (이 말끝을 살려줘)")
+            if signature_expr:
+                expr_str = ", ".join(f'"{e}"' for e in signature_expr[:5])
+                lines.append(f"- 이 사장님 특유의 표현(가능하면 자연스럽게 녹여): {expr_str}")
+
+        # 구조적 필드 — 언어 무관, 항상 주입
         if sentence_length:
             lines.append(f"- 문장 길이 습관: {sentence_length}")
-        # 이모지 패턴: emoji_usage가 "안 씀"이면 주입 안 함 (모순 방지)
+        # 이모지 패턴: 언어 무관(✂️💈는 만국 공통) + emoji_usage "안 씀"이면 스킵
         if emoji_pattern and emoji_usage != "안 씀":
             lines.append(f"- 이모지 습관: {emoji_pattern}")
 
-        if tone_examples:
+        # 예시 캡션도 언어종속 → 일치할 때만
+        if not lang_mismatch and tone_examples:
             # 이모지 스트립: "안 씀" shop이면 예시에서 이모지 제거
             examples_clean = []
             for ex in tone_examples[:3]:
@@ -236,7 +257,10 @@ def _build_prompt(
 
         if lines:
             insta_style_block = "\n\n[이 사장님의 실제 인스타 말투 — 이 말투와 동일하게 써줘]\n" + "\n".join(lines)
-            insta_style_block += "\n⚠️ 위 실제 말투와 최대한 동일하게. 광고체 절대 금지."
+            if lang_mismatch:
+                insta_style_block += f"\n위 말투 특징을 {lang_name} 표현으로 자연스럽게 반영해줘. (원문 말투 예시는 언어가 달라 생략)"
+            else:
+                insta_style_block += "\n⚠️ 위 실제 말투와 최대한 동일하게. 광고체 절대 금지."
 
     # 시스템 프롬프트 구성 — prompts/post_writer/system.md 에서 로드 후 치환
     # few-shot 예시(good/bad)는 examples/ 파일에서 주입
@@ -250,6 +274,7 @@ def _build_prompt(
     system_prompt = Template(system_template).safe_substitute(
         shop_intro_line=shop_intro_line,
         insta_style_block=insta_style_block,
+        lang_instruction=lang_instruction,
         brand_tone=brand_tone,
         emoji_instruction=emoji_instruction,
         caption_len=caption_len,

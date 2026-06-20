@@ -33,7 +33,8 @@ async def analyze_instagram_history(shop_id: str) -> dict:
             "sentence_length": "short/medium/long",
             "emoji_pattern": "이모지 사용 패턴 (안 쓰면 '없음')",
             "hashtag_style": "해시태그 스타일 분석",
-            "tone_examples": ["말투 잘 보여주는 캡션 2개"]
+            "tone_examples": ["말투 잘 보여주는 캡션 2개"],
+            "detected_language": "게시물 주 언어 (ko/en/ja 등)"
         }
     """
     print(f"[insta_analyzer] 시작 → shop_id={shop_id}")
@@ -127,7 +128,8 @@ async def _analyze_with_gpt(posts: list) -> dict:
   "sentence_length": "short/medium/long 중 하나",
   "emoji_pattern": "이모지 사용 패턴 (안 쓰면 '없음')",
   "hashtag_style": "해시태그 스타일 (개수, 한/영, 지역명)",
-  "tone_examples": ["말투 가장 잘 보여주는 캡션 2개만 (원문)"]
+  "tone_examples": ["말투 가장 잘 보여주는 캡션 2개만 (원문)"],
+  "detected_language": "게시물들의 주 언어 (ko/en/ja 등, 한영 병기면 주 언어)"
 }"""
 
     user_prompt = f"""아래는 이 사장님의 인스타그램 과거 게시물 캡션 {len(posts)}개야.
