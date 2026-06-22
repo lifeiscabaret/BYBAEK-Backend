@@ -147,9 +147,10 @@ async def generate_chat_stream(shop_id: str, message: str, photo_ids: List[str])
     exclude_conditions = brand_settings.get("exclude_conditions", [])
     exclude_str   = ", ".join(exclude_conditions) if exclude_conditions else "없음"
     # 필수 해시태그: hashtag_style 에서 #로 시작하는 항목 추출 (must_include_hashtags 필드 폐지)
+    # 공백 join — 콤마 나열 패턴을 LLM이 흉내내 출력 해시태그에 콤마 붙는 것 방지
     hashtag_style = brand_settings.get("hashtag_style", [])
     must_hashtags = [t for t in hashtag_style if t.startswith("#")]
-    must_hashtag_str = ", ".join(must_hashtags) if must_hashtags else "없음"
+    must_hashtag_str = " ".join(must_hashtags) if must_hashtags else "없음"
 
     # 4. 시스템 프롬프트 — 캡션 JSON만 출력
     system_prompt = f"""너는 바버샵 인스타그램 게시물을 대신 써주는 마케터야.
@@ -160,6 +161,7 @@ async def generate_chat_stream(shop_id: str, message: str, photo_ids: List[str])
 - "안녕하세요", "물론이죠", "아래는..." 같은 전치사 금지
 - JSON 외 다른 텍스트 절대 금지
 - 확인되지 않은 사실 지어내기 금지 (경력 연수, 예약 현황 등)
+- 해시태그에 콤마(,) 붙이기 금지 — 배열 항목으로만 분리
 
 [브랜드 설정]
 - 말투: {brand_tone}
@@ -174,7 +176,7 @@ async def generate_chat_stream(shop_id: str, message: str, photo_ids: List[str])
 [출력 형식 — 이것만]
 {{
   "caption": "첫 문장에 스타일명 포함, {caption_len}, 자연스러운 말투",
-  "hashtags": ["#페이드컷", "#바버샵", ... 총 {hashtag_count}개],
+  "hashtags": ["#페이드컷", "#바버샵", ... 총 {hashtag_count}개 (각 항목은 #로 시작, 콤마·공백 없이 개별 문자열로)],
   "cta": "예약 유도 문구"
 }}"""
 

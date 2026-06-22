@@ -169,14 +169,15 @@ def _build_prompt(
         emoji_instruction = f"이모지: {emoji_usage}"
 
     # [FIX 2] hashtag_style: 리스트 항목을 모두 문자열로 변환
+    # 공백 구분 — 콤마 나열 패턴을 LLM이 흉내내 출력 해시태그에 콤마 붙는 것 방지
     hashtag_style = brand_settings.get("hashtag_style", "감성형")
     if isinstance(hashtag_style, list):
-        hashtag_style = ", ".join(hashtag_style)  # 리스트 → 쉼표 구분 문자열
+        hashtag_style = " ".join(hashtag_style)  # 리스트 → 공백 구분 문자열
 
     # 필수 해시태그: hashtag_style 에서 #로 시작하는 항목 추출 (must_include_hashtags 필드 폐지)
-    # 콤마로 join된 문자열에서 추출하므로 콤마/공백 전까지만 매칭 ([^\s,])
+    # 콤마/공백 전까지만 매칭 ([^\s,]) — 구분자가 콤마든 공백이든 안전
     extracted_hashtags = [w.strip() for w in re.findall(r'#[^\s,]+', hashtag_style)] if hashtag_style else []
-    must_hashtag_str = ", ".join(extracted_hashtags) if extracted_hashtags else ""
+    must_hashtag_str = " ".join(extracted_hashtags) if extracted_hashtags else ""
 
     preferred_styles = brand_settings.get("preferred_styles", [])
     if isinstance(preferred_styles, str):
