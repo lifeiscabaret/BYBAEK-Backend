@@ -173,13 +173,10 @@ def _build_prompt(
     if isinstance(hashtag_style, list):
         hashtag_style = ", ".join(hashtag_style)  # 리스트 → 쉼표 구분 문자열
 
-    # 필수 해시태그 추출
-    must_include_hashtags = brand_settings.get("must_include_hashtags", [])
-    if not must_include_hashtags and hashtag_style:
-        must_include_hashtags = [
-            w.strip() for w in re.findall(r'#\S+', hashtag_style)
-        ]
-    must_hashtag_str = ", ".join(must_include_hashtags) if must_include_hashtags else ""
+    # 필수 해시태그: hashtag_style 에서 #로 시작하는 항목 추출 (must_include_hashtags 필드 폐지)
+    # 콤마로 join된 문자열에서 추출하므로 콤마/공백 전까지만 매칭 ([^\s,])
+    extracted_hashtags = [w.strip() for w in re.findall(r'#[^\s,]+', hashtag_style)] if hashtag_style else []
+    must_hashtag_str = ", ".join(extracted_hashtags) if extracted_hashtags else ""
 
     preferred_styles = brand_settings.get("preferred_styles", [])
     if isinstance(preferred_styles, str):
@@ -414,9 +411,6 @@ def _validate_and_clean(result: dict, brand_settings: dict) -> dict:
     if isinstance(forbidden_words, str):
         forbidden_words = [w.strip() for w in forbidden_words.split(",")]
 
-    must_include_hashtags = brand_settings.get("must_include_hashtags", [])
-    print(f"[post_writer] must_include_hashtags 수신값: {must_include_hashtags}")
-
     # [FIX 4] shop_intro 값 미리 추출 — 오탐 방지용
     shop_intro = brand_settings.get("shop_intro", "").strip()
 
@@ -479,14 +473,12 @@ def _validate_and_clean(result: dict, brand_settings: dict) -> dict:
         if not any(word in tag for word in all_banned)
     ]
 
-    # 필수 해시태그 강제 추가
-    must_include_hashtags = brand_settings.get("must_include_hashtags", [])
-    if not must_include_hashtags:
-        hashtag_style = brand_settings.get("hashtag_style", "")
-        if isinstance(hashtag_style, list):
-            hashtag_style = ", ".join(hashtag_style)
-        must_include_hashtags = [w.strip() for w in re.findall(r'#\S+', hashtag_style)]
-    for tag in must_include_hashtags:
+    # 필수 해시태그 강제 추가: hashtag_style 에서 #로 시작하는 항목 추출 (must_include_hashtags 필드 폐지)
+    hashtag_style = brand_settings.get("hashtag_style", "")
+    if isinstance(hashtag_style, list):
+        hashtag_style = ", ".join(hashtag_style)
+    extracted_hashtags = [w.strip() for w in re.findall(r'#[^\s,]+', hashtag_style)]
+    for tag in extracted_hashtags:
         normalized = tag if tag.startswith("#") else f"#{tag}"
         if normalized not in result["hashtags"]:
             result["hashtags"].append(normalized)
