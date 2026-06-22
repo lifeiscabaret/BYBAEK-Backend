@@ -477,7 +477,6 @@ async def _get_brand_settings(shop_id: str) -> dict:
         "shop_intro": shop.get("shop_intro", ""),
         "brand_differentiation": shop.get("shop_intro", ""),
         "insta_style_profile": shop.get("insta_style_profile", {}),
-        "language": shop.get("language", "ko"),
         "rag_reference": shop.get("rag_reference", ""),
         "insta_review_bfr_upload_yn": str(shop.get("insta_review_bfr_upload_yn", "Y")).upper() != "N"
     }
