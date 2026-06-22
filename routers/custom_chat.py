@@ -76,7 +76,6 @@ async def _get_brand_settings(shop_id: str) -> dict:
             "preferred_styles":      to_list(shop.get("preferred_styles")),
             "exclude_conditions":    to_list(shop.get("exclude_conditions")),
             "hashtag_style":         to_list(shop.get("hashtag_style")),
-            "must_include_hashtags": to_list(shop.get("must_include_hashtags")),
             "cta":                   shop.get("cta", "DM으로 예약 문의주세요"),
             "shop_intro":            shop.get("shop_intro", ""),
             "language":              shop.get("language", "ko"),
@@ -147,10 +146,9 @@ async def generate_chat_stream(shop_id: str, message: str, photo_ids: List[str])
     shop_intro    = brand_settings.get("shop_intro", "")
     exclude_conditions = brand_settings.get("exclude_conditions", [])
     exclude_str   = ", ".join(exclude_conditions) if exclude_conditions else "없음"
-    must_hashtags = brand_settings.get("must_include_hashtags", [])
+    # 필수 해시태그: hashtag_style 에서 #로 시작하는 항목 추출 (must_include_hashtags 필드 폐지)
     hashtag_style = brand_settings.get("hashtag_style", [])
-    if not must_hashtags and hashtag_style:
-        must_hashtags = [t for t in hashtag_style if t.startswith("#")]
+    must_hashtags = [t for t in hashtag_style if t.startswith("#")]
     must_hashtag_str = ", ".join(must_hashtags) if must_hashtags else "없음"
 
     # 4. 시스템 프롬프트 — 캡션 JSON만 출력

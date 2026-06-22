@@ -442,7 +442,6 @@ async def _get_brand_settings(shop_id: str) -> dict:
         "preferred_styles":           to_list(shop.get("preferred_styles")),
         "exclude_conditions":         to_list(shop.get("exclude_conditions")),
         "hashtag_style":              to_list(shop.get("hashtag_style")),
-        "must_include_hashtags":      to_list(shop.get("must_include_hashtags")),
         "cta":                        shop.get("cta", "DM으로 예약 문의주세요"),
         "shop_intro":                 shop.get("shop_intro", ""),
         "photo_range":                {

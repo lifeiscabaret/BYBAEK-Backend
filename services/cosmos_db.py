@@ -131,7 +131,7 @@ def get_onboarding(shop_id: str) -> dict:
             "forbidden_words", "locale", "city", "language",
             "is_kakao_connected", "is_insta_connected", "is_gmail_connected",
             "rag_reference", "is_ms_connected", "owner_email", "district",
-            "insta_style_profile", "must_include_hashtags", "photo_range_max",  # ← 추가
+            "insta_style_profile", "photo_range_max",  # ← 추가
             "insta_upload_days"
         ]
 
@@ -244,7 +244,7 @@ def save_onboarding(shop_id: str, data: dict) -> bool:
         "forbidden_words", "locale", "city", "language",
         "is_kakao_connected", "is_insta_connected", "is_gmail_connected",
         "rag_reference", "is_ms_connected", "owner_email", "district",
-        "must_include_hashtags", "photo_range_max", "insta_upload_days"
+        "photo_range_max", "insta_upload_days"
     ]
 
     try:
