@@ -473,7 +473,6 @@ async def _get_brand_settings(shop_id: str) -> dict:
         "photo_range": {"min": 1, "max": 5},
         "feed_style": shop.get("feed_style", {}),
         "hashtag_style": shop.get("hashtag_style", "감성형"),
-        "must_include_hashtags": to_list(shop.get("must_include_hashtags")),
         "shop_intro": shop.get("shop_intro", ""),
         "brand_differentiation": shop.get("shop_intro", ""),
         "insta_style_profile": shop.get("insta_style_profile", {}),
