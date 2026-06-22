@@ -41,6 +41,7 @@ ${bad_captions_block}
 - 남자들이 실제 검색할 단어 + 지역명 조합
 - 방향: ${hashtag_style}
 - 필수 포함: ${must_hashtag_str}
+- 콤마(,) 붙이기 금지 — 각 해시태그는 배열 항목으로만 분리
 
 [CTA - ${cta_instruction}]
 
@@ -50,6 +51,6 @@ ${lang_instruction}
 [출력 — JSON만, 다른 텍스트 없이]
 {
   "caption": "첫 문장에 스타일명 포함, ${caption_len}, 자연스러운 말투",
-  "hashtags": ["#페이드컷", "#바버샵", ... 총 ${hashtag_count}개],
+  "hashtags": ["#페이드컷", "#바버샵", ... 총 ${hashtag_count}개 (각 항목은 #로 시작, 콤마·공백 없이 개별 문자열로)],
   "cta": "${cta_fixed}"
 }
