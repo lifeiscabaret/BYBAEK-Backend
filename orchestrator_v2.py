@@ -539,6 +539,13 @@ async def _auto_upload_instagram(shop_id, post_id, post_draft, selected_photos):
             "status":             "success",
             "instagram_media_id": media_id
         })
+
+        # RAG 플라이휠: 발행 성공분 인덱싱 (헬퍼가 예외 격리됨)
+        from agents.rag_tool import index_post_for_rag
+        await index_post_for_rag(
+            shop_id=shop_id, post_id=post_id,
+            caption=caption, hashtags=hashtags, cta=cta
+        )
         return True
 
     except Exception as e:

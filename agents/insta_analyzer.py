@@ -16,6 +16,7 @@ Instagram 과거 게시물 자동 분석 에이전트
 
 import os
 import json
+import asyncio
 import httpx
 import anthropic
 from services.cosmos_db import get_auth, save_auth
@@ -59,7 +60,11 @@ async def analyze_instagram_history(shop_id: str) -> dict:
 
         print(f"[insta_analyzer] 게시물 {len(posts)}개 수집 완료")
 
-        result = await _analyze_with_gpt(posts)
+        # 말투 분석과 RAG 백필을 동시 실행 (둘 다 완료 보장, 백필은 자체 예외격리라 분석 실패와 무관)
+        result, _ = await asyncio.gather(
+            _analyze_with_gpt(posts),
+            _backfill_rag_index(shop_id, posts),
+        )
         if not result:
             print(f"[insta_analyzer] Claude 분석 실패 → 종료")
             return {}
@@ -77,7 +82,7 @@ async def _fetch_instagram_posts(user_id: str, access_token: str) -> list:
     """Instagram Graph API로 과거 게시물 최대 50개 수집"""
     url = f"https://graph.instagram.com/v25.0/{user_id}/media"
     params = {
-        "fields": "caption,timestamp,like_count",
+        "fields": "id,caption,timestamp,like_count",   # ← id 추가 (멱등 재실행용)
         "limit": 50,
         "access_token": access_token
     }
@@ -161,3 +166,32 @@ async def _analyze_with_gpt(posts: list) -> dict:
     except Exception as e:
         print(f"[insta_analyzer] Claude 분석 에러: {e}")
         return {}
+
+
+async def _backfill_rag_index(shop_id: str, posts: list) -> None:
+    """과거 게시물 캡션을 caption_body 타입으로 1회 일괄 인덱싱 (신규 샵 cold start 부트스트랩).
+    절대 예외를 위로 던지지 않음."""
+    from agents.rag_tool import get_embedding
+    from services.vector_db import save_embeddings_batch
+    try:
+        docs = []
+        for p in posts:
+            cap   = (p.get("caption") or "").strip()
+            ig_id = p.get("id")
+            if not cap or not ig_id:
+                continue
+            vec = await get_embedding(cap)   # TODO: 추후 배치 임베딩으로 50콜→1콜 최적화 가능
+            if not vec:
+                continue
+            docs.append({
+                "id": f"coldstart_{ig_id}_caption_body",
+                "shop_id": shop_id,
+                "caption": cap,
+                "caption_vector": vec,
+                "content_type": "caption_body",
+            })
+        if docs:
+            save_embeddings_batch(docs)
+            print(f"[insta_analyzer] 백필 인덱싱 → {len(docs)}개")
+    except Exception as e:
+        print(f"[insta_analyzer] 백필 실패 (무시): {e}")

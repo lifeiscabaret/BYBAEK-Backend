@@ -191,16 +191,11 @@ async def _handle_upload(shop_id: str, post_id: str, edited_caption: str = None)
     )
 
     if instagram_media_id:
-        try:
-            from agents.rag_tool import get_embedding
-            from services.vector_db import save_embedding
-            full_text = f"{caption} {' '.join(hashtags)} {cta}".strip()
-            embedding = await get_embedding(full_text)
-            if embedding:
-                save_embedding(shop_id, post_id, full_text, embedding)
-                print(f"[agent] RAG 플라이휠: Vector DB 저장 완료 → {post_id}")
-        except Exception as e:
-            print(f"[agent] RAG 플라이휠 저장 실패 (무시): {e}")
+        from agents.rag_tool import index_post_for_rag
+        await index_post_for_rag(
+            shop_id=shop_id, post_id=post_id,
+            caption=caption, hashtags=hashtags, cta=cta
+        )
 
 
 async def _handle_cancel(shop_id: str, post_id: str):
