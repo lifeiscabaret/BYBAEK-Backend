@@ -46,11 +46,11 @@ def save_embedding(
         return False
 
     document = {
-        "id": post_id,
+        "id": f"{post_id}_{content_type}",   # ← 타입별 분리 저장 (덮어쓰기 방지)
         "shop_id": shop_id,
         "caption": caption,
         "caption_vector": embedding,
-        "content_type": content_type   
+        "content_type": content_type
     }
 
     try:
@@ -58,6 +58,23 @@ def save_embedding(
         return True
     except Exception as e:
         logging.error(f"Vector DB 저장 실패: {str(e)}")
+        return False
+
+def save_embeddings_batch(documents: list) -> bool:
+    """여러 문서를 한 번에 인덱싱.
+    documents: [{"id","shop_id","caption","caption_vector","content_type"}, ...]
+    """
+    if not search_client:
+        logging.warning("[vector_db] search_client 없음 → 배치 저장 스킵")
+        return False
+    if not documents:
+        return False
+    try:
+        search_client.upload_documents(documents=documents)
+        logging.info(f"[vector_db] 배치 인덱싱 완료 → {len(documents)}개")
+        return True
+    except Exception as e:
+        logging.error(f"[vector_db] 배치 저장 실패: {e}")
         return False
 
 def search_similar_captions(shop_id: str, query_vector: list, top_k: int = 5, query_text: str = None, content_type: str = None) -> list:

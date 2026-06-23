@@ -268,3 +268,38 @@ def _init_kernel() -> Kernel:
         api_key=api_key
     ))
     return kernel
+
+
+# ─────────────────────────────────────────────
+# [인덱싱] 발행 성공한 게시물을 타입별로 Vector DB에 저장
+# ─────────────────────────────────────────────
+async def index_post_for_rag(shop_id: str, post_id: str,
+                             caption: str, hashtags: list, cta: str) -> None:
+    """발행 성공한 게시물을 caption_body / hashtag_set / cta 타입으로 분리 인덱싱.
+    절대 예외를 위로 던지지 않음 — 인덱싱 실패가 업로드/응답을 막으면 안 됨."""
+    from services.vector_db import save_embeddings_batch
+    try:
+        targets = [
+            ("caption_body", (caption or "").strip()),
+            ("hashtag_set",  " ".join(hashtags).strip() if hashtags else ""),
+            ("cta",          (cta or "").strip()),
+        ]
+        docs = []
+        for ctype, text in targets:
+            if not text:
+                continue
+            vec = await get_embedding(text)
+            if not vec:
+                continue
+            docs.append({
+                "id": f"{post_id}_{ctype}",
+                "shop_id": shop_id,
+                "caption": text,
+                "caption_vector": vec,
+                "content_type": ctype,
+            })
+        if docs:
+            save_embeddings_batch(docs)
+            print(f"[rag_tool] 인덱싱 완료 → {post_id} ({len(docs)}타입)")
+    except Exception as e:
+        print(f"[rag_tool] 인덱싱 실패 (무시): {e}")
