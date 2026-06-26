@@ -205,7 +205,7 @@ def _acquire_graph_token_from_refresh(refresh_token: str) -> str:
 
     app = msal.ConfidentialClientApplication(
         client_id=client_id,
-        authority=f"https://login.microsoftonline.com/{tenant_id}",
+        authority="https://login.microsoftonline.com/common",
         client_credential=client_secret,
     )
     result = app.acquire_token_by_refresh_token(
