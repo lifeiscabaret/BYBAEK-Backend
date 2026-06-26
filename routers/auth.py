@@ -131,6 +131,7 @@ async def get_my_info(request: Request):
     # Worker가 OneDrive 파일 다운로드 시 토큰 만료 문제 해결용
     # Easy Auth 설정에서 offline_access 스코프 추가 필수
     refresh_token = request.headers.get("x-ms-token-aad-refresh-token")
+    logger.info(f"[DEBUG] refresh_token 헤더 존재 여부: {bool(refresh_token)}")
     if refresh_token:
         auth_data["refresh_token"] = refresh_token
 
