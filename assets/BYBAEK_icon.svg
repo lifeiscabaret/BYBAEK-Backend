@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" width="160" height="160">
+
+  <!-- 흰 원 -->
+  <circle cx="80" cy="80" r="75" fill="#FFFFFF"/>
+
+  <!-- B 마크 -->
+  <text
+    x="80" y="101"
+    text-anchor="middle"
+    font-family="Georgia, 'Times New Roman', serif"
+    font-size="70"
+    font-weight="700"
+    fill="#8B0000">B</text>
+
+</svg>

@@ -1,13 +1,21 @@
-# BYBAEK — AI 마케팅 자동화 SaaS · Backend
+<div align="center">
+
+<img src="assets/BYBAEK_logo_dark.svg" alt="BYBAEK" width="420" />
+
+### AI 마케팅 자동화 SaaS · Backend
 
 > 소상공인 바버샵 사장님의 인스타그램 마케팅을 AI로 완전 자동화하는 B2B SaaS  
 > **Microsoft Azure Marketplace 출시 준비 중 (1차 MVP)**
 
 [![Python](https://img.shields.io/badge/Python-3.11-blue)](https://python.org)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115-green)](https://fastapi.tiangolo.com)
-[![Azure](https://img.shields.io/badge/Azure-OpenAI%20%7C%20CosmosDB-0078D4)](https://azure.microsoft.com)
+[![Azure OpenAI](https://img.shields.io/badge/Azure%20OpenAI-GPT--4.1-0078D4)](https://azure.microsoft.com)
+[![Claude](https://img.shields.io/badge/Claude-Sonnet%204.6-D97757)](https://www.anthropic.com)
+[![Cosmos DB](https://img.shields.io/badge/Cosmos%20DB-Vector%20Search-0078D4)](https://learn.microsoft.com/azure/cosmos-db/)
 [![Semantic Kernel](https://img.shields.io/badge/Semantic%20Kernel-AI%20Orchestration-purple)](https://github.com/microsoft/semantic-kernel)
 [![License](https://img.shields.io/badge/License-MIT-yellow)](LICENSE)
+
+</div>
 
 ---
 
@@ -31,22 +39,23 @@
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                        Frontend (React Native)                   │
+│                  Frontend (Next.js · React · TypeScript)         │
 └─────────────────────────────┬───────────────────────────────────┘
                               │ API 요청/응답
 ┌─────────────────────────────▼───────────────────────────────────┐
-│                     Backend (FastAPI / Azure Functions)          │
-│  auth.py │ onboarding.py │ agent.py │ schedule.py │ instagram.py │
+│                     Backend (FastAPI / Azure App Service)        │
+│  auth · onboarding · agent · onedrive · schedule · instagram     │
+│  photos · custom_chat        (routers/)                          │
 └──────────┬────────────────────────────────────────┬─────────────┘
            │                                        │
 ┌──────────▼───────────┐              ┌─────────────▼─────────────┐
-│     AI Orchestrator   │              │      Azure Services        │
-│  orchestrator.py      │              │  CosmosDB │ Blob Storage   │
-│  web_search.py        │◄────────────►│  AI Search │ AI Vision     │
-│  photo_select.py      │              │  OpenAI GPT-4.1            │
-│  post_writer.py       │              └───────────────────────────┘
-│  rag_tool.py          │
-└──────────┬────────────┘
+│   AI Orchestrator v2  │              │      Azure Services        │
+│  orchestrator_v2.py   │              │  Cosmos DB (Doc + Vector)  │
+│  web_search.py        │◄────────────►│  Blob Storage │ AI Vision  │
+│  photo_select.py      │              │  OpenAI GPT-4.1 / -mini    │
+│  post_writer.py       │              │  Claude Sonnet 4.6 (AI     │
+│  rag_tool.py          │              │  Foundry)                  │
+└──────────┬────────────┘              └───────────────────────────┘
            │
 ┌──────────▼────────────┐
 │    External APIs       │
@@ -62,16 +71,18 @@
 
 | 분류 | 기술 | 용도 |
 |---|---|---|
-| **Backend** | Python 3.11, FastAPI, Gunicorn/Uvicorn | 서버리스 API 서버 |
+| **Backend** | Python 3.11, FastAPI, Gunicorn/Uvicorn | 비동기 API 서버 |
 | **AI 오케스트레이션** | Semantic Kernel, Azure OpenAI GPT-4.1 / GPT-4.1-mini | Multi-agent 파이프라인 |
-| **RAG / Vector DB** | Azure AI Search, text-embedding-3-small | 브랜드 캡션 학습 및 검색 |
-| **데이터베이스** | Azure CosmosDB (NoSQL) | 브랜드 설정, 게시물 이력 |
+| **LLM (생성·분석)** | Claude Sonnet 4.6 (Azure AI Foundry, Anthropic SDK) | 인스타 말투 분석 · 사장님용 AI 챗 스트리밍 |
+| **RAG / Vector DB** | Azure Cosmos DB NoSQL **벡터 검색**, text-embedding-3-small | 브랜드 캡션 학습 및 검색 |
+| **데이터베이스** | Azure Cosmos DB (NoSQL) | 브랜드 설정, 게시물 이력 |
 | **스토리지** | Azure Blob Storage | 시술 사진 원본 저장 |
 | **이미지 분석** | Azure AI Vision | 페이드컷 선명도/밝기/흔들림 자동 분석 |
-| **사진 수집** | MS Graph API (OneDrive) | 사장님 OneDrive 자동 동기화 |
+| **사진 수집** | MS Graph API (OneDrive) | 사장님 OneDrive 자동 동기화 (Delta API) |
 | **SNS 업로드** | Instagram Graph API | 게시물 자동 업로드 및 예약 |
 | **인증** | Microsoft OAuth 2.0 | MS 계정 원클릭 로그인 |
 | **트렌드 수집** | Tavily API | 실시간 바버샵 헤어 트렌드 수집 |
+| **알림** | Gmail (SMTP) | 사장님 검토 요청·결과 메일 알림 |
 | **배포** | Azure App Service (Korea Central) | 풀스택 배포 |
 
 ---
@@ -120,14 +131,24 @@ STEP 6   Human-in-the-loop 분기
 
 ### 2. RAG — 단순 LLM 호출이 아닌 브랜드 학습 구조
 - 매 호출마다 브랜드 톤을 프롬프트에 직접 주입하면 컨텍스트 윈도우 낭비
-- 각 샵의 과거 게시물에서 추출한 **tone_rules, 말투 패턴, 해시태그 스타일**을 Vector DB에 축적
+- 각 샵의 과거 게시물에서 추출한 **tone_rules, 말투 패턴, 해시태그 스타일**을 **Cosmos DB NoSQL 벡터 검색**에 축적
 - 생성 시점에 해당 샵 컨텍스트만 검색해 주입 → "사장님이 직접 쓴 것 같은 말투" 재현
+- 별도 벡터 스토어(Azure AI Search) 없이 기존 Cosmos DB에 벡터 인덱스를 통합 → 인프라 단순화 + 비용 절감
 
-### 3. Cold Start 해결
+### 3. RAG 플라이휠 (자가 학습 루프)
+- 업로드 **성공한** 캡션을 composite-key로 인덱싱해 자동으로 Vector DB에 재축적
+- 통합 publish 경로 + cold start 백필 → 쓸수록 해당 샵의 말투가 더 정교해지는 선순환 구조
+
+### 4. Cold Start 해결
 - 신규 가입 샵 → 도메인 특화 seed 캡션 30개 수동 설계·주입
+- 인스타 계정 연동 시 **과거 게시물을 Claude Sonnet 4.6로 분석**해 말투/이모지/해시태그 프로필 자동 생성
 - Fallback: 유사도 낮을 시 recent_posts 기반 컨텍스트 자동 전환
 
-### 4. State 관리
+### 5. 다국어 출력 (Day 1 Global)
+- brand_settings의 `language` 값으로 캡션 생성 언어 분기 (ko/en 등)
+- style_profile에 언어 가드를 두어 타깃 언어와 말투를 동시 유지
+
+### 6. State 관리
 - 단계별 상태값 유지: JSON Schema 기반 Context 전달 체계
 - 각 STEP 출력이 다음 STEP 입력으로 정확히 전달 → Context Drift 방지
 
@@ -137,24 +158,37 @@ STEP 6   Human-in-the-loop 분기
 
 ```
 BYBAEK-Backend/
+├── main.py                       # FastAPI 앱 엔트리포인트
+├── orchestrator_v2.py            # 메인 AI 파이프라인 오케스트레이터 (STEP 0~6)
 ├── agents/
-│   ├── orchestrator.py      # 전체 파이프라인 조율
-│   ├── web_search.py        # Tavily 트렌드 수집
-│   ├── photo_filter.py      # Azure AI Vision 사진 필터링
-│   ├── photo_select.py      # 최적 사진 선택 에이전트
-│   ├── post_writer.py       # 캡션 생성 + Self-Eval Loop
-│   └── rag_tool.py          # Vector DB 검색 + 컨텍스트 압축
+│   ├── orchestrator.py           # 파이프라인 v1 (레거시)
+│   ├── web_search.py             # Tavily 트렌드 수집
+│   ├── competitor_analysis.py    # 경쟁샵 모니터링 인사이트
+│   ├── photo_filter.py           # Azure AI Vision 사진 품질 필터링
+│   ├── photo_select.py           # 최적 사진 선택 에이전트
+│   ├── photo_feedback.py         # 사진 탈락 사유 학습 (누적 반영)
+│   ├── post_writer.py            # 캡션 생성 + LLM-as-Judge Self-Eval
+│   ├── rag_tool.py               # Vector DB 검색 + 컨텍스트 압축
+│   ├── insta_analyzer.py         # 과거 인스타 게시물 말투/패턴 분석 (Claude)
+│   └── performance_feedback.py   # 게시물 성과 피드백 루프
+├── routers/
+│   ├── auth.py                   # MS OAuth 2.0 로그인
+│   ├── onboarding.py             # 브랜드 설정 온보딩
+│   ├── agent.py                  # 파이프라인 트리거
+│   ├── onedrive.py               # OneDrive(MS Graph) 사진 동기화
+│   ├── photos.py                 # 사진 관리
+│   ├── schedule.py               # 예약 업로드
+│   ├── instagram.py              # Instagram Graph API
+│   └── custom_chat.py            # 사장님용 AI 챗 (Claude 스트리밍)
 ├── services/
-│   ├── vector_db.py         # Azure AI Search 연동
-│   ├── cosmos_db.py         # CosmosDB CRUD
-│   └── blob_storage.py      # Blob Storage 연동
-├── api/
-│   ├── auth.py              # MS OAuth 2.0
-│   ├── onboarding.py        # 브랜드 설정 온보딩
-│   ├── agent.py             # 파이프라인 트리거
-│   ├── schedule.py          # 예약 업로드
-│   └── instagram.py         # Instagram Graph API
-├── seed_embeddings.py       # Cold Start 해결 seed 주입
+│   ├── vector_db.py              # Cosmos DB NoSQL 벡터 검색
+│   ├── cosmos_db.py              # Cosmos DB CRUD
+│   ├── cosmos_client.py          # Cosmos 클라이언트 초기화
+│   ├── blob_storage.py           # Blob Storage 연동
+│   └── email_service.py          # Gmail 알림 발송
+├── workers/
+│   └── photo_queue_worker.py     # 사진 업로드/필터링 비동기 워커
+├── seed_embeddings.py            # Cold Start 해결 seed 주입
 └── requirements.txt
 ```
 
@@ -187,19 +221,22 @@ BYBAEK-Backend/
 ## 🚀 현재 상태 (1차 MVP)
 
 ### ✅ 완료
-- Multi-step 에이전트 파이프라인 (STEP 0~6)
+- Multi-step 에이전트 파이프라인 (STEP 0~6, orchestrator v2)
 - RAG 구현 + seed 데이터 30개 주입
+- **RAG 플라이휠** (업로드 성공 캡션 composite-key 자동 재축적 + cold start 백필)
+- **Cosmos DB NoSQL 벡터 검색 전환** (Azure AI Search → Cosmos 통합, 인프라 단순화)
+- **다국어 출력** (language branching, ko/en)
+- **Claude Sonnet 4.6** 기반 인스타 말투 분석 + 사장님용 AI 챗 스트리밍
 - Hallucination 3중 제어
 - Tiered Routing + LLM-as-Judge 품질 게이팅
-- 사진 필터링 (Azure AI Vision)
+- 사진 필터링 (Azure AI Vision) + 비동기 큐 워커
 - Gmail 알림 연동
 - Azure App Service 배포 (Frontend + Backend)
 
 ### 🔜 진행 중
 - Meta Developer 인증 → Instagram 실 계정 연동
-- OneDrive Easy Auth 헤더 문제 해결
+- OneDrive refresh_token 기반 토큰 갱신 (Easy Auth offline_access)
 - Hybrid Search 도입 (BM25 + Vector)
-- RAG 플라이휠 (업로드 성공 캡션 자동 Vector DB 저장)
 - **Microsoft Azure Marketplace 출시 준비 중**
 
 ---
@@ -226,7 +263,7 @@ BYBAEK-Backend/
 |---|---|---|
 | **이지현** | Team Lead / AI Engineer / Backend | AI 에이전트 5종 설계 및 구현 · RAG 파이프라인 설계 및 Cold Start 해결 · Tiered Routing + LLM-as-Judge + Hallucination 3중 제어 구조 설계 · Azure App Service & Cosmos DB 운영 |
 | **이태경** | Backend | OneDrive MS Graph API 1차 연동 · Instagram Graph API 1차 연동 |
-| **차명근** | Frontend Engineer | React Native for Windows 전체 화면 UI/UX 구현 |
+| **차명근** | Frontend Engineer | Next.js · React · TypeScript 전체 화면 UI/UX 구현 |
 | **백지연** | DB Engineer | CosmosDB 스키마 설계 · CRUD 함수 구현 · Vector DB 연동 |
 
 ---

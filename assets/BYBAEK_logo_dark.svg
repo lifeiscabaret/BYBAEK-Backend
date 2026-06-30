@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 160" width="480" height="160">
+
+  <!-- ===========================
+       BYBAEK 로고 - 다크 버전
+       Version: 1.0
+       Background: Dark (#1A1A1A)
+       Usage: Dark backgrounds, headers, splash screens
+       =========================== -->
+
+  <!-- 배경 -->
+  <rect x="0" y="0" width="480" height="160" fill="#1A1A1A"/>
+
+  <!-- 심볼: 레드 원 -->
+  <g id="symbol">
+    <circle cx="80" cy="80" r="60" fill="#8B0000"/>
+    <text
+      x="80" y="100"
+      text-anchor="middle"
+      font-family="Georgia, 'Times New Roman', serif"
+      font-size="72"
+      font-weight="700"
+      fill="#FFFFFF"
+      letter-spacing="-1">B</text>
+  </g>
+
+  <!-- 워드마크 (화이트) -->
+  <g id="wordmark" transform="translate(160, 0)">
+    <text
+      x="4" y="62"
+      font-family="Georgia, 'Times New Roman', serif"
+      font-size="16"
+      font-weight="400"
+      fill="rgba(255,255,255,0.45)"
+      letter-spacing="6">BY</text>
+    <text
+      x="0" y="108"
+      font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
+      font-size="60"
+      font-weight="300"
+      fill="#FFFFFF"
+      letter-spacing="12">BAEK</text>
+  </g>
+
+</svg>
