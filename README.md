@@ -9,7 +9,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.11-blue)](https://python.org)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115-green)](https://fastapi.tiangolo.com)
-[![Azure OpenAI](https://img.shields.io/badge/Azure%20OpenAI-GPT--4.1-0078D4)](https://azure.microsoft.com)
+[![Azure OpenAI](https://img.shields.io/badge/Azure%20OpenAI-gpt--5--mini-0078D4)](https://azure.microsoft.com)
 [![Claude](https://img.shields.io/badge/Claude-Sonnet%204.6-D97757)](https://www.anthropic.com)
 [![Cosmos DB](https://img.shields.io/badge/Cosmos%20DB-Vector%20Search-0078D4)](https://learn.microsoft.com/azure/cosmos-db/)
 [![Semantic Kernel](https://img.shields.io/badge/Semantic%20Kernel-AI%20Orchestration-purple)](https://github.com/microsoft/semantic-kernel)
@@ -23,8 +23,21 @@
 
 | 서비스 | URL |
 |---|---|
-| **Frontend** | https://bybaek-f-f2d2ara8b9bua8f6.koreacentral-01.azurewebsites.net |
-| **Backend** | https://bybaek-b-bzhhgzh8d2gthpb3.koreacentral-01.azurewebsites.net |
+| **Frontend** | https://www.bybaekofficial.com |
+| **Backend** | https://api2.bybaekofficial.com |
+
+<!--
+  ⚙️ 배포 이력 / 복귀 참조 (렌더링에는 표시되지 않음)
+  현재: 개인 Azure 구독 (rg-bybaek, Korea Central) — Frontend=bybaek-frontend, Backend=bybaek-backend
+    - Frontend: https://www.bybaekofficial.com  (App Service: bybaek-frontend.azurewebsites.net)
+    - Backend : https://api2.bybaekofficial.com (App Service: bybaek-backend.azurewebsites.net)
+  이전(옛 구독) — 복귀 시 아래 값으로:
+    - Frontend: https://bybaek-f-f2d2ara8b9bua8f6.koreacentral-01.azurewebsites.net
+    - Backend : https://bybaek-b-bzhhgzh8d2gthpb3.koreacentral-01.azurewebsites.net
+    - 모델(이전): Azure OpenAI GPT-4.1 / GPT-4.1-mini  →  현재: gpt-5-mini
+    (전체 이전·복귀 절차는 별도 백업 문서 PERSONAL-DEPLOYMENT.md / REVERT.md 참조)
+-->
+
 
 ---
 
@@ -52,7 +65,7 @@
 │   AI Orchestrator v2  │              │      Azure Services        │
 │  orchestrator_v2.py   │              │  Cosmos DB (Doc + Vector)  │
 │  web_search.py        │◄────────────►│  Blob Storage │ AI Vision  │
-│  photo_select.py      │              │  OpenAI GPT-4.1 / -mini    │
+│  photo_select.py      │              │  OpenAI gpt-5-mini         │
 │  post_writer.py       │              │  Claude Sonnet 4.6 (AI     │
 │  rag_tool.py          │              │  Foundry)                  │
 └──────────┬────────────┘              └───────────────────────────┘
@@ -72,7 +85,7 @@
 | 분류 | 기술 | 용도 |
 |---|---|---|
 | **Backend** | Python 3.11, FastAPI, Gunicorn/Uvicorn | 비동기 API 서버 |
-| **AI 오케스트레이션** | Semantic Kernel, Azure OpenAI GPT-4.1 / GPT-4.1-mini | Multi-agent 파이프라인 |
+| **AI 오케스트레이션** | Semantic Kernel, Azure OpenAI gpt-5-mini | Multi-agent 파이프라인 |
 | **LLM (생성·분석)** | Claude Sonnet 4.6 (Azure AI Foundry, Anthropic SDK) | 인스타 말투 분석 · 사장님용 AI 챗 스트리밍 |
 | **RAG / Vector DB** | Azure Cosmos DB NoSQL **벡터 검색**, text-embedding-3-small | 브랜드 캡션 학습 및 검색 |
 | **데이터베이스** | Azure Cosmos DB (NoSQL) | 브랜드 설정, 게시물 이력 |
@@ -80,10 +93,12 @@
 | **이미지 분석** | Azure AI Vision | 페이드컷 선명도/밝기/흔들림 자동 분석 |
 | **사진 수집** | MS Graph API (OneDrive) | 사장님 OneDrive 자동 동기화 (Delta API) |
 | **SNS 업로드** | Instagram Graph API | 게시물 자동 업로드 및 예약 |
-| **인증** | Microsoft OAuth 2.0 | MS 계정 원클릭 로그인 |
+| **인증** | Microsoft Entra ID · App Service 인증(Easy Auth) | MS 계정 원클릭 로그인 (offline_access 토큰) |
 | **트렌드 수집** | Tavily API | 실시간 바버샵 헤어 트렌드 수집 |
 | **알림** | Gmail (SMTP) | 사장님 검토 요청·결과 메일 알림 |
 | **배포** | Azure App Service (Korea Central) | 풀스택 배포 |
+| **CI/CD** | GitHub Actions (게시 프로필 파라미터화) | `main` push 자동 배포 |
+| **비동기 처리** | Azure Storage Queue + 워커 | 사진 다운로드·업로드·필터링 큐잉 |
 
 ---
 
@@ -92,8 +107,8 @@
 ```
 STEP 0   Tiered Routing
          요청 복잡도(trigger 유형 + 사진 수) 분류
-         → auto + 사진 5장 미만 : GPT-4.1-mini
-         → manual OR 사진 5장 이상 : GPT-4.1
+         → auto + 사진 5장 미만 : gpt-5-mini
+         → manual OR 사진 5장 이상 : gpt-5-mini (full 모델 승격 슬롯)
 
 STEP 1   병렬 수집 (asyncio)
          웹서치(Tavily) + 브랜드설정 + 사진후보 + 최근게시물 동시 호출
@@ -200,7 +215,7 @@ BYBAEK-Backend/
 |---|---|
 | caption_score 평균 | **0.86** (임계값 0.7 대비 +23%) |
 | 운영 중 retry 발생 | **0회** (첫 시도 통과율 100%) |
-| 모델 비용 구조 | GPT-4.1-mini 우선 라우팅 (full 대비 약 80% 절감) |
+| 모델 비용 구조 | mini 우선 라우팅 (gpt-5-mini) — full 대비 약 80% 절감 |
 | 외부 API 실연동 | **5개** (Instagram · Gmail · OneDrive · Tavily · Azure) |
 | 배포 환경 | Azure App Service Korea Central |
 
@@ -232,10 +247,14 @@ BYBAEK-Backend/
 - 사진 필터링 (Azure AI Vision) + 비동기 큐 워커
 - Gmail 알림 연동
 - Azure App Service 배포 (Frontend + Backend)
+- **Instagram 실 계정 연동** (Meta Developer 인증 + Entra ID Easy Auth 로그인)
+- **OneDrive 자동 동기화** (refresh_token / offline_access 기반 토큰 갱신)
+- **GitHub Actions CI/CD** (게시 프로필 파라미터화 — `main` push 자동 배포)
+- **멀티서비스 Azure 스택 구독 간 무손실 이전** (App Service·Cosmos 벡터검색·Blob·Queue·AI Foundry·Entra 인증·커스텀 도메인·CI/CD)
 
 ### 🔜 진행 중
-- Meta Developer 인증 → Instagram 실 계정 연동
-- OneDrive refresh_token 기반 토큰 갱신 (Easy Auth offline_access)
+- Instagram **자동 발행** (Meta 앱 심사 진행 중)
+- Claude Sonnet **글쓰기/분석** 활성화 (Azure AI Foundry 쿼터 승인 대기)
 - Hybrid Search 도입 (BM25 + Vector)
 - **Microsoft Azure Marketplace 출시 준비 중**
 
