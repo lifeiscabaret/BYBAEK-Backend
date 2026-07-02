@@ -71,10 +71,10 @@ class AlbumCreateRequest(BaseModel):
 def _to_sas_url(blob_url: str, hours: int = 2) -> str:
     try:
         clean_url = blob_url.split("?")[0]
-        path = clean_url.replace("https://bybaekstorage.blob.core.windows.net/", "")
+        path = clean_url.replace("https://bybaekstore1.blob.core.windows.net/", "")
         container, blob_name = path.split("/", 1)
         sas_token = generate_blob_sas(
-            account_name="bybaekstorage",
+            account_name="bybaekstore1",
             container_name=container,
             blob_name=blob_name,
             account_key=os.getenv("AZURE_STORAGE_KEY"),

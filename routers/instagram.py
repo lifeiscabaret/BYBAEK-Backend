@@ -105,7 +105,7 @@ async def _normalize_aspect_ratio(blob_url: str) -> str:
             content_settings=ContentSettings(content_type="image/jpeg")
         )
 
-        new_url = f"https://bybaekstorage.blob.core.windows.net/{container_name}/{temp_blob_name}"
+        new_url = f"https://bybaekstore1.blob.core.windows.net/{container_name}/{temp_blob_name}"
         logger.info(f"[instagram] 크롭 이미지 업로드 완료 → {new_url}")
         return new_url
 

@@ -12,16 +12,16 @@ def generate_sas_url(blob_url: str, expiry_hours: int = 24) -> str:
     try:
         clean_url = blob_url.split("?")[0]
 
-        # 컨테이너명 이후 전체 경로 추출 (shop_id 폴더 포함)
-        prefix = f"https://bybaekstorage.blob.core.windows.net/{CONTAINER_NAME}/"
+        blob_service_client = BlobServiceClient.from_connection_string(AZURE_STORAGE_CONNECTION_STRING)
+        account_name = blob_service_client.account_name
+        account_key = blob_service_client.credential.account_key
+
+        # 컨테이너명 이후 전체 경로 추출 (shop_id 폴더 포함) — 계정명은 연결문자열에서 도출(이식성)
+        prefix = f"https://{account_name}.blob.core.windows.net/{CONTAINER_NAME}/"
         if clean_url.startswith(prefix):
             blob_name = clean_url[len(prefix):]  # 예: 00000000-.../67a42e...jpg
         else:
             blob_name = clean_url.split("/")[-1]
-
-        blob_service_client = BlobServiceClient.from_connection_string(AZURE_STORAGE_CONNECTION_STRING)
-        account_name = blob_service_client.account_name
-        account_key = blob_service_client.credential.account_key
 
         sas_token = generate_blob_sas(
             account_name=account_name,
