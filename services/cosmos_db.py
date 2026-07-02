@@ -453,7 +453,7 @@ def delete_photo_data(shop_id: str, photo_id: str) -> bool:
         blob_url = photo_item.get("blob_url")
         if blob_url:
             from services.blob_storage import CONTAINER_NAME
-            prefix = f"https://bybaekstorage.blob.core.windows.net/{CONTAINER_NAME}/"
+            prefix = f"https://bybaekstore1.blob.core.windows.net/{CONTAINER_NAME}/"
             clean_url = blob_url.split("?")[0]
             file_name = clean_url[len(prefix):] if clean_url.startswith(prefix) else clean_url.split("/")[-1]
             delete_blob(file_name)

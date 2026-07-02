@@ -277,8 +277,7 @@ async def _evaluate_photo(
         response = await client.chat.completions.create(
             model=deployment,
             messages=messages,
-            max_tokens=500,
-            temperature=0
+            max_completion_tokens=2000,
         )
 
         raw = response.choices[0].message.content.strip()
@@ -331,7 +330,7 @@ def _generate_sas_url(blob_url: str, hours: int = 1) -> str:
     [FIX] BlobServiceClient 싱글톤 캐시 사용 (매 사진마다 재생성 방지)
     """
     blob_url = blob_url.split("?")[0]
-    path     = blob_url.replace("https://bybaekstorage.blob.core.windows.net/", "")
+    path     = blob_url.replace("https://bybaekstore1.blob.core.windows.net/", "")
     parts    = path.split("/", 1)
     container_name = parts[0]
     blob_name      = parts[1]

@@ -71,17 +71,24 @@ def _generate_sas_url(blob_url: str, hours: int = 1) -> str:
     blob_url → 임시 SAS URL 변환.
     photo_filter.py에서 GPT Vision 호출 시 사용.
     """
-    # https://bybaekstorage.blob.core.windows.net/photos/shop_id/hash.jpg
-    path = blob_url.replace("https://bybaekstorage.blob.core.windows.net/", "")
+    # 계정명·키는 연결문자열에서 도출(이식성) → 하드코딩 제거
+    blob_service_client = BlobServiceClient.from_connection_string(
+        os.getenv("AZURE_STORAGE_CONNECTION_STRING")
+    )
+    account_name = blob_service_client.account_name
+    account_key = blob_service_client.credential.account_key
+
+    # https://<account>.blob.core.windows.net/<container>/<shop_id>/<hash>.jpg
+    path = blob_url.split(".blob.core.windows.net/", 1)[1]
     parts = path.split("/", 1)
     container = parts[0]
     blob_name = parts[1]
 
     sas_token = generate_blob_sas(
-        account_name="bybaekstorage",
+        account_name=account_name,
         container_name=container,
         blob_name=blob_name,
-        account_key=os.getenv("AZURE_STORAGE_KEY"),
+        account_key=account_key,
         permission=BlobSasPermissions(read=True),
         expiry=datetime.now(timezone.utc) + timedelta(hours=hours),
     )
@@ -214,7 +221,7 @@ def process_message(message_body: dict) -> dict:
             )
 
             blob_url = (
-                f"https://bybaekstorage.blob.core.windows.net"
+                f"https://bybaekstore1.blob.core.windows.net"
                 f"/{container_name}/{quote(isolated_path)}"
             )
 
@@ -240,7 +247,7 @@ def process_message(message_body: dict) -> dict:
             # ✅ Blob은 있지만 DB에 없을 수 있으므로 upsert
             if ext in INSTAGRAM_SUPPORTED:
                 blob_url = (
-                    f"https://bybaekstorage.blob.core.windows.net"
+                    f"https://bybaekstore1.blob.core.windows.net"
                     f"/{container_name}/{quote(isolated_path)}"
                 )
                 save_photo(shop_id, {

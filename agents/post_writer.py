@@ -512,7 +512,7 @@ def _fallback_draft(brand_settings: dict, trend_data: dict) -> dict:
 def _init_claude_client():
     # Claude Sonnet 4.6 (Azure Foundry) - anthropic SDK 직접 호출 (비동기)
     return anthropic.AsyncAnthropic(
-        base_url="https://bybaek-claude-swedencen-resource.services.ai.azure.com/anthropic",
+        base_url=os.getenv("AZURE_CLAUDE_ENDPOINT", "https://bybaek-claude-swedencen-resource.services.ai.azure.com/anthropic"),
         api_key=os.getenv("AZURE_CLAUDE_KEY"),
         default_headers={"api-key": os.getenv("AZURE_CLAUDE_KEY")},
         timeout=anthropic.Timeout(30.0)

@@ -202,7 +202,7 @@ async def _gpt_expand_selection(
 
     try:
         client = anthropic.AsyncAnthropic(
-            base_url="https://bybaek-claude-swedencen-resource.services.ai.azure.com/anthropic",
+            base_url=os.getenv("AZURE_CLAUDE_ENDPOINT", "https://bybaek-claude-swedencen-resource.services.ai.azure.com/anthropic"),
             api_key=os.getenv("AZURE_CLAUDE_KEY"),
             default_headers={"api-key": os.getenv("AZURE_CLAUDE_KEY")}
         )
