@@ -96,7 +96,7 @@ async def generate_chat_stream(shop_id: str, message: str, photo_ids: List[str])
     출력: caption + hashtags + cta JSON 스트림.
     """
     api_key  = os.getenv("AZURE_CLAUDE_KEY")
-    base_url = "https://bybaek-claude-swedencen-resource.services.ai.azure.com/anthropic"
+    base_url = os.getenv("AZURE_CLAUDE_ENDPOINT", "https://bybaek-claude-swedencen-resource.services.ai.azure.com/anthropic")
 
     if not api_key:
         yield "[❌ AZURE_CLAUDE_KEY 환경변수가 설정되지 않았습니다.]"
