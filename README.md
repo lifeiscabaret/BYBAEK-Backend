@@ -5,7 +5,7 @@
 ### AI 마케팅 자동화 SaaS · Backend
 
 > 소상공인 바버샵 사장님의 인스타그램 마케팅을 AI로 완전 자동화하는 B2B SaaS  
-> **Microsoft Azure Marketplace 출시 준비 중 (1차 MVP)**
+> **Microsoft Azure Marketplace 제출 완료 · 심사 및 런칭 대기 중 (1차 MVP)**
 
 [![Python](https://img.shields.io/badge/Python-3.11-blue)](https://python.org)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115-green)](https://fastapi.tiangolo.com)
@@ -64,7 +64,7 @@
 ┌──────────▼───────────┐              ┌─────────────▼─────────────┐
 │   AI Orchestrator v2  │              │      Azure Services        │
 │  orchestrator_v2.py   │              │  Cosmos DB (Doc + Vector)  │
-│  web_search.py        │◄────────────►│  Blob Storage │ AI Vision  │
+│  web_search.py        │◄────────────►│  Blob Storage │ GPT Vision │
 │  photo_select.py      │              │  OpenAI gpt-5-mini         │
 │  post_writer.py       │              │  Claude Sonnet 4.6 (AI     │
 │  rag_tool.py          │              │  Foundry)                  │
@@ -90,7 +90,7 @@
 | **RAG / Vector DB** | Azure Cosmos DB NoSQL **벡터 검색**, text-embedding-3-small | 브랜드 캡션 학습 및 검색 |
 | **데이터베이스** | Azure Cosmos DB (NoSQL) | 브랜드 설정, 게시물 이력 |
 | **스토리지** | Azure Blob Storage | 시술 사진 원본 저장 |
-| **이미지 분석** | Azure AI Vision | 페이드컷 선명도/밝기/흔들림 자동 분석 |
+| **이미지 분석** | Azure OpenAI Vision (gpt-5-mini) | 페이드컷 선명도/밝기/흔들림 자동 분석 |
 | **사진 수집** | MS Graph API (OneDrive) | 사장님 OneDrive 자동 동기화 (Delta API) |
 | **SNS 업로드** | Instagram Graph API | 게시물 자동 업로드 및 예약 |
 | **인증** | Microsoft Entra ID · App Service 인증(Easy Auth) | MS 계정 원클릭 로그인 (offline_access 토큰) |
@@ -107,8 +107,8 @@
 ```
 STEP 0   Tiered Routing
          요청 복잡도(trigger 유형 + 사진 수) 분류
-         → auto + 사진 5장 미만 : gpt-5-mini
-         → manual OR 사진 5장 이상 : gpt-5-mini (full 모델 승격 슬롯)
+         → auto + 사진 5장 미만 : mini 모델
+         → manual OR 사진 5장 이상 : full 모델 (현재 배포: 둘 다 gpt-5-mini)
 
 STEP 1   병렬 수집 (asyncio)
          웹서치(Tavily) + 브랜드설정 + 사진후보 + 최근게시물 동시 호출
@@ -127,7 +127,7 @@ STEP 4   RAG Tool
 STEP 5   Post Writer + LLM-as-Judge
          캡션 + 해시태그 + CTA 생성
          caption_score < 0.7 → 자동 재시도 → 소진 시 full 모델 승격
-         실측 caption_score 평균 0.86 / 운영 중 retry 0회
+         실측 caption_score 평균 0.86(1차 MVP) → 0.92(구독 이전 후 재검증) / 운영 중 retry 0회
 
 STEP 6   Human-in-the-loop 분기
          설정값에 따라 자동업로드 OR 사장님 검토(OK/수정/취소) 분기
@@ -179,7 +179,7 @@ BYBAEK-Backend/
 │   ├── orchestrator.py           # 파이프라인 v1 (레거시)
 │   ├── web_search.py             # Tavily 트렌드 수집
 │   ├── competitor_analysis.py    # 경쟁샵 모니터링 인사이트
-│   ├── photo_filter.py           # Azure AI Vision 사진 품질 필터링
+│   ├── photo_filter.py           # Azure OpenAI Vision(gpt-5-mini) 사진 품질 필터링
 │   ├── photo_select.py           # 최적 사진 선택 에이전트
 │   ├── photo_feedback.py         # 사진 탈락 사유 학습 (누적 반영)
 │   ├── post_writer.py            # 캡션 생성 + LLM-as-Judge Self-Eval
@@ -213,7 +213,8 @@ BYBAEK-Backend/
 
 | 지표 | 수치 |
 |---|---|
-| caption_score 평균 | **0.86** (임계값 0.7 대비 +23%) |
+| caption_score 평균 | **0.86** (1차 MVP 운영, GPT-4.1-mini judge 기준, 임계값 0.7 대비 +23%) |
+| caption_score (재검증) | **0.92** (구독 이전 후 gpt-5-mini judge, 대표 샘플 3건 재측정) |
 | 운영 중 retry 발생 | **0회** (첫 시도 통과율 100%) |
 | 모델 비용 구조 | mini 우선 라우팅 (gpt-5-mini) — full 대비 약 80% 절감 |
 | 외부 API 실연동 | **5개** (Instagram · Gmail · OneDrive · Tavily · Azure) |
@@ -244,7 +245,7 @@ BYBAEK-Backend/
 - **Claude Sonnet 4.6** 기반 인스타 말투 분석 + 사장님용 AI 챗 스트리밍
 - Hallucination 3중 제어
 - Tiered Routing + LLM-as-Judge 품질 게이팅
-- 사진 필터링 (Azure AI Vision) + 비동기 큐 워커
+- 사진 필터링 (Azure OpenAI Vision) + 비동기 큐 워커
 - Gmail 알림 연동
 - Azure App Service 배포 (Frontend + Backend)
 - **Instagram 실 계정 연동** (Meta Developer 인증 + Entra ID Easy Auth 로그인)
@@ -256,7 +257,8 @@ BYBAEK-Backend/
 - Instagram **자동 발행** (Meta 앱 심사 진행 중)
 - Claude Sonnet **글쓰기/분석** 활성화 (Azure AI Foundry 쿼터 승인 대기)
 - Hybrid Search 도입 (BM25 + Vector)
-- **Microsoft Azure Marketplace 출시 준비 중**
+- **Microsoft Azure Marketplace 제출 완료, 검토 → 런칭 대기 중**
+  (대기 기간 중 구독 결제/권한 이슈로 인프라 전체를 개인 Azure 구독으로 무중단 이전 — 위 "구독 간 무손실 이전" 항목)
 
 ---
 
@@ -271,8 +273,8 @@ BYBAEK-Backend/
 
 | 기관 | 협력 내용 |
 |---|---|
-| **Microsoft Korea** | Azure 기술 미팅 진행 · Azure Marketplace 출시 준비 중 |
-| **IUI** | MS Azure Marketplace 배포 담당 · 출시 전 과정 공식 개발 협력사 |
+| **Microsoft Korea** | Azure 기술 미팅 진행 · Marketplace 제출 완료, 심사 및 런칭 대기 중 |
+| **IUI** | MS Azure Marketplace 등록 담당 · 출시 전 과정 공식 개발 협력사 |
 
 ---
 
