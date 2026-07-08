@@ -4,6 +4,8 @@ import re
 from string import Template
 import anthropic
 
+from utils.claude_auth import CLAUDE_BASE_URL, get_claude_token
+
 # 프롬프트 파일 디렉터리 (프로젝트 루트/prompts)
 _PROMPT_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "prompts")
 # 파일 내용 캐시 (반복 디스크 IO 방지)
@@ -510,10 +512,9 @@ def _fallback_draft(brand_settings: dict, trend_data: dict) -> dict:
 
 # [Claude 클라이언트 초기화]
 def _init_claude_client():
-    # Claude Sonnet 4.6 (Azure Foundry) - anthropic SDK 직접 호출 (비동기)
+    # Claude Sonnet 4.6 (Azure Foundry) - AAD(Entra) 토큰 인증. /anthropic 경로는 api-key 미지원.
     return anthropic.AsyncAnthropic(
-        base_url=os.getenv("AZURE_CLAUDE_ENDPOINT", "https://bybaek-claude-swedencen-resource.services.ai.azure.com/anthropic"),
-        api_key=os.getenv("AZURE_CLAUDE_KEY"),
-        default_headers={"api-key": os.getenv("AZURE_CLAUDE_KEY")},
+        base_url=CLAUDE_BASE_URL,
+        auth_token=get_claude_token(),
         timeout=anthropic.Timeout(30.0)
     )

@@ -7,13 +7,14 @@
 - "오늘 페이드컷으로 뭐라고 올려?" → 캡션 + 해시태그 + CTA 바로 출력
 - web_search_agent 연결로 실시간 트렌드 반영
 """
-import os
 import json
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import List
 import anthropic
+
+from utils.claude_auth import CLAUDE_BASE_URL, get_claude_token
 
 
 router = APIRouter()
@@ -95,11 +96,11 @@ async def generate_chat_stream(shop_id: str, message: str, photo_ids: List[str])
     트렌드 조회 → 브랜드 설정 조회 → 캡션 스트리밍 생성.
     출력: caption + hashtags + cta JSON 스트림.
     """
-    api_key  = os.getenv("AZURE_CLAUDE_KEY")
-    base_url = os.getenv("AZURE_CLAUDE_ENDPOINT", "https://bybaek-claude-swedencen-resource.services.ai.azure.com/anthropic")
-
-    if not api_key:
-        yield "[❌ AZURE_CLAUDE_KEY 환경변수가 설정되지 않았습니다.]"
+    # Claude 인증: Azure Foundry /anthropic 은 AAD(Entra) 토큰만 허용 (api-key 미지원)
+    try:
+        claude_token = get_claude_token()
+    except Exception as e:
+        yield f"[❌ Claude AAD 토큰 발급 실패: {e}]"
         return
 
     # 1. 트렌드 + 브랜드 설정 병렬 조회
@@ -195,9 +196,8 @@ async def generate_chat_stream(shop_id: str, message: str, photo_ids: List[str])
 
     # 6. 스트리밍 생성 (Claude Sonnet 4.6)
     client = anthropic.Anthropic(
-        base_url=base_url,
-        api_key=api_key,
-        default_headers={"api-key": api_key}
+        base_url=CLAUDE_BASE_URL,
+        auth_token=claude_token
     )
 
     try:

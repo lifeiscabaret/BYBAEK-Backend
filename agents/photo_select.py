@@ -1,7 +1,8 @@
-import os
 import json
 import anthropic
 from datetime import datetime, timezone, timedelta
+
+from utils.claude_auth import CLAUDE_BASE_URL, get_claude_token
 
 REUSE_COOLDOWN_DAYS = 14
 
@@ -202,9 +203,8 @@ async def _gpt_expand_selection(
 
     try:
         client = anthropic.AsyncAnthropic(
-            base_url=os.getenv("AZURE_CLAUDE_ENDPOINT", "https://bybaek-claude-swedencen-resource.services.ai.azure.com/anthropic"),
-            api_key=os.getenv("AZURE_CLAUDE_KEY"),
-            default_headers={"api-key": os.getenv("AZURE_CLAUDE_KEY")}
+            base_url=CLAUDE_BASE_URL,
+            auth_token=get_claude_token()
         )
         response = await client.messages.create(
             model="claude-sonnet-4-6",
