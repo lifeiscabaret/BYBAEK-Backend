@@ -14,12 +14,12 @@ Instagram 과거 게시물 자동 분석 에이전트
   4. 분석 결과를 Shop DB의 insta_style_profile 필드에 저장
 """
 
-import os
 import json
 import asyncio
 import httpx
 import anthropic
 from services.cosmos_db import get_auth, save_auth
+from utils.claude_auth import CLAUDE_BASE_URL, get_claude_token
 
 
 async def analyze_instagram_history(shop_id: str) -> dict:
@@ -144,9 +144,8 @@ async def _analyze_with_gpt(posts: list) -> dict:
 {captions_text}"""
 
     client = anthropic.AsyncAnthropic(
-        base_url=os.getenv("AZURE_CLAUDE_ENDPOINT", "https://bybaek-claude-swedencen-resource.services.ai.azure.com/anthropic"),
-        api_key=os.getenv("AZURE_CLAUDE_KEY"),
-        default_headers={"api-key": os.getenv("AZURE_CLAUDE_KEY")},
+        base_url=CLAUDE_BASE_URL,
+        auth_token=get_claude_token(),
         timeout=anthropic.Timeout(30.0)
     )
 
