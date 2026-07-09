@@ -26,8 +26,12 @@ CLAUDE_BASE_URL = os.getenv(
     "https://bybaek-foundry.services.ai.azure.com/anthropic",
 )
 
-# Cognitive Services 데이터 플레인 스코프
-_SCOPE = "https://cognitiveservices.azure.com/.default"
+# Azure AI Foundry 데이터 플레인 스코프.
+# [주의] 이 /anthropic 엔드포인트는 Managed Identity 토큰에 대해 audience로 정확히
+#   https://ai.azure.com 를 요구한다. cognitiveservices.azure.com 스코프를 쓰면 MI 토큰이
+#   401 "audience is incorrect (https://ai.azure.com)" 로 거부되어 목업(fallback)으로 빠진다.
+#   (로컬 az login 사용자 토큰은 두 audience 모두 허용되지만, 배포본 MI는 ai.azure.com 만 통과.)
+_SCOPE = "https://ai.azure.com/.default"
 
 # 단일 크리덴셜 인스턴스 → 토큰 캐시/자동 갱신 공유 (모듈 로드 시 네트워크 호출 없음)
 #
