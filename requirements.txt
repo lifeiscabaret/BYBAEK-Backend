@@ -3,7 +3,7 @@ uvicorn[standard]==0.30.0
 python-multipart==0.0.9
 azure-cosmos==4.7.0
 azure-storage-blob==12.21.0
-azure-identity==1.17.0
+azure-identity>=1.15.0
 openai>=1.98.0
 tavily-python==0.3.3
 python-dotenv==1.0.1
