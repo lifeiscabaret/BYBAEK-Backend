@@ -1,0 +1,1015 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BYBAEK 시스템 정의서 & 배포 명세서</title>
+</head>
+<body>
+<!-- BYBAEK 시스템 정의서 & 배포 명세서 -->
+<style>
+  :root {
+    color-scheme: light dark;
+    --paper:      #F6F3ED;
+    --paper-2:    #EFEADF;
+    --card:       #FFFFFF;
+    --ink:        #201C17;
+    --ink-2:      #4A433B;
+    --ink-3:      #7A7166;
+    --line:       #DDD5C6;
+    --line-2:     #E8E1D4;
+    --red:        #8B0000;   /* 로고 실색 · 바버 레드 */
+    --red-soft:   #B23A2A;
+    --brass:      #96701F;   /* 섹션번호·괘선 */
+    --brass-soft: #B7913A;
+    --steel:      #3E5C76;
+    --ok:         #3F7A4E;
+    --warn:       #A9762A;
+    --idle:       #8A8178;
+    --code-bg:    #F1ECE0;
+    --code-ink:   #5A3A20;
+    --shadow:     0 1px 2px rgba(30,20,10,.05), 0 6px 22px rgba(30,20,10,.06);
+    --maxw:       860px;
+    --font-body:  system-ui, -apple-system, "Apple SD Gothic Neo", "Segoe UI", Roboto, sans-serif;
+    --font-disp:  Georgia, "Times New Roman", "Apple SD Gothic Neo", serif;
+    --font-mono:  ui-monospace, "SF Mono", "Menlo", "Consolas", monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper:  #161310; --paper-2: #1E1A15; --card: #201B16;
+      --ink:    #EDE7DB; --ink-2: #C2B9AB; --ink-3: #8E857A;
+      --line:   #352E25; --line-2: #2A241D;
+      --red:    #E0664F; --red-soft: #E88066;
+      --brass:  #C7A24E; --brass-soft: #D8B968; --steel: #7FA3C4;
+      --ok:     #6FB07E; --warn: #D2A24E; --idle: #9A9083;
+      --code-bg:#221C15; --code-ink: #E0B183;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 26px rgba(0,0,0,.35);
+    }
+  }
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --paper:#F6F3ED; --paper-2:#EFEADF; --card:#FFFFFF; --ink:#201C17; --ink-2:#4A433B; --ink-3:#7A7166;
+    --line:#DDD5C6; --line-2:#E8E1D4; --red:#8B0000; --red-soft:#B23A2A; --brass:#96701F; --brass-soft:#B7913A;
+    --steel:#3E5C76; --ok:#3F7A4E; --warn:#A9762A; --idle:#8A8178; --code-bg:#F1ECE0; --code-ink:#5A3A20;
+    --shadow:0 1px 2px rgba(30,20,10,.05), 0 6px 22px rgba(30,20,10,.06);
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --paper:#161310; --paper-2:#1E1A15; --card:#201B16; --ink:#EDE7DB; --ink-2:#C2B9AB; --ink-3:#8E857A;
+    --line:#352E25; --line-2:#2A241D; --red:#E0664F; --red-soft:#E88066; --brass:#C7A24E; --brass-soft:#D8B968;
+    --steel:#7FA3C4; --ok:#6FB07E; --warn:#D2A24E; --idle:#9A9083; --code-bg:#221C15; --code-ink:#E0B183;
+    --shadow:0 1px 2px rgba(0,0,0,.3), 0 8px 26px rgba(0,0,0,.35);
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0; background: var(--paper); color: var(--ink);
+    font-family: var(--font-body); font-size: 16px; line-height: 1.72;
+    -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
+  }
+  .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 28px; }
+
+  /* ---- barber-pole hairline motif ---- */
+  .pole {
+    height: 6px; border: 0; margin: 0;
+    background: repeating-linear-gradient(115deg,
+      var(--red) 0 10px, var(--paper) 10px 20px, var(--steel) 20px 30px, var(--paper) 30px 40px);
+    opacity: .85;
+  }
+
+  /* ---- Cover ---- */
+  .cover {
+    background: var(--paper-2);
+    border-bottom: 1px solid var(--line);
+    padding: 72px 0 56px;
+  }
+  .cover .logo { width: 230px; max-width: 62%; height: auto; display:block; margin-bottom: 30px; border-radius: 10px; }
+  .cover h1 {
+    font-family: var(--font-disp); font-weight: 700; font-size: clamp(34px, 6vw, 56px);
+    line-height: 1.05; margin: 0 0 10px; letter-spacing: -.5px; text-wrap: balance;
+  }
+  .cover .sub { font-size: 19px; color: var(--ink-2); margin: 0 0 4px; font-weight: 500; }
+  .cover .sub-2 { font-size: 15px; color: var(--ink-3); margin: 0 0 28px; }
+  .cover .meta-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(160px,1fr)); gap: 1px;
+    background: var(--line); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; margin-top: 8px;
+  }
+  .cover .meta-grid > div { background: var(--card); padding: 14px 16px; }
+  .cover .meta-grid dt { font-size: 11px; letter-spacing: .09em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 4px; font-weight: 700; }
+  .cover .meta-grid dd { margin: 0; font-size: 14px; font-weight: 600; color: var(--ink); }
+  .cover .meta-grid dd.mono { font-family: var(--font-mono); font-size: 12.5px; }
+
+  /* ---- Section ---- */
+  section { padding: 46px 0 8px; border-top: 1px solid var(--line-2); }
+  section:first-of-type { border-top: 0; }
+  .sec-head { display: flex; align-items: baseline; gap: 14px; margin-bottom: 6px; }
+  .sec-num {
+    font-family: var(--font-mono); font-size: 13px; font-weight: 700; color: var(--brass);
+    border: 1.5px solid var(--brass-soft); border-radius: 6px; padding: 2px 8px; flex: none;
+    letter-spacing: .02em;
+  }
+  h2 { font-family: var(--font-disp); font-size: clamp(24px, 3.6vw, 32px); font-weight: 700; margin: 0; line-height: 1.15; letter-spacing: -.3px; text-wrap: balance; }
+  h3 { font-size: 19px; font-weight: 700; margin: 34px 0 10px; color: var(--ink); letter-spacing: -.2px; }
+  h3 .tag { font-family: var(--font-mono); font-size: 12px; color: var(--red); font-weight: 600; margin-left: 8px; }
+  h4 { font-size: 15px; font-weight: 700; margin: 22px 0 6px; color: var(--ink-2); }
+  .lead { font-size: 17px; color: var(--ink-2); margin: 4px 0 18px; max-width: 62ch; }
+  p { margin: 0 0 14px; max-width: 68ch; }
+  strong { font-weight: 700; color: var(--ink); }
+  a { color: var(--steel); text-decoration: none; border-bottom: 1px solid color-mix(in srgb, var(--steel) 35%, transparent); }
+  a:hover { border-bottom-color: var(--steel); }
+  ul, ol { margin: 0 0 16px; padding-left: 22px; max-width: 68ch; }
+  li { margin: 5px 0; }
+  code {
+    font-family: var(--font-mono); font-size: .875em; background: var(--code-bg);
+    color: var(--code-ink); padding: 1.5px 6px; border-radius: 5px; white-space: nowrap;
+  }
+  .hl { color: var(--red); font-weight: 700; }
+
+  /* ---- callouts ---- */
+  .note, .warnbox, .plain {
+    border-radius: 12px; padding: 15px 18px; margin: 16px 0; font-size: 14.5px; line-height: 1.62;
+    border: 1px solid var(--line);
+  }
+  .plain { background: color-mix(in srgb, var(--steel) 9%, var(--card)); border-color: color-mix(in srgb, var(--steel) 30%, var(--line)); }
+  .plain .lbl { color: var(--steel); }
+  .note  { background: color-mix(in srgb, var(--brass) 8%, var(--card)); border-color: color-mix(in srgb, var(--brass) 26%, var(--line)); }
+  .note .lbl { color: var(--brass); }
+  .warnbox { background: color-mix(in srgb, var(--red) 7%, var(--card)); border-color: color-mix(in srgb, var(--red) 28%, var(--line)); }
+  .warnbox .lbl { color: var(--red); }
+  .lbl { display: block; font-size: 11.5px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; margin-bottom: 5px; }
+  .note p:last-child, .warnbox p:last-child, .plain p:last-child { margin-bottom: 0; }
+
+  /* ---- tables ---- */
+  .tbl-wrap { overflow-x: auto; margin: 16px 0 20px; border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); }
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; background: var(--card); }
+  th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--line-2); vertical-align: top; }
+  thead th { background: var(--paper-2); font-size: 11.5px; letter-spacing: .05em; text-transform: uppercase; color: var(--ink-2); font-weight: 800; white-space: nowrap; border-bottom: 1.5px solid var(--line); }
+  tbody tr:last-child td { border-bottom: 0; }
+  tbody tr:hover { background: color-mix(in srgb, var(--brass) 5%, transparent); }
+  td.mono, th.mono, .m { font-family: var(--font-mono); font-size: 12.5px; }
+  td.mono { color: var(--code-ink); }
+  .tbl-wrap.tight table { font-size: 12.8px; }
+
+  /* ---- pills ---- */
+  .pill { display: inline-block; font-size: 11px; font-weight: 800; letter-spacing: .02em; padding: 2px 9px; border-radius: 999px; white-space: nowrap; line-height: 1.5; }
+  .pill.ok   { background: color-mix(in srgb, var(--ok) 16%, transparent);   color: var(--ok);   border:1px solid color-mix(in srgb, var(--ok) 40%, transparent); }
+  .pill.warn { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); border:1px solid color-mix(in srgb, var(--warn) 42%, transparent); }
+  .pill.idle { background: color-mix(in srgb, var(--idle) 16%, transparent); color: var(--idle); border:1px solid color-mix(in srgb, var(--idle) 40%, transparent); }
+  .pill.red  { background: color-mix(in srgb, var(--red) 14%, transparent);  color: var(--red);  border:1px solid color-mix(in srgb, var(--red) 40%, transparent); }
+
+  /* ---- code block ---- */
+  pre {
+    background: var(--code-bg); border: 1px solid var(--line); border-radius: 12px;
+    padding: 16px 18px; overflow-x: auto; font-family: var(--font-mono); font-size: 12.5px;
+    line-height: 1.6; color: var(--ink); margin: 16px 0 20px;
+  }
+  pre .c { color: var(--ink-3); }
+  pre b { color: var(--red); font-weight: 700; }
+
+  /* ---- TOC ---- */
+  nav.toc { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 22px 26px; margin: 32px 0 4px; box-shadow: var(--shadow); }
+  nav.toc h2 { font-size: 15px; letter-spacing: .04em; text-transform: uppercase; color: var(--ink-3); font-family: var(--font-body); font-weight: 800; margin-bottom: 14px; }
+  nav.toc ol { list-style: none; padding: 0; margin: 0; columns: 2; column-gap: 34px; max-width: none; }
+  nav.toc li { margin: 0 0 8px; break-inside: avoid; font-size: 14px; }
+  nav.toc a { border: 0; color: var(--ink-2); display: flex; gap: 10px; }
+  nav.toc a:hover { color: var(--red); }
+  nav.toc .n { font-family: var(--font-mono); font-size: 12px; color: var(--brass); font-weight: 700; flex: none; width: 20px; }
+
+  /* ---- feature cards grid ---- */
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; margin: 18px 0 22px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; box-shadow: var(--shadow); }
+  .card .k { font-family: var(--font-mono); font-size: 11.5px; color: var(--brass); font-weight: 700; margin-bottom: 6px; letter-spacing: .02em; }
+  .card .v { font-size: 15px; font-weight: 700; margin-bottom: 4px; }
+  .card .d { font-size: 13px; color: var(--ink-2); line-height: 1.55; }
+
+  /* ---- diagram (ascii-ish flow) ---- */
+  .diagram { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 20px; margin: 18px 0 22px; overflow-x: auto; box-shadow: var(--shadow); }
+  .diagram pre { background: transparent; border: 0; padding: 0; margin: 0; font-size: 12px; color: var(--ink-2); white-space: pre; }
+
+  .kbd { font-family: var(--font-mono); font-size: 12px; background: var(--paper-2); border:1px solid var(--line); border-bottom-width:2px; border-radius: 5px; padding: 1px 6px; }
+  .footer { border-top: 1px solid var(--line); margin-top: 40px; padding: 28px 0 60px; color: var(--ink-3); font-size: 13px; }
+  .step-badge { font-family: var(--font-mono); font-weight: 800; color: #fff; background: var(--red); border-radius: 6px; padding: 1px 8px; font-size: 12px; margin-right: 4px; }
+
+  @media (max-width: 620px) {
+    nav.toc ol { columns: 1; }
+    .cover { padding: 48px 0 40px; }
+    body { font-size: 15px; }
+  }
+
+  /* ---- print / PDF ---- */
+  @media print {
+    :root { --shadow: none; }
+    body { background: #fff; font-size: 10.5pt; }
+    .wrap { max-width: 100%; padding: 0 8mm; }
+    .pole { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    section { padding-top: 20px; break-inside: auto; }
+    h2, h3, h4 { break-after: avoid; }
+    .tbl-wrap, .diagram, .note, .warnbox, .plain, .card, pre, tr { break-inside: avoid; }
+    thead { display: table-header-group; }
+    a { color: var(--ink); }
+    nav.toc { break-after: page; }
+    .cover { break-after: page; }
+    .page-break { break-before: page; }
+    .no-print { display: none; }
+  }
+</style>
+
+<hr class="pole" />
+
+<!-- ============ COVER ============ -->
+<header class="cover">
+  <div class="wrap">
+    <svg class="logo" viewBox="0 0 480 160" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="BYBAEK">
+      <rect x="0" y="0" width="480" height="160" fill="#1A1A1A"/>
+      <circle cx="80" cy="80" r="60" fill="#8B0000"/>
+      <text x="80" y="100" text-anchor="middle" font-family="Georgia, serif" font-size="72" font-weight="700" fill="#FFFFFF" letter-spacing="-1">B</text>
+      <g transform="translate(160,0)">
+        <text x="4" y="62" font-family="Georgia, serif" font-size="16" fill="rgba(255,255,255,0.45)" letter-spacing="6">BY</text>
+        <text x="0" y="108" font-family="Helvetica Neue, Arial, sans-serif" font-size="60" font-weight="300" fill="#FFFFFF" letter-spacing="12">BAEK</text>
+      </g>
+    </svg>
+    <h1>시스템 정의서 &amp; 배포 명세서</h1>
+    <p class="sub">바버샵 AI 마케팅 자동화 SaaS · 백엔드 기술 문서</p>
+    <p class="sub-2">아키텍처 · AI 에이전트 파이프라인 · 데이터 · Azure 리소스 · 배포 · 운영 · 유지보수</p>
+    <dl class="meta-grid">
+      <div><dt>문서 버전</dt><dd>v1.0</dd></div>
+      <div><dt>기준일</dt><dd>2026-07-14</dd></div>
+      <div><dt>대상 코드</dt><dd class="mono">bybaek-backend</dd></div>
+      <div><dt>브랜치</dt><dd class="mono">feature/onedrive-token-fix</dd></div>
+      <div><dt>런타임</dt><dd class="mono">Python 3.11.9</dd></div>
+      <div><dt>상태</dt><dd>Marketplace 심사 대기</dd></div>
+    </dl>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <!-- ============ TOC ============ -->
+  <nav class="toc" aria-label="목차">
+    <h2>목차 · Table of Contents</h2>
+    <ol>
+      <li><a href="#s1"><span class="n">01</span><span>서비스 개요 &amp; 사용자 여정</span></a></li>
+      <li><a href="#s2"><span class="n">02</span><span>시스템 아키텍처 전체도</span></a></li>
+      <li><a href="#s3"><span class="n">03</span><span>기술 스택 상세</span></a></li>
+      <li><a href="#s4"><span class="n">04</span><span>백엔드 애플리케이션 구조</span></a></li>
+      <li><a href="#s5"><span class="n">05</span><span>API 엔드포인트 레퍼런스</span></a></li>
+      <li><a href="#s6"><span class="n">06</span><span>AI 에이전트 파이프라인 (STEP 0–6)</span></a></li>
+      <li><a href="#s7"><span class="n">07</span><span>데이터 아키텍처 (Cosmos·벡터·Blob·Queue)</span></a></li>
+      <li><a href="#s8"><span class="n">08</span><span>외부 서비스 연동</span></a></li>
+      <li><a href="#s9"><span class="n">09</span><span>인증 &amp; 보안</span></a></li>
+      <li><a href="#s10"><span class="n">10</span><span>Azure 리소스 인벤토리</span></a></li>
+      <li><a href="#s11"><span class="n">11</span><span>배포 &amp; CI/CD</span></a></li>
+      <li><a href="#s12"><span class="n">12</span><span>운영 · 스케줄러 · 로깅</span></a></li>
+      <li><a href="#s13"><span class="n">13</span><span>알려진 이슈 &amp; 유지보수 노트</span></a></li>
+      <li><a href="#s14"><span class="n">14</span><span>마켓플레이스 제출 체크리스트</span></a></li>
+      <li><a href="#s15"><span class="n">15</span><span>용어집 (쉬운 설명)</span></a></li>
+    </ol>
+  </nav>
+
+  <div class="note">
+    <span class="lbl">이 문서를 읽는 법</span>
+    <p>본문 곳곳의 <span class="plain" style="display:inline;padding:1px 8px;margin:0;">💡 쉬운 설명</span> 박스는 어려운 기술 용어를 일상어로 풀어 놓은 것입니다. 표의 상태 배지는 <span class="pill ok">구현완료</span> <span class="pill warn">진행중</span> <span class="pill idle">비활성/미연동</span> <span class="pill red">주의</span> 로 표기합니다. 모든 내용은 실제 소스코드( <code>bybaek-backend</code> )를 직접 읽고 작성했으며, 파일·함수·라인은 <code>file.py:line</code> 형식으로 표기합니다.</p>
+  </div>
+
+  <div class="warnbox">
+    <span class="lbl">보안 주의</span>
+    <p>이 문서에는 <strong>API 키·시크릿·토큰 값은 일절 포함되어 있지 않습니다.</strong> 리소스 <em>이름</em>과 <em>환경변수 이름</em>만 기재합니다. 실제 시크릿은 <code>.env</code>(로컬, git 미추적) 및 Azure App Service 구성/GitHub Secrets에만 보관하세요. 이 HTML/PDF를 외부에 공유해도 자격증명은 노출되지 않습니다.</p>
+  </div>
+
+  <!-- ============ 01 개요 ============ -->
+  <section id="s1">
+    <div class="sec-head"><span class="sec-num">01</span><h2>서비스 개요 &amp; 사용자 여정</h2></div>
+    <p class="lead">소상공인 바버샵 사장님의 인스타그램 마케팅을 AI로 완전 자동화하는 B2B SaaS입니다. 사장님은 <strong>설정 1회 + 승인 1회</strong>만 하면 됩니다.</p>
+
+    <p>사장님이 <strong>OneDrive에 시술 사진을 올려두면</strong>, 백엔드가 이를 자동으로 수집하고, 실시간 헤어 트렌드를 반영해 <strong>인스타그램 게시물(캡션·해시태그·CTA)을 자동 생성</strong>하고, 설정에 따라 <strong>자동 업로드하거나 사장님 검토를 거쳐 발행</strong>합니다.</p>
+
+    <div class="plain">
+      <span class="lbl">💡 쉬운 설명 — 이 백엔드가 하는 일 한 줄 요약</span>
+      <p>"사장님의 사진 폴더(OneDrive)를 지켜보다가, 요즘 유행을 검색해서 반영한 인스타 글을 대신 써주고, 정해진 시간에 올려주는 자동 SNS 담당 직원"입니다. 그 '직원'의 두뇌가 바로 AI 에이전트 파이프라인(6장)입니다.</p>
+    </div>
+
+    <h3>핵심 사용자 여정 (End-to-End)</h3>
+    <div class="diagram"><pre>①  로그인            MS 계정(Entra ID)으로 원클릭 로그인 (Easy Auth)
+     │                offline_access 로 refresh_token 확보 → 이후 백그라운드 동기화에 사용
+     ▼
+②  온보딩(설정 1회)   브랜드 톤·전문 스타일·금칙어·업로드 시간/요일·언어(ko/en)·검토여부 저장
+     │                인스타 계정 연동 시 → 과거 게시물을 Claude로 분석해 "말투 프로필" 자동 생성
+     ▼
+③  사진 업로드        사장님이 OneDrive 폴더에 시술 사진을 올림 (HEIC/JPG/PNG)
+     │                백엔드가 4시간마다 자동 동기화 (Delta API) → 큐 → 워커가 Blob 저장 + 품질필터
+     ▼
+④  자동 생성          정해진 시각(매 정각 스케줄러)에 AI 파이프라인 실행 (STEP 0~6)
+     │                트렌드 검색 → 사진 선택 → RAG 말투 검색 → 캡션 생성 → 품질 자가평가
+     ▼
+⑤  분기(승인 1회)     설정에 따라  ┌ 자동 업로드 (검토 OFF)
+     │                            └ 사장님 검토 (검토 ON) → OK/수정/취소 → 발행
+     ▼
+⑥  발행 & 학습        Instagram Graph API 로 업로드 → 성공 캡션을 벡터DB에 재축적(RAG 플라이휠)
+                      → 쓸수록 그 샵의 말투가 정교해지는 선순환</pre></div>
+
+    <div class="cards">
+      <div class="card"><div class="k">FRONTEND</div><div class="v">bybaekofficial.com</div><div class="d">Next.js · React · TypeScript</div></div>
+      <div class="card"><div class="k">BACKEND (본 문서)</div><div class="v">api2.bybaekofficial.com</div><div class="d">FastAPI · Azure App Service</div></div>
+      <div class="card"><div class="k">타깃 고객</div><div class="v">소상공인 바버샵</div><div class="d">B2B SaaS · Day-1 글로벌(ko/en)</div></div>
+    </div>
+  </section>
+
+  <!-- ============ 02 아키텍처 ============ -->
+  <section id="s2">
+    <div class="sec-head"><span class="sec-num">02</span><h2>시스템 아키텍처 전체도</h2></div>
+    <p class="lead">프론트엔드 → FastAPI 백엔드 → (AI 오케스트레이터 · Azure 데이터/AI 서비스 · 외부 API)의 3계층 구조입니다.</p>
+
+    <div class="diagram"><pre>┌───────────────────────────────────────────────────────────────────────────┐
+│  FRONTEND  ·  Next.js / React / TypeScript  ·  www.bybaekofficial.com        │
+└───────────────────────────────┬───────────────────────────────────────────┘
+                                │  HTTPS · JSON · SSE(스트리밍)  ·  CORS 허용목록
+┌───────────────────────────────▼───────────────────────────────────────────┐
+│  BACKEND  ·  FastAPI (main.py)  ·  api2.bybaekofficial.com (App Service)     │
+│  ────────────────────────────────────────────────────────────────────────  │
+│  라우터 8종:  auth · onboarding · agent · onedrive · photos · schedule ·     │
+│               instagram · custom_chat            (routers/)                  │
+│  백그라운드:  APScheduler(매 정각·4시간) + 사진 큐 워커(daemon thread)         │
+└───────┬───────────────────────────────────────────────┬───────────────────┘
+        │                                               │
+┌───────▼──────────────────────┐          ┌────────────▼──────────────────────┐
+│  AI 오케스트레이터 (LangGraph) │          │  AZURE 데이터 / AI 서비스           │
+│  orchestrator_v2.py           │          │  • Cosmos DB (문서 + 벡터검색)      │
+│  ─ STEP 0~6 StateGraph ─      │◄────────►│    BybaekDB / 7 컨테이너            │
+│  web_search · photo_select    │          │  • Blob Storage (사진 원본)         │
+│  rag_tool · post_writer       │          │  • Storage Queue (사진 파이프라인)   │
+│  performance_feedback  외 10종 │          │  • Azure OpenAI (GPT · Vision ·     │
+│                               │          │    Embedding)                      │
+│  LLM: Azure OpenAI + Claude   │          │  • Azure AI Foundry (Claude)       │
+└───────┬───────────────────────┘          └────────────────────────────────────┘
+        │
+┌───────▼───────────────────────────────────────────────────────────────────┐
+│  외부 API   ·  MS Graph(OneDrive)  ·  Instagram Graph  ·  Tavily(트렌드)     │
+│             ·  Gmail API(알림)     ·  Microsoft Entra ID(로그인)             │
+└───────────────────────────────────────────────────────────────────────────┘</pre></div>
+
+    <div class="plain">
+      <span class="lbl">💡 쉬운 설명 — "3계층"이란?</span>
+      <p><strong>프론트엔드</strong>는 사장님이 보는 화면(웹사이트), <strong>백엔드</strong>는 화면 뒤에서 실제 일을 처리하는 서버(이 문서의 대상), <strong>데이터/AI/외부 API</strong>는 백엔드가 필요할 때 불러 쓰는 창고와 도구들입니다. 백엔드가 가운데서 모든 것을 지휘합니다.</p>
+    </div>
+
+    <h3>요청 흐름 두 가지</h3>
+    <ul>
+      <li><strong>동기(실시간) 흐름</strong> — 사장님이 화면에서 버튼을 누름 → 라우터가 즉시 처리해 응답. 예: 로그인, 온보딩 저장, 사진 조회, <code>custom_chat</code> 실시간 캡션 스트리밍.</li>
+      <li><strong>비동기(백그라운드) 흐름</strong> — 사람이 없어도 서버가 스스로 실행. 예: 매 정각 스케줄러의 자동 게시물 생성, 4시간마다 OneDrive 동기화, 큐 워커의 사진 다운로드·필터링.</li>
+    </ul>
+  </section>
+
+  <!-- ============ 03 기술 스택 ============ -->
+  <section id="s3">
+    <div class="sec-head"><span class="sec-num">03</span><h2>기술 스택 상세</h2></div>
+    <p class="lead">Python 3.11 + FastAPI를 중심으로, AI 오케스트레이션은 LangGraph·Semantic Kernel, LLM은 Azure OpenAI와 Claude(Azure AI Foundry)를 함께 사용합니다.</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>분류</th><th>기술 / 패키지</th><th>버전(requirements)</th><th>용도</th></tr></thead>
+        <tbody>
+          <tr><td>웹 프레임워크</td><td class="mono">fastapi</td><td class="mono">0.115.0</td><td>비동기 REST API 서버</td></tr>
+          <tr><td>ASGI 서버</td><td class="mono">uvicorn[standard] · gunicorn</td><td class="mono">0.30.0</td><td>프로덕션 실행(워커)</td></tr>
+          <tr><td>AI 그래프</td><td class="mono">langgraph</td><td class="mono">최신</td><td>STEP 0~6 상태그래프 오케스트레이션</td></tr>
+          <tr><td>AI 커널</td><td class="mono">semantic-kernel[azure]</td><td class="mono">≥1.30.0</td><td>Azure OpenAI 호출·평가(judge)</td></tr>
+          <tr><td>LLM SDK</td><td class="mono">openai</td><td class="mono">≥1.98.0</td><td>GPT 채팅 · Vision · Embedding</td></tr>
+          <tr><td>LLM SDK</td><td class="mono">anthropic</td><td class="mono">≥0.49.0</td><td>Claude 생성·분석·스트리밍</td></tr>
+          <tr><td>데이터베이스</td><td class="mono">azure-cosmos</td><td class="mono">4.7.0</td><td>NoSQL 문서 + 벡터 검색</td></tr>
+          <tr><td>스토리지</td><td class="mono">azure-storage-blob</td><td class="mono">12.21.0</td><td>사진 원본 저장 · SAS URL</td></tr>
+          <tr><td>큐</td><td class="mono">azure-storage-queue</td><td class="mono">≥12.0.0</td><td>사진 동기화 비동기 처리</td></tr>
+          <tr><td>인증(Azure)</td><td class="mono">azure-identity</td><td class="mono">≥1.15.0</td><td>Managed Identity / AAD 토큰</td></tr>
+          <tr><td>인증(Entra)</td><td class="mono">msal</td><td class="mono">≥1.30.0</td><td>OneDrive refresh_token 갱신</td></tr>
+          <tr><td>트렌드 검색</td><td class="mono">tavily-python</td><td class="mono">0.3.3</td><td>실시간 웹 검색</td></tr>
+          <tr><td>이미지 처리</td><td class="mono">pillow · pillow-heif · opencv-python-headless · numpy</td><td class="mono">10.4.0 …</td><td>HEIC→JPG 변환 · 블러/밝기 분석</td></tr>
+          <tr><td>스케줄러</td><td class="mono">apscheduler</td><td class="mono">최신</td><td>매 정각/4시간 크론 잡</td></tr>
+          <tr><td>데이터 검증</td><td class="mono">pydantic[email]</td><td class="mono">≥2.10,&lt;3</td><td>요청/응답 스키마</td></tr>
+          <tr><td>HTTP 클라이언트</td><td class="mono">httpx</td><td class="mono">0.27.0</td><td>Graph·Instagram·Blob 호출</td></tr>
+          <tr><td>토큰/JWT</td><td class="mono">python-jose</td><td class="mono">3.3.0</td><td>토큰 처리</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="note">
+      <span class="lbl">참고 — 사용되지 않는 잔재</span>
+      <p><code>azure-search-documents</code>는 과거 Azure AI Search 기반 RAG의 잔재로 <code>requirements.txt</code>에 남아 있으나, 현재 벡터 검색은 <strong>Cosmos DB로 통합</strong>되어 실사용 코드 경로에서는 호출되지 않습니다(13장 참조).</p>
+    </div>
+  </section>
+
+  <!-- ============ 04 백엔드 구조 ============ -->
+  <section id="s4">
+    <div class="sec-head"><span class="sec-num">04</span><h2>백엔드 애플리케이션 구조</h2></div>
+    <p class="lead"><code>main.py</code>가 FastAPI 앱을 만들고, 라우터 8종을 등록하며, 시작 시(<code>lifespan</code>) 스케줄러와 큐 워커를 켭니다.</p>
+
+    <h3>디렉터리 구조</h3>
+    <pre><span class="c"># 핵심만 발췌</span>
+bybaek-backend/
+├── <b>main.py</b>                  <span class="c"># FastAPI 엔트리포인트 · 라우터 등록 · 스케줄러/워커 기동</span>
+├── <b>orchestrator_v2.py</b>       <span class="c"># AI 파이프라인 (LangGraph StateGraph, STEP 0~6)</span>
+├── agents/                  <span class="c"># AI 에이전트 10종 + 레거시 오케스트레이터</span>
+│   ├── web_search.py · competitor_analysis.py
+│   ├── photo_filter.py · photo_select.py · photo_feedback.py
+│   ├── post_writer.py · rag_tool.py · performance_feedback.py
+│   ├── insta_analyzer.py · orchestrator.py <span class="c">(레거시 v1)</span>
+├── routers/                 <span class="c"># API 엔드포인트 8종</span>
+│   ├── auth.py · onboarding.py · agent.py · onedrive.py
+│   ├── photos.py · schedule.py · instagram.py · custom_chat.py
+├── services/                <span class="c"># 데이터/외부 서비스 계층</span>
+│   ├── cosmos_client.py · cosmos_db.py · vector_db.py
+│   ├── blob_storage.py · email_service.py
+├── workers/
+│   └── photo_queue_worker.py  <span class="c"># 사진 큐 소비 워커 (daemon thread)</span>
+├── utils/
+│   ├── claude_auth.py       <span class="c"># Claude(Foundry) AAD/Managed Identity 인증</span>
+│   └── logging.py
+├── prompts/                 <span class="c"># 프롬프트 템플릿 (post_writer / custom_chat / examples)</span>
+├── auth/appService_auth_check.py   <span class="c"># Easy Auth 세션/헤더 확인 헬퍼</span>
+├── seed_embeddings.py       <span class="c"># Cold Start용 seed 캡션 벡터 주입</span>
+├── requirements.txt · .env(.example) · .python-version(3.11.9)
+└── .github/workflows/main_bybaek-b.yml  <span class="c"># GitHub Actions 배포</span></pre>
+
+    <h3>애플리케이션 부팅 순서 <span class="tag">main.py</span></h3>
+    <ol>
+      <li><code>load_dotenv()</code> — 환경변수 로드.</li>
+      <li><code>FastAPI(title="BYBAEK API", version="1.0.0", lifespan=lifespan)</code> 생성.</li>
+      <li><strong>CORS 미들웨어</strong> — <code>localhost:3000</code> + 환경변수 <code>FRONTEND_URL</code>(콤마 구분 다중) 허용, credentials 허용.</li>
+      <li>라우터 8종 등록(각 <code>/api/*</code> prefix).</li>
+      <li><code>lifespan</code> 진입 시: APScheduler에 잡 2개 등록 후 <code>scheduler.start()</code>, 이어서 <code>start_worker()</code>로 큐 워커 daemon thread 기동.</li>
+      <li><code>GET /</code> 헬스체크: <code>{"status":"ok","service":"BYBAEK API"}</code> (App Service 배포 확인용).</li>
+    </ol>
+
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>백그라운드 잡</th><th>주기 (KST)</th><th>함수</th><th>동작</th></tr></thead>
+        <tbody>
+          <tr><td>자동 게시물 생성</td><td class="mono">매 정각 (minute=0)</td><td class="mono">_check_and_run_schedules</td><td>모든 샵을 순회하며 업로드 시각·요일·<code>insta_auto_upload_yn=Y</code> 매칭 시 <code>run_pipeline(trigger="auto")</code></td></tr>
+          <tr><td>OneDrive 동기화</td><td class="mono">4시간마다 (hour=*/4)</td><td class="mono">_sync_all_shops_onedrive</td><td>모든 샵의 <code>sync_photos_internal()</code> 호출 (refresh_token 기반)</td></tr>
+          <tr><td>사진 큐 워커</td><td class="mono">상시 (30초 폴링)</td><td class="mono">start_worker → polling_loop</td><td>Storage Queue 소비 → 다운로드 → Blob 저장 → 필터 트리거</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="plain">
+      <span class="lbl">💡 쉬운 설명 — lifespan / 스케줄러 / 워커</span>
+      <p><strong>lifespan</strong>은 "서버가 켜질 때 한 번, 꺼질 때 한 번 실행되는 준비/정리 코드"입니다. 여기서 <strong>스케줄러</strong>(정해진 시간에 알람처럼 실행)와 <strong>워커</strong>(할 일 목록을 계속 지켜보며 처리하는 백그라운드 일꾼)를 켭니다. 덕분에 사장님이 접속하지 않아도 서버가 알아서 사진을 모으고 글을 올립니다.</p>
+    </div>
+
+    <div class="note">
+      <span class="lbl">스케줄 판정 로직 (main.py)</span>
+      <p>업로드 시각은 DB의 <code>insta_upload_time</code>(예: "07:00 PM")을 24시간제 정각으로 변환해 현재 시각과 비교합니다. 요일은 <code>insta_upload_days</code>(사용자 지정)를 우선 적용하고, 비어 있으면 <code>insta_upload_time_slot</code>("매일"/"주 3회"→월·수·금/"주 1회"→월) 기본값으로 폴백합니다.</p>
+    </div>
+  </section>
+
+  <!-- ============ 05 API ============ -->
+  <section id="s5">
+    <div class="sec-head"><span class="sec-num">05</span><h2>API 엔드포인트 레퍼런스</h2></div>
+    <p class="lead">전 라우터의 엔드포인트 전체 목록입니다. 경로는 <code>main.py</code>의 prefix를 포함한 최종 경로입니다.</p>
+
+    <h3>Auth <span class="tag">/api/auth</span></h3>
+    <div class="tbl-wrap tight"><table>
+      <thead><tr><th>메서드</th><th>경로</th><th>설명</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">GET</td><td class="mono">/ms/callback</td><td>MS 로그인 후 프론트 <code>/auth/callback</code>로 리다이렉트</td></tr>
+        <tr><td class="mono">GET</td><td class="mono">/instagram?code=…</td><td>인스타 OAuth: 단기토큰 교환 → 장기토큰 교환 → 저장 → 과거글 분석(BackgroundTask)</td></tr>
+        <tr><td class="mono">GET</td><td class="mono">/status/{shop_id}</td><td><code>{is_onedrive_connected, is_insta_connected}</code></td></tr>
+        <tr><td class="mono">GET</td><td class="mono">/me</td><td>Easy Auth 헤더로 신원 확인 · <code>refresh_token</code> 저장 · <code>{shop_id, is_new}</code></td></tr>
+      </tbody>
+    </table></div>
+
+    <h3>Onboarding <span class="tag">/api/onboarding</span></h3>
+    <div class="tbl-wrap tight"><table>
+      <thead><tr><th>메서드</th><th>경로</th><th>설명</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">POST</td><td class="mono">/reference</td><td>레퍼런스(예시) 사진 앨범 저장 → 사진필터 Stage2 few-shot에 사용</td></tr>
+        <tr><td class="mono">POST</td><td class="mono">/{shop_id}</td><td>온보딩(브랜드톤·스타일·금칙어·스케줄·언어 등) 저장</td></tr>
+        <tr><td class="mono">GET</td><td class="mono">/{shop_id}</td><td>온보딩 조회</td></tr>
+        <tr><td class="mono">POST</td><td class="mono">/{shop_id}/reanalyze</td><td>인스타 말투 프로필 재분석 수동 트리거</td></tr>
+      </tbody>
+    </table></div>
+
+    <h3>Agent <span class="tag">/api/agent</span></h3>
+    <div class="tbl-wrap tight"><table>
+      <thead><tr><th>메서드</th><th>경로</th><th>설명</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">POST</td><td class="mono">/run</td><td>파이프라인 실행 <code>{shop_id, trigger, photo_ids?, message?}</code></td></tr>
+        <tr><td class="mono">POST</td><td class="mono">/review</td><td>검토 처리 <code>action = ok|edit|cancel</code> → 업로드/취소</td></tr>
+        <tr><td class="mono">POST</td><td class="mono">/save</td><td>초안 수동 저장</td></tr>
+        <tr><td class="mono">GET</td><td class="mono">/posts/{shop_id}</td><td>게시물 목록</td></tr>
+        <tr><td class="mono">GET</td><td class="mono">/post/detail/{post_id}</td><td>게시물 상세</td></tr>
+        <tr><td class="mono">GET</td><td class="mono">/metrics/{shop_id}</td><td>caption_score 평균·retry율·모델분포·점수분포 집계</td></tr>
+      </tbody>
+    </table></div>
+
+    <h3>OneDrive <span class="tag">/api/onedrive</span></h3>
+    <div class="tbl-wrap tight"><table>
+      <thead><tr><th>메서드</th><th>경로</th><th>설명</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">POST</td><td class="mono">/sync-photos</td><td>Graph <strong>Delta API</strong>로 변경분만 수집 → 큐로 배치 전송(10장 단위) · <code>x-ms-token-aad-access-token</code> 헤더 필요</td></tr>
+      </tbody>
+    </table></div>
+
+    <h3>Photos <span class="tag">/api/photos</span></h3>
+    <div class="tbl-wrap tight"><table>
+      <thead><tr><th>메서드</th><th>경로</th><th>설명</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">GET</td><td class="mono">/all/{shop_id}</td><td>사용가능 사진 목록(SAS 서명 URL)</td></tr>
+        <tr><td class="mono">GET</td><td class="mono">/albums/{shop_id}</td><td>앨범 목록(썸네일 SAS)</td></tr>
+        <tr><td class="mono">GET</td><td class="mono">/albums/{shop_id}/{album_id}</td><td>앨범 내 사진</td></tr>
+        <tr><td class="mono">POST</td><td class="mono">/albums</td><td>앨범 생성</td></tr>
+        <tr><td class="mono">POST</td><td class="mono">/filter</td><td>AI 사진 필터 실행(백그라운드, 10장 청크)</td></tr>
+        <tr><td class="mono">GET</td><td class="mono">/status/{shop_id}</td><td>필터 진행 상태(passed/failed/pending)</td></tr>
+        <tr><td class="mono">GET·HEAD</td><td class="mono">/proxy/{shop_id}/{photo_id}/image.jpg</td><td>인스타용 이미지 프록시(HEAD는 검증 통과용 가짜 헤더)</td></tr>
+        <tr><td class="mono">DELETE</td><td class="mono">/albums/{shop_id}/{album_id} · /{shop_id}/{photo_id}</td><td>앨범/사진 삭제</td></tr>
+        <tr><td class="mono">POST</td><td class="mono">/filter/test/{shop_id}</td><td>동기 디버그: 최대 3장 필터 후 원시 결과 반환</td></tr>
+      </tbody>
+    </table></div>
+
+    <h3>Schedule · Instagram · CustomChat</h3>
+    <div class="tbl-wrap tight"><table>
+      <thead><tr><th>메서드</th><th>경로</th><th>설명</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">GET</td><td class="mono">/api/schedule/{shop_id}</td><td>업로드 시각·다음 실행·타임존</td></tr>
+        <tr><td class="mono">POST</td><td class="mono">/api/schedule/{shop_id}/update</td><td>업로드 시각 변경</td></tr>
+        <tr><td class="mono">POST</td><td class="mono">/api/instagram/upload</td><td>인스타 발행(단일/캐러셀) · 종횡비 정규화 후 Graph 발행 · <code>{media_id}</code></td></tr>
+        <tr><td class="mono">POST</td><td class="mono">/api/custom_chat/manual_chat</td><td>Claude <strong>실시간 스트리밍</strong> 캡션 생성 (SSE, <code>text/event-stream</code>)</td></tr>
+        <tr><td class="mono">GET</td><td class="mono">/</td><td>헬스체크</td></tr>
+      </tbody>
+    </table></div>
+
+    <div class="warnbox">
+      <span class="lbl">인증 모델 주의</span>
+      <p>라우트에 FastAPI <code>Depends()</code> 가드가 없습니다. 신원은 <strong>App Service Easy Auth가 주입하는 헤더</strong>(<code>X-MS-CLIENT-PRINCIPAL-ID/NAME</code>, <code>x-ms-token-aad-access-token/-refresh-token</code>)로 흐르며, <code>shop_id</code> = MS principal ID 입니다. <code>auth.py</code>에는 개발용 하드코딩 폴백(<code>test_barber_jiyeon</code>)이 있어 <strong>운영 배포 전 제거 검토</strong>가 필요합니다(13장).</p>
+    </div>
+  </section>
+
+  <!-- ============ 06 파이프라인 ============ -->
+  <section id="s6">
+    <div class="sec-head"><span class="sec-num">06</span><h2>AI 에이전트 파이프라인 (STEP 0–6)</h2></div>
+    <p class="lead">핵심 두뇌입니다. <code>orchestrator_v2.py</code>의 <strong>LangGraph StateGraph</strong>가 상태(<code>PostState</code>)를 노드에서 노드로 넘기며, 두 개의 품질 게이트(트렌드·캡션)와 재시도·모델 승격·사람 검토 분기를 수행합니다.</p>
+
+    <div class="plain">
+      <span class="lbl">💡 쉬운 설명 — StateGraph / 노드 / 게이트</span>
+      <p>공장의 컨베이어벨트를 떠올리세요. <strong>노드</strong>는 각 작업 공정, <strong>상태(PostState)</strong>는 벨트 위를 흐르는 작업물 상자입니다. <strong>게이트</strong>는 "품질검사대"로, 기준(0.7점) 미달이면 다시 앞 공정으로 돌려보내(재시도) 다시 만들게 합니다. 사람(LangGraph)이 아니라 코드가 이 흐름을 자동으로 지휘합니다.</p>
+    </div>
+
+    <h3>전역 상수 &amp; 모델 티어</h3>
+    <div class="cards">
+      <div class="card"><div class="k">QUALITY_THRESHOLD</div><div class="v">0.7</div><div class="d">트렌드·캡션 품질 통과 기준점</div></div>
+      <div class="card"><div class="k">MAX_RETRY</div><div class="v">2</div><div class="d">각 게이트의 최대 재시도 횟수</div></div>
+      <div class="card"><div class="k">MIN_PHOTO_COUNT</div><div class="v">1</div><div class="d">최소 선택 사진 수(미달 시 기간 확장)</div></div>
+    </div>
+    <p><strong>모델 티어</strong>는 <code>_get_deployment_name(tier)</code>가 환경변수로 해석합니다. <code>mini</code>→<code>AZURE_OPENAI_DEPLOYMENT_MINI</code>, <code>full</code>→<code>AZURE_OPENAI_DEPLOYMENT_FULL</code>. 비용을 아끼기 위해 기본 <code>mini</code>로 시작하고, 필요 시 <code>full</code>로 승격합니다.</p>
+
+    <h3>STEP 0 → 6 상세 흐름</h3>
+    <div class="diagram"><pre>          ┌─────────────┐
+   START →│ 0 classify  │  trigger=manual 또는 사진≥5장 → tier="full", 아니면 "mini"
+          └──────┬──────┘
+                 ▼
+          ┌─────────────┐
+          │ 1 fetch_data│  asyncio.gather ▶ 웹서치 · 브랜드설정 · 사진후보(50) · 최근글(3) 동시수집
+          └──────┬──────┘
+                 ▼
+          ┌──────────────────┐
+          │ 1.5 fetch_perf.  │  최근 초안 20개 점수 분석(≥3개 필요) → 성공/실패 패턴 추출
+          └──────┬───────────┘
+                 ▼
+          ┌───────────────┐    trend_score < 0.7 & retries < 2
+          │ 2 eval_trend  │────────────────────────────┐
+          └──────┬────────┘                            ▼
+                 │ ≥0.7 or 소진             ┌────────────────────┐
+                 ▼                          │ retry_trend         │ 웹서치 재실행
+          ┌───────────────┐  ◄─────────────│ (force_refresh)     │ (루프백)
+          │ 3 select_photo│                 └────────────────────┘
+          └──────┬────────┘  원장님 조합패턴: 페이드2+스타일1+분위기1, 14일 재사용 쿨다운
+                 ▼            (max≥5 & 부족 시 Claude로 확장 / 부족 시 30일 후보 확장)
+          ┌───────────────┐
+          │ 4 search_rag  │  벡터검색(말투/해시태그/CTA/구조) → GPT 압축 → 성과인사이트 주입
+          └──────┬────────┘
+                 ▼
+          ┌───────────────┐    caption_score < 0.7
+          │ 5 write_post  │──────────────────────────────┐
+          │  (Claude 생성) │                              ▼
+          └──────┬────────┘             retries<2 → increment_retry ─(피드백 주입 루프백)─┐
+                 │ ≥0.7                  retries소진 & mini → upgrade_model(mini→full)────┤
+                 ▼                       retries소진 & full → save_draft(최선안 수용)      │
+          ┌───────────────┐  ◄───────────────────────────────────────────────────────────┘
+          │ 6 save_draft  │  검토ON → 이메일알림 후 대기(status=draft)  ·  검토OFF → 자동발행+RAG인덱싱
+          └──────┬────────┘
+                 ▼  END</pre></div>
+
+    <h3>단계별 판정 로직</h3>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>STEP</th><th>노드 함수</th><th>핵심 판정 / 라우팅</th></tr></thead>
+      <tbody>
+        <tr><td><span class="step-badge">0</span></td><td class="mono">node_classify</td><td>manual 또는 photo_ids≥5 → full, 아니면 mini</td></tr>
+        <tr><td><span class="step-badge">1</span></td><td class="mono">node_fetch_data</td><td>4개 소스 병렬 수집(<code>_timed</code>로 계측)</td></tr>
+        <tr><td><span class="step-badge">1.5</span></td><td class="mono">node_fetch_performance</td><td>초안 ≥3개면 top⅓ vs bottom⅓ 패턴 비교</td></tr>
+        <tr><td><span class="step-badge">2</span></td><td class="mono">route_after_trend_eval</td><td><code>score&lt;0.7 &amp;&amp; retries&lt;2</code> → retry_trend, 아니면 select_photos</td></tr>
+        <tr><td><span class="step-badge">3</span></td><td class="mono">node_select_photos</td><td>manual+ids면 직접 조회, 아니면 director 패턴 선택</td></tr>
+        <tr><td><span class="step-badge">4</span></td><td class="mono">node_search_rag</td><td>타입별 벡터검색 + GPT 압축 + 성과 인사이트 병합</td></tr>
+        <tr><td><span class="step-badge">5</span></td><td class="mono">route_after_write</td><td>≥0.7→save / retries&lt;2→retry / mini소진→승격 / full소진→수용</td></tr>
+        <tr><td><span class="step-badge">6</span></td><td class="mono">node_save_draft</td><td><code>insta_review_bfr_upload_yn</code>로 자동발행 vs 검토 분기</td></tr>
+      </tbody>
+    </table></div>
+
+    <h3>에이전트 10종 카탈로그</h3>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>에이전트</th><th>단계</th><th>모델</th><th>역할</th><th>상태</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">web_search</td><td>STEP 1</td><td>GPT-mini + Tavily</td><td>날씨·헤어트렌드·프로모 수집(일일 캐시, 4단계 필터)</td><td><span class="pill ok">사용</span></td></tr>
+        <tr><td class="mono">competitor_analysis</td><td>STEP 1 내부</td><td>GPT-mini + Tavily</td><td>경쟁샵 스타일/해시태그·차별화 갭 인사이트</td><td><span class="pill ok">사용</span></td></tr>
+        <tr><td class="mono">photo_filter</td><td>파이프라인 前(워커)</td><td>OpenCV + GPT Vision</td><td>2단계 사진 QC(블러/밝기 → Vision 5항목 25점)</td><td><span class="pill ok">사용</span></td></tr>
+        <tr><td class="mono">photo_select</td><td>STEP 3</td><td>규칙 + Claude(확장)</td><td>페이드2+스타일1+분위기1, 14일 쿨다운</td><td><span class="pill ok">사용</span></td></tr>
+        <tr><td class="mono">rag_tool</td><td>STEP 4</td><td>Embedding + GPT-mini</td><td>벡터검색·압축 + 발행글 인덱싱(플라이휠)</td><td><span class="pill ok">사용</span></td></tr>
+        <tr><td class="mono">performance_feedback</td><td>STEP 1.5/4</td><td>순수 Python</td><td>과거 점수 분석 → 성과 인사이트 주입</td><td><span class="pill ok">사용</span></td></tr>
+        <tr><td class="mono">post_writer</td><td>STEP 5</td><td>Claude Sonnet 4.6</td><td>캡션·해시태그·CTA 생성 + 할루시네이션 검증</td><td><span class="pill ok">사용</span></td></tr>
+        <tr><td class="mono">insta_analyzer</td><td>온보딩(파이프라인 外)</td><td>Claude + Embedding</td><td>과거 인스타글 말투 프로필화 + RAG 콜드스타트 백필</td><td><span class="pill ok">사용</span></td></tr>
+        <tr><td class="mono">photo_feedback</td><td>(미배선)</td><td>GPT-mini</td><td>사진 탈락사유 학습(정의됨, 호출부 없음)</td><td><span class="pill idle">비활성</span></td></tr>
+        <tr><td class="mono">orchestrator (v1)</td><td>(레거시)</td><td>—</td><td>LangGraph 이전의 선형 버전(참조용)</td><td><span class="pill idle">레거시</span></td></tr>
+      </tbody>
+    </table></div>
+
+    <h3>품질 게이트 — LLM-as-Judge</h3>
+    <p>캡션 점수는 Azure GPT가 5개 항목에 가중 평균으로 채점합니다(<code>_evaluate_caption</code>):</p>
+    <div class="tbl-wrap tight"><table>
+      <thead><tr><th>항목</th><th>가중치</th><th>의미</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">reservation_inquiry</td><td><strong>40%</strong></td><td>예약/DM 문의로 이어질 가능성</td></tr>
+        <tr><td class="mono">fade_keyword</td><td>25%</td><td>페이드컷 등 핵심 키워드 포함</td></tr>
+        <tr><td class="mono">cta_strength</td><td>15%</td><td>행동유도(CTA) 강도</td></tr>
+        <tr><td class="mono">brand_tone</td><td>10%</td><td>브랜드 톤 일치</td></tr>
+        <tr><td class="mono">target_appeal</td><td>10%</td><td>20–40대 남성 공감도</td></tr>
+      </tbody>
+    </table></div>
+
+    <h3>할루시네이션 3중 제어</h3>
+    <ol>
+      <li><strong>프롬프트 가드레일</strong> — <code>prompts/post_writer/system.md</code> + <code>examples/bad_captions.md</code>(9개 안티예시)에 "경력 연수·예약 현황·과장·할인 금지" 명시.</li>
+      <li><strong>후처리 정규식</strong> — <code>_validate_and_clean</code>이 <code>\d+년 경력</code>, <code>\d+자리 남</code>, "마감 임박", "오늘만 할인" 패턴 감지(단, <code>shop_intro</code>에 실제로 있으면 예외).</li>
+      <li><strong>피드백 재시도</strong> — 감지 시 <code>needs_retry</code> 플래그로 해당 문제를 명시해 1회 재생성.</li>
+    </ol>
+
+    <div class="note">
+      <span class="lbl">RAG 플라이휠 (자가 학습 루프)</span>
+      <p>업로드 <strong>성공한</strong> 캡션을 <code>index_post_for_rag</code>가 <code>caption_body/hashtag_set/cta</code>로 나눠 벡터DB에 재축적합니다(composite-key). 신규 샵은 <code>seed_embeddings.py</code>의 seed 캡션과 <code>insta_analyzer</code>의 과거글 백필로 콜드스타트를 해결합니다. 쓸수록 그 샵의 말투가 정교해집니다.</p>
+    </div>
+  </section>
+
+  <!-- ============ 07 데이터 ============ -->
+  <section id="s7" class="page-break">
+    <div class="sec-head"><span class="sec-num">07</span><h2>데이터 아키텍처</h2></div>
+    <p class="lead">단일 Cosmos DB <code>BybaekDB</code>에 운영 컨테이너 6종 + 벡터 컨테이너 1종. 모든 컨테이너는 <code>shop_id</code>로 파티셔닝됩니다. 사진 원본은 Blob, 비동기 처리는 Storage Queue를 씁니다.</p>
+
+    <div class="plain">
+      <span class="lbl">💡 쉬운 설명 — 컨테이너 / 파티션 키 / 벡터 검색</span>
+      <p><strong>컨테이너</strong>는 엑셀의 '시트'처럼 같은 종류 데이터를 모아두는 표입니다. <strong>파티션 키(shop_id)</strong>는 "가게 번호별로 서랍을 나눠 넣는 기준"이라, 한 가게 데이터를 빠르고 싸게 찾게 해줍니다. <strong>벡터 검색</strong>은 글을 숫자 좌표(임베딩)로 바꿔 "의미가 비슷한 글"을 찾는 방식으로, 그 가게의 말투와 닮은 과거 캡션을 골라옵니다.</p>
+    </div>
+
+    <h3>Cosmos DB 컨테이너 <span class="tag">BybaekDB</span></h3>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>컨테이너</th><th>문서 id</th><th>주요 필드</th><th>비고</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">Shop</td><td class="mono">= shop_id</td><td>브랜드설정 전체 · 스케줄 · 연동플래그 · 인스타/원드라이브 OAuth 토큰 · <code>insta_style_profile</code> · <code>one_delta_link</code></td><td>온보딩+인증 통합</td></tr>
+        <tr><td class="mono">Photo</td><td class="mono">= photo_id</td><td><code>blob_url</code>(SAS 제거) · <code>filter_status</code> · <code>is_usable</code> · <code>fade_cut_score</code> · <code>detected_angle</code> · <code>style_tags</code> · <code>used_at</code></td><td>필터 결과 보존</td></tr>
+        <tr><td class="mono">Album</td><td class="mono">= album_id</td><td><code>album_name</code> · <code>photo_ids[]</code> · 썸네일</td><td>레퍼런스 앨범 <code>reference_{shop_id}</code></td></tr>
+        <tr><td class="mono">Post</td><td class="mono">post_{uuid}</td><td><code>caption</code> · <code>hashtags[]</code> · <code>status</code> · <code>review_action</code> · <code>caption_score</code> · <code>model_used</code> · <code>metrics{}</code> · <code>review_deadline</code>(+24h)</td><td>초안·발행 이력</td></tr>
+        <tr><td class="mono">Cache</td><td class="mono">{shop_id}_{date}</td><td><code>result{}</code> · <code>ttl=86400</code> · <code>expire_at</code></td><td><strong>유일하게 TTL(24h) 사용</strong> — 웹서치 캐시</td></tr>
+        <tr><td class="mono">RejectionLog</td><td class="mono">임의</td><td>사진 탈락 로그(최신 50)</td><td>photo_feedback용(현재 비활성)</td></tr>
+        <tr><td class="mono">RagVectors</td><td class="mono">{post_id}_{type}</td><td><code>caption</code> · <code>caption_vector</code>(1536차원) · <code>content_type</code></td><td>벡터 검색 전용</td></tr>
+      </tbody>
+    </table></div>
+
+    <h3>벡터 검색 상세 <span class="tag">services/vector_db.py</span></h3>
+    <div class="cards">
+      <div class="card"><div class="k">임베딩 모델</div><div class="v">text-embedding-3-small</div><div class="d">1536차원 · Azure OpenAI</div></div>
+      <div class="card"><div class="k">거리 함수</div><div class="v">VectorDistance()</div><div class="d">코사인 유사도 · ORDER BY 오름차순</div></div>
+      <div class="card"><div class="k">content_type</div><div class="v">4종</div><div class="d">caption_body · hashtag_set · cta · structure</div></div>
+      <div class="card"><div class="k">쿼리 범위</div><div class="v">단일 파티션</div><div class="d">shop_id 파티션만 조회(RU 절약) · top_k 최대 50</div></div>
+    </div>
+
+    <h3>Blob Storage &amp; Queue</h3>
+    <div class="tbl-wrap tight"><table>
+      <thead><tr><th>항목</th><th>값</th><th>설명</th></tr></thead>
+      <tbody>
+        <tr><td>스토리지 계정</td><td class="mono">bybaekstore1</td><td>코드 일부에 하드코딩(13장 참조)</td></tr>
+        <tr><td>Blob 컨테이너</td><td class="mono">env: AZURE_BLOB_CONTAINER_NAME</td><td>사진 원본</td></tr>
+        <tr><td>Blob 경로 규칙</td><td class="mono">{container}/{shop_id}/{md5(경로)}.{ext}</td><td>HEIC/HEIF → .jpg 강제 변환</td></tr>
+        <tr><td>접근 방식</td><td class="mono">읽기 전용 SAS (기본 2h)</td><td>비공개 Blob에 시간제한 서명 URL</td></tr>
+        <tr><td>큐 이름</td><td class="mono">bybaek-photo-sync</td><td>사진 동기화 배치 메시지</td></tr>
+        <tr><td>큐 폴링</td><td class="mono">30초 · 10건/폴 · visibility 300s</td><td>실패 메시지는 재노출로 재시도</td></tr>
+      </tbody>
+    </table></div>
+
+    <h3>워커 처리 흐름 <span class="tag">workers/photo_queue_worker.py</span></h3>
+    <div class="diagram"><pre>Queue(bybaek-photo-sync) ──30초 폴링──▶ receive(10건)
+   │  메시지 = {shop_id, drive_id, token, container_name, photos[]}
+   ▼
+process_message: 각 사진마다
+   ├ photo_id = "photo_{shop_id}_{md5(relative_path)}"     (중복 방지)
+   ├ DB 존재 확인(get_photo_by_id) → 있으면 skip
+   ├ Graph에서 다운로드: GET /drives/{drive_id}/items/{item_id}/content
+   ├ HEIC/HEIF → JPG 변환(pillow-heif, q95)
+   ├ Blob 업로드: {shop_id}/{md5}.jpg
+   └ Cosmos save_photo + filter_list에 2h SAS URL 추가
+   ▼
+성공 메시지 delete → shop별로 trigger_filter(사진필터 실행)</pre></div>
+
+    <h3>이메일 알림 <span class="tag">services/email_service.py</span></h3>
+    <p>SMTP가 아니라 <strong>Gmail API(OAuth)</strong>를 사용합니다. 스코프 <code>gmail.send</code>, 토큰은 <code>services/token.json</code>·<code>credentials.json</code>. 새 초안이 준비되면 <code>send_draft_notification</code>이 "[ByBaek] 새 게시물 초안이 준비됐어요 ✂️" 메일을 사장님에게 발송합니다.</p>
+  </section>
+
+  <!-- ============ 08 외부 연동 ============ -->
+  <section id="s8">
+    <div class="sec-head"><span class="sec-num">08</span><h2>외부 서비스 연동</h2></div>
+    <p class="lead">OneDrive(MS Graph), Instagram Graph, Claude(Azure AI Foundry), Tavily, Gmail 등 5+개 외부 서비스와 실연동됩니다.</p>
+
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>서비스</th><th>용도</th><th>엔드포인트/버전</th><th>인증</th></tr></thead>
+      <tbody>
+        <tr><td>MS Graph (OneDrive)</td><td>사진 자동 동기화(Delta)</td><td class="mono">graph.microsoft.com/v1.0</td><td>Easy Auth 토큰 + refresh_token(MSAL 갱신)</td></tr>
+        <tr><td>Instagram Graph</td><td>게시물 발행(단일/캐러셀)</td><td class="mono">graph.instagram.com/v25.0</td><td>장기 access_token(Cosmos 저장)</td></tr>
+        <tr><td>Instagram OAuth</td><td>계정 연동</td><td class="mono">api.instagram.com/oauth</td><td>client_id/secret + code 교환</td></tr>
+        <tr><td>Claude</td><td>캡션 생성·말투분석·챗</td><td class="mono">bybaek-foundry…/anthropic</td><td>AAD Bearer(Managed Identity)</td></tr>
+        <tr><td>Azure OpenAI</td><td>평가·요약·Vision·임베딩</td><td class="mono">bybaek.openai.azure.com</td><td>API Key</td></tr>
+        <tr><td>Tavily</td><td>실시간 트렌드 검색</td><td class="mono">Tavily API</td><td>API Key</td></tr>
+        <tr><td>Gmail API</td><td>초안 알림 메일</td><td class="mono">googleapis.com/gmail</td><td>OAuth(token.json)</td></tr>
+      </tbody>
+    </table></div>
+
+    <h3>OneDrive Delta 동기화 <span class="tag">routers/onedrive.py</span></h3>
+    <p>처음엔 전체 목록을, 이후엔 <strong>변경분만</strong>(<code>@odata.deltaLink</code> 저장·재사용) 가져옵니다. 사진만 필터링해 10장 단위로 큐에 넣고, 스케줄러 경로(<code>sync_photos_internal</code>)에서는 요청 헤더가 없으므로 저장된 <code>refresh_token</code>으로 <strong>MSAL</strong>이 새 Graph 토큰을 발급합니다(<code>offline_access</code> 스코프 필요).</p>
+
+    <div class="plain">
+      <span class="lbl">💡 쉬운 설명 — Delta API</span>
+      <p>매번 폴더 전체를 다시 훑으면 느리고 비쌉니다. Delta는 "지난번 이후로 <em>새로 바뀐 것만</em> 알려줘"라고 요청하는 방식이라, 사진 몇 장 추가돼도 그 몇 장만 빠르게 가져옵니다.</p>
+    </div>
+
+    <h3>Instagram 발행 <span class="tag">routers/instagram.py</span></h3>
+    <p>이미지 종횡비를 인스타 허용 범위(<code>0.8</code>~<code>1.91</code>)로 <strong>자동 크롭 정규화</strong> → 컨테이너 생성 → <code>status_code=FINISHED</code>까지 폴링(10회×2초) → 발행. 다중 이미지는 캐러셀(최대 10장)로 처리하고, 임시 크롭본은 <code>temp_cropped/</code>에서 발행 후 정리합니다.</p>
+
+    <h3>Claude 실시간 챗 <span class="tag">routers/custom_chat.py</span></h3>
+    <p>브랜드설정 + 실시간 트렌드를 합친 프롬프트로 <code>claude-sonnet-4-6</code>를 <strong>스트리밍</strong> 호출(SSE)합니다. 토큰 단위로 프론트에 즉시 전달되어 "타이핑되는 것처럼" 캡션이 나타납니다.</p>
+  </section>
+
+  <!-- ============ 09 인증 보안 ============ -->
+  <section id="s9">
+    <div class="sec-head"><span class="sec-num">09</span><h2>인증 &amp; 보안</h2></div>
+    <p class="lead">사용자 로그인은 Entra ID + App Service Easy Auth, 서버-Claude 간은 Managed Identity(AAD 토큰), 외부 SNS는 OAuth 장기토큰으로 3원화되어 있습니다.</p>
+
+    <h3>3가지 인증 경로</h3>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>대상</th><th>방식</th><th>토큰 저장/획득</th></tr></thead>
+      <tbody>
+        <tr><td>사장님 로그인</td><td>Entra ID + Easy Auth</td><td>App Service가 헤더 주입 · <code>refresh_token</code>은 Cosmos 저장</td></tr>
+        <tr><td>OneDrive(Graph)</td><td>OAuth + MSAL</td><td>스케줄러 시점에 refresh_token으로 재발급</td></tr>
+        <tr><td>Instagram</td><td>OAuth 장기토큰</td><td>단기→장기 교환 후 Cosmos <code>insta_access_token</code></td></tr>
+        <tr><td>Claude(Foundry)</td><td>AAD Bearer(MI)</td><td><code>get_claude_token()</code> 자동갱신</td></tr>
+        <tr><td>Azure OpenAI / Tavily</td><td>API Key</td><td>환경변수</td></tr>
+      </tbody>
+    </table></div>
+
+    <h3>Claude 인증의 함정 <span class="tag">utils/claude_auth.py</span></h3>
+    <div class="warnbox">
+      <span class="lbl">이 프로젝트의 대표적 장애 원인 (해결됨)</span>
+      <p>Foundry의 <code>/anthropic</code> 엔드포인트는 <strong>api-key를 거부하고 AAD Bearer 토큰만</strong> 받으며, 토큰 audience(scope)가 정확히 <code>https://ai.azure.com/.default</code>여야 합니다. 이를 어기면 401이 나고 <code>post_writer</code>가 <strong>목업(가짜) 캡션</strong>으로 폴백합니다. 또한 이 앱에는 OneDrive용 <code>AZURE_CLIENT_ID/TENANT_ID/CLIENT_SECRET</code>가 있어 <code>DefaultAzureCredential</code>이 시스템 Managed Identity를 못 찾고 실패하므로, <strong>명시적 체인</strong> <code>ChainedTokenCredential(ManagedIdentityCredential(), AzureCliCredential())</code>을 사용합니다(배포=MI, 로컬=az login).</p>
+    </div>
+    <p>운영 조건: App Service의 <strong>시스템 할당 Managed Identity</strong>에 <code>bybaek-foundry</code>의 <strong>Cognitive Services User</strong> 역할이 부여되어 있어야 합니다.</p>
+
+    <div class="plain">
+      <span class="lbl">💡 쉬운 설명 — Managed Identity</span>
+      <p>서버가 다른 Azure 서비스에 접속할 때, 비밀번호(키)를 코드에 넣는 대신 Azure가 서버에게 발급하는 "사원증"입니다. 키가 유출될 위험이 없고, Azure가 알아서 갱신해 줍니다.</p>
+    </div>
+
+    <h3>보안 점검 요약</h3>
+    <ul>
+      <li><span class="pill ok">양호</span> <code>.env</code>·<code>credentials.json</code>·<code>token.json</code>은 <code>.gitignore</code>에 포함되어 git에 추적되지 않음(확인 완료).</li>
+      <li><span class="pill ok">양호</span> Claude는 키가 아닌 Managed Identity 토큰 사용.</li>
+      <li><span class="pill red">주의</span> 일부 Cosmos 쿼리가 <code>shop_id</code>를 f-string으로 SQL에 삽입 → 파라미터 바인딩 권장(13장).</li>
+      <li><span class="pill red">주의</span> <code>auth.py</code>의 개발용 하드코딩 폴백(<code>test_barber_jiyeon</code>) → 운영 제거 검토.</li>
+      <li><span class="pill warn">확인</span> Blob 공개/비공개 정책 — 현재 발행 시 SAS 제거한 직접 URL 사용(공개 전제). Marketplace 기준에 맞춰 재점검 권장.</li>
+    </ul>
+  </section>
+
+  <!-- ============ 10 Azure 리소스 ============ -->
+  <section id="s10" class="page-break">
+    <div class="sec-head"><span class="sec-num">10</span><h2>Azure 리소스 인벤토리</h2></div>
+    <p class="lead">현재 개인 Azure 구독(리소스그룹 <code>rg-bybaek</code>, 리전 Korea Central)에 배포되어 있습니다. 아래는 코드·설정에서 확인된 리소스 이름입니다.</p>
+
+    <div class="warnbox">
+      <span class="lbl">시크릿 없음</span>
+      <p>아래 표에는 <strong>리소스 이름과 환경변수 이름만</strong> 있으며 키/토큰 값은 없습니다. 실제 값은 Azure Portal의 각 리소스 · App Service 구성 · GitHub Secrets에서 관리하세요.</p>
+    </div>
+
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>리소스 종류</th><th>이름 / 식별자</th><th>연결 환경변수</th><th>용도</th></tr></thead>
+      <tbody>
+        <tr><td>App Service (Backend)</td><td class="mono">bybaek-backend</td><td class="mono">—</td><td>FastAPI 호스팅 · api2.bybaekofficial.com</td></tr>
+        <tr><td>App Service (Frontend)</td><td class="mono">bybaek-frontend</td><td class="mono">FRONTEND_URL</td><td>Next.js · www.bybaekofficial.com</td></tr>
+        <tr><td>Cosmos DB 계정</td><td class="mono">bybaek-db</td><td class="mono">AZURE_COSMOS_URL / _KEY</td><td>문서 + 벡터 (DB: BybaekDB)</td></tr>
+        <tr><td>Storage 계정</td><td class="mono">bybaekstore1</td><td class="mono">AZURE_STORAGE_CONNECTION_STRING</td><td>Blob(사진) + Queue</td></tr>
+        <tr><td>Blob 컨테이너</td><td class="mono">(env값)</td><td class="mono">AZURE_BLOB_CONTAINER_NAME</td><td>사진 원본</td></tr>
+        <tr><td>Storage Queue</td><td class="mono">bybaek-photo-sync</td><td class="mono">(동일 연결문자열)</td><td>사진 동기화 배치</td></tr>
+        <tr><td>Azure OpenAI</td><td class="mono">bybaek</td><td class="mono">AZURE_OPENAI_ENDPOINT / _KEY</td><td>GPT · Vision · Embedding</td></tr>
+        <tr><td>OpenAI 배포(mini)</td><td class="mono">env값</td><td class="mono">AZURE_OPENAI_DEPLOYMENT_MINI</td><td>기본 티어</td></tr>
+        <tr><td>OpenAI 배포(full)</td><td class="mono">env값</td><td class="mono">AZURE_OPENAI_DEPLOYMENT_FULL</td><td>승격 티어</td></tr>
+        <tr><td>임베딩 배포</td><td class="mono">text-embedding-3-small</td><td class="mono">AZURE_OPENAI_EMBEDDING_DEPLOYMENT</td><td>RAG 벡터화</td></tr>
+        <tr><td>Azure AI Foundry</td><td class="mono">bybaek-foundry</td><td class="mono">AZURE_CLAUDE_ENDPOINT</td><td>Claude Sonnet 4.6 (/anthropic)</td></tr>
+        <tr><td>Entra ID 앱 등록</td><td class="mono">(client id)</td><td class="mono">AZURE_TENANT_ID / _CLIENT_ID / _CLIENT_SECRET</td><td>OneDrive/Graph · 로그인</td></tr>
+      </tbody>
+    </table></div>
+
+    <div class="note">
+      <span class="lbl">모델 명칭에 관한 정확성 노트</span>
+      <p>코드의 Claude 호출은 <code>model="claude-sonnet-4-6"</code>로 고정되어 있습니다. Azure OpenAI 배포 이름은 <strong>환경변수로 주입</strong>되어 유동적입니다(로컬 <code>.env</code>에는 <code>gpt-4.1</code> 계열, README에는 구독 이전 후 <code>gpt-5-mini</code>로 기재). 실제 운영 배포에서 어떤 배포명이 매핑돼 있는지는 <strong>App Service 구성</strong>에서 확인하는 것이 정확합니다.</p>
+    </div>
+  </section>
+
+  <!-- ============ 11 배포 ============ -->
+  <section id="s11">
+    <div class="sec-head"><span class="sec-num">11</span><h2>배포 &amp; CI/CD</h2></div>
+    <p class="lead"><code>main</code> 브랜치에 push하면 GitHub Actions가 자동으로 App Service에 배포합니다. 배포 대상은 변수로 파라미터화되어 있어, 구독/앱 이전 시 값 두 개만 바꾸면 됩니다.</p>
+
+    <h3>GitHub Actions 워크플로 <span class="tag">.github/workflows/main_bybaek-b.yml</span></h3>
+    <pre><span class="c"># 트리거: main push 또는 수동(workflow_dispatch)</span>
+1. Checkout (actions/checkout@v4)
+2. Python 3.11 설정 (actions/setup-python@v5)
+3. <b>pip install -r requirements.txt</b>   <span class="c"># 의존성 설치 검증</span>
+4. azure/webapps-deploy@v3
+     app-name:        ${{ <b>vars.AZURE_WEBAPP_NAME</b> }}          <span class="c"># 현재: bybaek-backend</span>
+     publish-profile: ${{ <b>secrets.AZURE_WEBAPP_PUBLISH_PROFILE</b> }}
+     package: .</pre>
+
+    <div class="plain">
+      <span class="lbl">💡 쉬운 설명 — CI/CD와 게시 프로필</span>
+      <p><strong>CI/CD</strong>는 "코드를 올리면(push) 자동으로 서버에 반영되는" 자동 배포 파이프라인입니다. <strong>게시 프로필(publish profile)</strong>은 특정 App Service에 배포할 권한이 담긴 자격증명 파일로, GitHub Secrets에 안전하게 보관됩니다.</p>
+    </div>
+
+    <h3>다른 구독/앱으로 이전하는 법</h3>
+    <ol>
+      <li>GitHub → Settings → <strong>Variables</strong>: <code>AZURE_WEBAPP_NAME</code>을 새 App Service 이름으로 변경.</li>
+      <li>GitHub → Settings → <strong>Secrets</strong>: <code>AZURE_WEBAPP_PUBLISH_PROFILE</code>을 새 앱의 게시 프로필(XML)로 교체.</li>
+      <li>새 App Service의 <strong>구성(환경변수)</strong>에 <code>.env.example</code> 항목을 모두 설정.</li>
+      <li>새 App Service에 <strong>시스템 Managed Identity</strong> 켜고 Foundry에 <strong>Cognitive Services User</strong> 역할 부여(Claude용).</li>
+      <li>커스텀 도메인·CORS(<code>FRONTEND_URL</code>) 재설정.</li>
+    </ol>
+
+    <div class="note">
+      <span class="lbl">배포 이력 참고 (README 주석)</span>
+      <p>과거 구독의 URL은 <code>bybaek-b-…koreacentral-01.azurewebsites.net</code> 형태였고, 현재는 개인 구독 <code>rg-bybaek</code>(Korea Central)로 <strong>무중단 이전</strong> 완료. 복귀가 필요하면 위 변수 두 개와 환경변수를 이전 값으로 되돌리면 됩니다.</p>
+    </div>
+  </section>
+
+  <!-- ============ 12 운영 ============ -->
+  <section id="s12">
+    <div class="sec-head"><span class="sec-num">12</span><h2>운영 · 스케줄러 · 로깅</h2></div>
+
+    <h3>정기 실행 (KST 기준)</h3>
+    <div class="tbl-wrap tight"><table>
+      <thead><tr><th>작업</th><th>주기</th><th>영향</th></tr></thead>
+      <tbody>
+        <tr><td>자동 게시물 생성</td><td class="mono">매 정각</td><td>업로드 시각·요일 매칭 샵 파이프라인 실행</td></tr>
+        <tr><td>OneDrive 동기화</td><td class="mono">4시간마다</td><td>새 사진 수집 → 큐 → 워커</td></tr>
+        <tr><td>큐 워커 폴링</td><td class="mono">30초</td><td>사진 다운로드/변환/저장/필터</td></tr>
+        <tr><td>웹서치 캐시</td><td class="mono">TTL 24h</td><td>중복 트렌드 검색 차단(비용 절감)</td></tr>
+      </tbody>
+    </table></div>
+
+    <h3>로깅 &amp; 관측</h3>
+    <ul>
+      <li>파이프라인 각 단계는 <code>_timed()</code>로 <code>[TIMING] 단계 → n.nns</code> 로그를 남깁니다(병목 진단용).</li>
+      <li>노드마다 <code>[orchestrator_v2] …</code> 상태 로그 출력(tier, score, retries).</li>
+      <li><code>utils/logging.py</code>가 <code>logs/app.log</code> + 콘솔 이중 출력. App Service에서는 <strong>Log stream</strong>으로 실시간 확인 가능.</li>
+      <li>운영 지표는 <code>GET /api/agent/metrics/{shop_id}</code>에서 caption_score 평균·retry율·모델분포·점수분포로 확인.</li>
+    </ul>
+
+    <h3>흔한 장애와 대응</h3>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>증상</th><th>원인</th><th>대응</th></tr></thead>
+      <tbody>
+        <tr><td>캡션이 어색한 목업으로 나옴</td><td>Claude 401(잘못된 scope/MI 역할)</td><td>MI에 Cognitive Services User 부여 · scope <code>ai.azure.com</code> 확인(9장)</td></tr>
+        <tr><td>OneDrive 동기화 실패</td><td>refresh_token 없음/만료</td><td>사장님 재로그인(offline_access) 유도</td></tr>
+        <tr><td>인스타 발행 실패</td><td>종횡비/토큰 만료/미디어 상태</td><td>정규화 로그·장기토큰 갱신 확인</td></tr>
+        <tr><td>사진이 안 들어옴</td><td>큐 워커 미기동/Graph 토큰</td><td>워커 로그·큐 적체 확인</td></tr>
+        <tr><td>트렌드 품질 낮음 반복</td><td>Tavily 결과 빈약</td><td>재시도 2회 후 진행(정상 동작)</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <!-- ============ 13 유지보수 ============ -->
+  <section id="s13" class="page-break">
+    <div class="sec-head"><span class="sec-num">13</span><h2>알려진 이슈 &amp; 유지보수 노트</h2></div>
+    <p class="lead">코드를 직접 읽으며 발견한, 수익화·마켓플레이스 전에 알아두면 좋은 항목들입니다. 대부분 즉시 장애는 아니지만 기술 부채/리스크로 관리 대상입니다.</p>
+
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>등급</th><th>항목</th><th>위치</th><th>권장 조치</th></tr></thead>
+      <tbody>
+        <tr><td><span class="pill red">보안</span></td><td>SQL 인젝션 표면: <code>shop_id</code>를 f-string으로 쿼리에 삽입</td><td class="mono">cosmos_db.py (get_recent_drafts_with_scores, get_rejection_logs 등)</td><td>파라미터 바인딩(<code>@shop_id</code>)으로 전환</td></tr>
+        <tr><td><span class="pill red">보안</span></td><td>개발용 하드코딩 신원 폴백 <code>test_barber_jiyeon</code></td><td class="mono">routers/auth.py</td><td>운영 빌드에서 제거 또는 환경 분기</td></tr>
+        <tr><td><span class="pill warn">일관성</span></td><td>스토리지 계정 <code>bybaekstore1</code>이 코드 여러 곳에 하드코딩</td><td class="mono">worker · cosmos_db · photos</td><td>환경변수/상수 1곳으로 통일</td></tr>
+        <tr><td><span class="pill warn">일관성</span></td><td>모델명 불일치: README(gpt-5-mini) vs .env(gpt-4.1) vs 코드(claude-sonnet-4-6)</td><td class="mono">README · .env</td><td>운영 배포 기준으로 문서/env 동기화</td></tr>
+        <tr><td><span class="pill idle">잔재</span></td><td>Azure AI Search 관련 의존성/환경변수(벡터는 Cosmos로 이전됨)</td><td class="mono">requirements.txt · seed_embeddings.py</td><td>미사용 확인 후 정리</td></tr>
+        <tr><td><span class="pill idle">미배선</span></td><td><code>photo_feedback</code>(사진 탈락 학습) 정의됐으나 호출부 없음</td><td class="mono">agents/photo_feedback.py</td><td>배선하거나 로드맵으로 명시</td></tr>
+        <tr><td><span class="pill idle">빈 파일</span></td><td><code>custom_chat/system.md</code>·<code>post_writer/user_template.md</code>·<code>good_captions.md</code> 비어 있음</td><td class="mono">prompts/</td><td>의도된 콜드스타트인지 확인(코드는 정상 폴백)</td></tr>
+        <tr><td><span class="pill warn">비용/성능</span></td><td>Cosmos <code>get_cosmos_container</code>가 호출마다 새 클라이언트 생성(캐시 없음)</td><td class="mono">services/cosmos_client.py</td><td>클라이언트 싱글턴 캐싱 고려</td></tr>
+      </tbody>
+    </table></div>
+
+    <div class="note">
+      <span class="lbl">진행 중 로드맵 (README 기준)</span>
+      <p>Instagram 자동 발행(Meta 앱 심사) · Claude 글쓰기/분석 정식 활성화(Foundry 쿼터 승인 대기) · Hybrid Search(BM25+Vector) 도입 · Microsoft Azure Marketplace 심사/런칭.</p>
+    </div>
+  </section>
+
+  <!-- ============ 14 마켓플레이스 ============ -->
+  <section id="s14">
+    <div class="sec-head"><span class="sec-num">14</span><h2>마켓플레이스 제출 체크리스트</h2></div>
+    <p class="lead">누락 없는 제출·수익화를 위해 기술 관점에서 점검할 항목입니다. (상업 조건·과금 연동 등 비기술 항목은 파트너 IUI와 별도 확인.)</p>
+
+    <h3>기술 준비도</h3>
+    <ul>
+      <li><span class="pill ok">완료</span> 헬스체크 엔드포인트(<code>GET /</code>) — App Service 가용성 프로브.</li>
+      <li><span class="pill ok">완료</span> CI/CD 파라미터화 — 구독 이전 대응.</li>
+      <li><span class="pill ok">완료</span> Managed Identity 기반 Claude 인증 — 키 유출 리스크 제거.</li>
+      <li><span class="pill warn">점검</span> 시크릿 전량 App Service 구성/Key Vault로 이관 여부(로컬 .env 의존 제거).</li>
+      <li><span class="pill warn">점검</span> Blob 공개/비공개 정책 확정 및 발행 URL 방식 문서화.</li>
+      <li><span class="pill red">권장</span> SQL 파라미터 바인딩 · 하드코딩 폴백 제거(13장) 선반영.</li>
+      <li><span class="pill warn">점검</span> 개인정보/데이터 처리 방침(사진·인스타 토큰 보관) 문서화.</li>
+      <li><span class="pill warn">점검</span> Meta 앱 심사(Instagram 자동 발행) 승인 상태.</li>
+      <li><span class="pill warn">점검</span> Foundry Claude 쿼터 승인 상태.</li>
+    </ul>
+
+    <h3>운영 준비도</h3>
+    <ul>
+      <li>장애 대응 런북(12장 표) 팀 공유.</li>
+      <li>로그/지표 모니터링 대시보드(caption_score, retry율, 큐 적체).</li>
+      <li>백업/복구: Cosmos 지속 백업 정책, Blob 수명주기 정책.</li>
+      <li>다국어(ko/en) 캡션 품질 샘플 검증.</li>
+    </ul>
+
+    <div class="note">
+      <span class="lbl">협력 관계</span>
+      <p><strong>Microsoft Korea</strong> — Azure 기술 미팅 · Marketplace 제출 완료, 심사/런칭 대기. <strong>IUI</strong> — Marketplace 등록 담당 · 출시 전 과정 공식 개발 협력사.</p>
+    </div>
+  </section>
+
+  <!-- ============ 15 용어집 ============ -->
+  <section id="s15">
+    <div class="sec-head"><span class="sec-num">15</span><h2>용어집 (쉬운 설명)</h2></div>
+    <p class="lead">문서에 등장하는 기술 용어를 일상어로 풀었습니다.</p>
+
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>용어</th><th>쉬운 설명</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">FastAPI</td><td>파이썬으로 API 서버를 빠르게 만드는 도구. 이 백엔드의 뼈대.</td></tr>
+        <tr><td class="mono">라우터(Router)</td><td>"이 주소로 오는 요청은 이 함수가 처리" 하고 길을 나눠주는 교통정리 담당.</td></tr>
+        <tr><td class="mono">엔드포인트(Endpoint)</td><td>요청을 받는 특정 주소(URL). 예: <code>/api/agent/run</code>.</td></tr>
+        <tr><td class="mono">오케스트레이터</td><td>여러 AI 에이전트를 순서대로/조건대로 지휘하는 지휘자.</td></tr>
+        <tr><td class="mono">LangGraph / StateGraph</td><td>AI 작업 흐름을 '그래프(순서도)'로 그려 자동 실행하는 도구.</td></tr>
+        <tr><td class="mono">에이전트(Agent)</td><td>한 가지 일(트렌드검색, 사진선택, 글쓰기 등)을 담당하는 작은 AI 일꾼.</td></tr>
+        <tr><td class="mono">RAG</td><td>AI가 글을 쓰기 전, 그 가게의 과거 캡션을 검색해 참고하는 방식. "찾아보고 쓰기".</td></tr>
+        <tr><td class="mono">임베딩(Embedding)</td><td>문장을 의미가 담긴 숫자 좌표로 바꾼 것. 비슷한 뜻이면 좌표도 가깝다.</td></tr>
+        <tr><td class="mono">벡터 검색</td><td>그 숫자 좌표로 '의미가 비슷한' 문장을 찾는 검색.</td></tr>
+        <tr><td class="mono">LLM-as-Judge</td><td>AI가 쓴 글을 또 다른 AI가 점수로 채점하는 자가 품질검사.</td></tr>
+        <tr><td class="mono">할루시네이션</td><td>AI가 사실이 아닌 것을 지어내는 현상(예: 없는 경력 언급).</td></tr>
+        <tr><td class="mono">티어(mini/full)</td><td>싼 모델(mini)로 먼저 시도하고, 품질 미달 시 좋은 모델(full)로 올리는 비용 전략.</td></tr>
+        <tr><td class="mono">Human-in-the-loop</td><td>자동화 중간에 사람이 최종 승인하는 안전장치. 여기선 '검토 후 발행'.</td></tr>
+        <tr><td class="mono">Cosmos DB</td><td>Azure의 NoSQL 데이터베이스. 이 서비스의 모든 데이터가 여기 저장됨.</td></tr>
+        <tr><td class="mono">컨테이너 / 파티션 키</td><td>데이터를 담는 표 / 가게(shop_id)별로 나눠 담는 기준.</td></tr>
+        <tr><td class="mono">Blob Storage</td><td>사진 같은 큰 파일을 저장하는 Azure 창고.</td></tr>
+        <tr><td class="mono">SAS URL</td><td>비공개 파일에 '시간 제한 출입증'을 붙인 임시 링크.</td></tr>
+        <tr><td class="mono">Queue(큐)</td><td>"할 일 목록". 사진 다운로드 작업을 줄 세워두면 워커가 순서대로 처리.</td></tr>
+        <tr><td class="mono">워커(Worker)</td><td>큐의 할 일을 계속 지켜보며 처리하는 백그라운드 일꾼.</td></tr>
+        <tr><td class="mono">스케줄러</td><td>정해진 시간에 알람처럼 코드를 실행하는 도구(매 정각/4시간).</td></tr>
+        <tr><td class="mono">Delta API</td><td>지난번 이후 '바뀐 것만' 가져오는 효율적 동기화 방식.</td></tr>
+        <tr><td class="mono">OAuth / refresh_token</td><td>외부 서비스 로그인 표준 / 로그인 상태를 갱신하는 재발급용 열쇠.</td></tr>
+        <tr><td class="mono">Managed Identity</td><td>키 없이 Azure가 서버에 발급하는 '사원증' 인증.</td></tr>
+        <tr><td class="mono">Easy Auth</td><td>App Service가 로그인 처리를 대신 해주고 신원을 헤더로 넘겨주는 기능.</td></tr>
+        <tr><td class="mono">CORS</td><td>어느 웹사이트(프론트)에서 이 서버를 호출해도 되는지 허용목록.</td></tr>
+        <tr><td class="mono">SSE / 스트리밍</td><td>결과를 한 번에 주지 않고 글자 단위로 실시간 전송(타이핑 효과).</td></tr>
+        <tr><td class="mono">CI/CD</td><td>코드를 올리면 자동으로 빌드·배포되는 파이프라인.</td></tr>
+        <tr><td class="mono">TTL</td><td>데이터의 유효기간. 지나면 자동 삭제(캐시 24시간).</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <div class="footer">
+    <p><strong>BYBAEK 시스템 정의서 &amp; 배포 명세서 · v1.0</strong> · 기준일 2026-07-14 · 대상 <code>bybaek-backend</code> (feature/onedrive-token-fix)</p>
+    <p>본 문서는 실제 소스코드를 직접 분석해 작성되었습니다. 코드 변경 시 해당 장을 함께 갱신하세요. 시크릿은 포함되어 있지 않습니다.</p>
+  </div>
+
+</div>
+
+<hr class="pole" />
+
+<script>
+  // 뷰어 테마 토글이 data-theme를 root에 찍으면 media query를 이김 (양방향)
+  (function () {
+    try {
+      var root = document.documentElement;
+      var obs = new MutationObserver(function(){});
+      // no-op: 토큰 기반 CSS가 이미 data-theme를 처리함
+    } catch (e) {}
+  })();
+</script>
+
+</body>
+</html>
