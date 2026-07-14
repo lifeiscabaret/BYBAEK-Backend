@@ -6,6 +6,7 @@
 30초마다 폴링 → 큐에서 배치 메시지 꺼내기
 → 사진별 DB 중복 체크
 → HEIC → JPG 자동 변환
+→ 장변 2048px 리사이즈 (Vision API 이미지 크기 초과 방지)
 → shop_id 기준 경로 격리 후 Blob Storage 업로드
 → Cosmos DB 저장
 → 필터링 트리거
@@ -16,6 +17,9 @@
 - shop_id 기준 경로 격리 (photos/{shop_id}/{hash}.jpg)
 - HEIC/HEIF → JPG 자동 변환 (pillow-heif)
 - SAS URL 기반 프라이빗 Blob 접근
+- [NEW] 장변 2048px 리사이즈 추가 (Vision API 이미지 크기 초과 오류 해결)
+  * HEIC 변환 여부와 무관하게 jpg/jpeg/png 전체에 적용
+  * 리사이즈 실패 시 원본 그대로 업로드(파이프라인 중단 방지), 에러 로그만 남김
 
 [실행 방법]
 main.py lifespan에서 백그라운드 스레드로 실행:
@@ -47,11 +51,7 @@ from azure.storage.queue import QueueClient
 from utils.logging import logger
 from services.cosmos_db import save_photo, get_photo_by_id
 
-
-# ──────────────────────────────────────────
 # 상수
-# ──────────────────────────────────────────
-
 QUEUE_NAME = "bybaek-photo-sync"
 INSTAGRAM_SUPPORTED = {".jpg", ".jpeg", ".png"}
 HEIC_FORMATS = {".heic", ".heif"}
@@ -60,18 +60,17 @@ POLL_INTERVAL_SECONDS = 30
 MAX_MESSAGES_PER_POLL = 10
 VISIBILITY_TIMEOUT = 300
 
+# [NEW] 리사이즈 설정 — Vision API 이미지 크기 초과 방지
+MAX_LONG_EDGE = 2048
+RESIZE_JPEG_QUALITY = 85
 
-# ──────────────────────────────────────────
-# ──────────────────────────────────────────
+
 # SAS URL 생성 (프라이빗 Blob 접근용)
-# ──────────────────────────────────────────
-
 def _generate_sas_url(blob_url: str, hours: int = 1) -> str:
     """
     blob_url → 임시 SAS URL 변환.
     photo_filter.py에서 GPT Vision 호출 시 사용.
     """
-    # 계정명·키는 연결문자열에서 도출(이식성) → 하드코딩 제거
     blob_service_client = BlobServiceClient.from_connection_string(
         os.getenv("AZURE_STORAGE_CONNECTION_STRING")
     )
@@ -95,10 +94,6 @@ def _generate_sas_url(blob_url: str, hours: int = 1) -> str:
     return f"{blob_url}?{sas_token}"
 
 
-# ──────────────────────────────────────────
-# HEIC → JPG 변환
-# ──────────────────────────────────────────
-
 def _convert_heic_to_jpg(raw_bytes: bytes) -> bytes:
     """HEIC/HEIF 바이트 → JPEG 바이트 변환. pillow-heif 필요."""
     try:
@@ -114,6 +109,39 @@ def _convert_heic_to_jpg(raw_bytes: bytes) -> bytes:
         raise RuntimeError(f"HEIC 변환 실패: {e}")
 
 
+# [NEW] 리사이즈 (Vision API 이미지 크기 초과 방지)
+def _resize_for_pipeline(image_bytes: bytes) -> bytes:
+    """
+    jpg/jpeg/png 바이트 → 장변 MAX_LONG_EDGE(2048px) 이하로 다운스케일 + 재압축.
+    이미 그 이하 크기면 원본을 그대로 반환(불필요한 재인코딩 방지).
+    HEIC 변환 직후, 또는 원본이 이미 jpg/png인 경우 모두 이 함수를 거침.
+    """
+    from PIL import Image, ImageOps
+
+    img = Image.open(io.BytesIO(image_bytes))
+
+    # EXIF 회전 정보 반영 (세로/가로 사진 뒤집힘 방지)
+    img = ImageOps.exif_transpose(img)
+
+    w, h = img.size
+    long_edge = max(w, h)
+
+    if long_edge <= MAX_LONG_EDGE:
+        # 이미 충분히 작으면 원본 그대로 반환 (화질 손실/처리비용 최소화)
+        return image_bytes
+
+    scale = MAX_LONG_EDGE / long_edge
+    new_size = (round(w * scale), round(h * scale))
+    img = img.resize(new_size, Image.LANCZOS)
+
+    if img.mode in ("RGBA", "P"):
+        img = img.convert("RGB")
+
+    output = io.BytesIO()
+    img.save(output, format="JPEG", quality=RESIZE_JPEG_QUALITY, optimize=True)
+    return output.getvalue()
+
+
 # ──────────────────────────────────────────
 # Queue Client
 # ──────────────────────────────────────────
@@ -125,10 +153,7 @@ def get_queue_client() -> QueueClient:
     )
 
 
-# ──────────────────────────────────────────
 # 단일 메시지 처리
-# ──────────────────────────────────────────
-
 def process_message(message_body: dict) -> dict:
     """
     큐 메시지 1개(10장 배치) 처리.
@@ -207,6 +232,22 @@ def process_message(message_body: dict) -> dict:
                 name = os.path.splitext(name)[0] + ".jpg"
                 content_type = "image/jpeg"
                 ext = ".jpg"
+
+            # [NEW] ✅ 리사이즈 — 장변 2048px 초과 시 다운스케일 (Vision API 크기초과 방지)
+            # HEIC 변환본(.jpg로 이미 바뀐 상태) + 원본이 jpg/png인 경우 모두 커버
+            if ext in INSTAGRAM_SUPPORTED:
+                try:
+                    before_kb = len(raw) // 1024
+                    raw = _resize_for_pipeline(raw)
+                    after_kb = len(raw) // 1024
+                    if after_kb != before_kb:
+                        logger.info(
+                            f"[worker] 🖼️ 리사이즈 완료: {name} "
+                            f"({before_kb}KB → {after_kb}KB)"
+                        )
+                except Exception as e:
+                    # 리사이즈 실패해도 파이프라인은 계속 — 원본으로 업로드
+                    logger.error(f"[worker] ⚠️ 리사이즈 실패, 원본 사용 ({name}): {e}")
 
             if not content_type:
                 content_type, _ = mimetypes.guess_type(name)
@@ -293,10 +334,8 @@ async def trigger_filter(shop_id: str, filter_list: list):
         logger.error(f"[worker] 필터링 실패: {e}")
 
 
-# ──────────────────────────────────────────
-# 폴링 루프
-# ──────────────────────────────────────────
 
+# 폴링 루프
 def polling_loop():
     """30초마다 큐를 폴링하며 메시지 처리. 별도 스레드에서 실행."""
     import asyncio
@@ -354,10 +393,7 @@ def polling_loop():
         time.sleep(POLL_INTERVAL_SECONDS)
 
 
-# ──────────────────────────────────────────
 # 워커 시작
-# ──────────────────────────────────────────
-
 def start_worker():
     """main.py lifespan에서 호출."""
     thread = threading.Thread(target=polling_loop, daemon=True)
