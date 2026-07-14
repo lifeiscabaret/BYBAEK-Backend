@@ -3,6 +3,10 @@
 - POST /api/onboarding: 스무고개 설문 저장
 - GET /api/onboarding/{shop_id}: 온보딩 데이터 조회
 - POST /api/onboarding/reference: 레퍼런스 사진 저장
+
+[변경 이력 - feed_style 연결]
+- hashtag_count, caption_length 필드 추가 (post_writer.py가 참조하는 feed_style 중첩 구조로 매핑)
+- brand_tone_emoji 값을 feed_style.emoji_usage로도 함께 저장 (기존엔 brand_tone 배열에만 합쳐졌음)
 """
 
 from fastapi import APIRouter, HTTPException
@@ -15,65 +19,39 @@ from agents.insta_analyzer import analyze_instagram_history
 
 router = APIRouter()
 
-# class PhotoRange(BaseModel):
-#     min: int = 1
-#     max: int = 5
-
-# class Schedule(BaseModel):
-#     upload_time: str
-#     frequency: str
-#     photo_range: PhotoRange
-#     timezone: str = "Asia/Seoul"
-
-# class OnboardingRequest(BaseModel):
-#     shop_id: str
-#     brand_tone: str
-#     forbidden_words: List[str]
-#     cta: str
-#     schedule: Schedule
-#     preferred_styles: Optional[List[str]] = []
-#     upload_mood: Optional[str] = ""
 
 class ReferencePhotoRequest(BaseModel):
     shop_id: str
     photo_ids: List[str]  # 사장님이 선택한 레퍼런스 사진 ID 리스트 (3장)
     label: str = "good"    # "good" 고정 (나쁜 예시는 없음)
 
-# @router.post("")
-# async def save_onboarding(req: OnboardingRequest):
-#     return {"shop_id": req.shop_id, "status": "success"}
-
-# @router.get("/{shop_id}")
-# async def get_onboarding(shop_id: str):
-#     return {"shop_id": shop_id, "status": "mock"}
-
 @router.post("/reference")
 async def save_reference_photos(req: ReferencePhotoRequest):
     """
     온보딩 단계에서 사장님이 선택한 레퍼런스 사진 3장을 저장합니다.
-    
+
     이 레퍼런스 사진들은 photo_filter.py의 2차 필터링에서
     "이 샵이 선호하는 스타일"을 GPT Vision이 학습하는 데 사용됩니다.
-    
+
     Args:
         req.shop_id: 샵 ID
         req.photo_ids: 레퍼런스로 지정할 사진 ID 리스트 (3장)
         req.label: "good" 고정
-    
+
     Returns:
         {"shop_id": str, "saved_count": int, "status": "success"}
     """
     try:
         from services.cosmos_db import save_album
-        
+
         # 레퍼런스 앨범 정보
         album_id = f"reference_{req.shop_id}"
         album_name = "Reference Photos"
         description = f"photo_filter 2차 필터링 학습용 레퍼런스 ({req.label})"
-        
-        # photo_list 구성 (save_album이 기대하는 형식)
+
+        # photo_list 구성 
         photo_list = [{"photo_id": pid} for pid in req.photo_ids]
-        
+
         # save_album 호출
         success = save_album(
             shop_id=req.shop_id,
@@ -82,20 +60,20 @@ async def save_reference_photos(req: ReferencePhotoRequest):
             album_name=album_name,
             description=description
         )
-        
+
         if not success:
             raise HTTPException(
                 status_code=500,
                 detail="레퍼런스 앨범 저장 실패"
             )
-        
+
         return {
             "shop_id": req.shop_id,
             "saved_count": len(req.photo_ids),
             "album_id": album_id,
             "status": "success"
         }
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -110,59 +88,63 @@ class OnboardingRequest(BaseModel):
     온보딩 API Request Schema
     프론트엔드의 OnboardingData.ts와 매핑됨
     """
-    
-    # === PERSONAL (개인화 설정) ===
+
+    # PERSONAL (개인화 설정) 
     # Q1: 샵 느낌 (다중선택 + 직접입력)
     brand_tone: Optional[List[str]] = None
-    
+
     # Q2: 강조하고 싶은 시술 (다중선택 + 직접입력)
     preferred_styles: Optional[List[str]] = None
-    
+
     # Q3: 올리기 싫은 사진 유형 (다중선택 + 직접입력)
     exclude_conditions: Optional[List[str]] = None
-    
+
     # Q4: 해시태그 방향 (다중선택 + 직접입력)
     hashtag_style: Optional[List[str]] = None
-    
+
     # Q5: CTA 문구
     cta: Optional[str] = None
-    
+
     # Q6: 가게 소개 문구
     shop_intro: Optional[str] = None
-    
+
     # Q7: 금지 단어 (쉼표로 구분된 문자열을 배열로 변환해서 저장)
     forbidden_words: Optional[List[str]] = None
-    
+
     # Q8: 기존 인기 게시물 URL/내용 (RAG 데이터)
     rag_reference: Optional[str] = None
-    
+
     # Q10: 샵 위치 (도시)
     city: Optional[str] = None
-    
-    # === APP (앱 설정) ===
+
+    # APP (앱 설정)
     # Q11: 자동 업로드 활성화 여부 ("예 (추천)" → "Y", "아니오" → "N")
     insta_review_bfr_upload_yn: Optional[str] = None  # "Y" | "N"
     insta_auto_upload_yn: Optional[str] = None
-    
+
     # Q12: 알람 받을 이메일 주소
     owner_email: Optional[EmailStr] = None  # EmailStr로 자동 검증
-    
+
     # Q13: 업로드 스케줄
     insta_upload_time_slot: Optional[str] = None  # "매일", "평일", "주말" 등
     insta_upload_time: Optional[str] = None       # "10:30 AM" 형식
     insta_upload_days: Optional[List[int]] = None  # 업로드 요일 [0=월..6=일]
-    
+
     # Q14: 언어 설정
     language: Optional[str] = None  # "ko" 또는 "en"
 
     # 설정 페이지 추가 필드
     photo_range_max: Optional[int] = None       # 게시물당 최대 사진 수
-    brand_tone_emoji: Optional[str] = None      # 이모지 사용 여부 (brand_tone 배열에 합침)
+    brand_tone_emoji: Optional[str] = None      # 이모지 사용 여부 (brand_tone 배열 + feed_style.emoji_usage에 함께 반영)
 
-    # === 연동 상태 (Boolean) ===
+    # [NEW] feed_style — post_writer.py가 참조하는 캡션 스타일 세부 설정
+    hashtag_count: Optional[int] = None         # 원하는 해시태그 개수 (기본값 10)
+    caption_length: Optional[str] = None        # "1~2줄" / "2~4줄" / "4줄 이상" 등
+
+    # 연동 상태 (Boolean)
     is_ms_connected: Optional[bool] = None
     is_insta_connected: Optional[bool] = None
-    
+
     class Config:
         # JSON 예시를 Swagger에 표시
         json_schema_extra = {
@@ -181,6 +163,9 @@ class OnboardingRequest(BaseModel):
                 "insta_upload_time_slot": "매일",
                 "insta_upload_time": "10:30 AM",
                 "language": "ko",
+                "hashtag_count": 8,
+                "caption_length": "2~4줄",
+                "brand_tone_emoji": "가끔 씀",
                 "is_ms_connected": True,
                 "is_insta_connected": True
             }
@@ -207,6 +192,8 @@ async def save_onboarding_api(shop_id: str, data: OnboardingRequest):
     # Pydantic 모델을 dict로 변환 (None 값 제외)
     data_dict = data.model_dump(exclude_none=True)
 
+    emoji_val = None
+
     # brand_tone_emoji는 별도 필드가 아니라 brand_tone 배열에 합쳐서 저장
     if "brand_tone_emoji" in data_dict:
         emoji_val = data_dict.pop("brand_tone_emoji")
@@ -223,6 +210,26 @@ async def save_onboarding_api(shop_id: str, data: OnboardingRequest):
         if emoji_val:
             filtered.append(emoji_val)
         data_dict["brand_tone"] = filtered
+
+    # [NEW] feed_style 구성 — post_writer.py가 brand_settings["feed_style"]로 참조하는
+    # 중첩 구조로 매핑. hashtag_count/caption_length는 최상위 필드로 들어오고,
+    # emoji_usage는 위에서 처리한 brand_tone_emoji 값을 재사용한다.
+    # (기존엔 feed_style 자체가 저장된 적이 없어서 post_writer.py가 항상 기본값만 썼음)
+    feed_style_updates = {}
+    if "hashtag_count" in data_dict:
+        feed_style_updates["hashtag_count"] = data_dict.pop("hashtag_count")
+    if "caption_length" in data_dict:
+        feed_style_updates["caption_length"] = data_dict.pop("caption_length")
+    if emoji_val:
+        feed_style_updates["emoji_usage"] = emoji_val
+
+    if feed_style_updates:
+        existing_data = get_onboarding_db(shop_id)
+        existing_shop = existing_data.get("shop_info", {}) if existing_data else {}
+        existing_feed_style = dict(existing_shop.get("feed_style", {}))
+        existing_feed_style.update(feed_style_updates)
+        data_dict["feed_style"] = existing_feed_style
+        print(f"[onboarding] feed_style 갱신 → {existing_feed_style}")
 
     success = save_onboarding_db(shop_id, data_dict)
 
