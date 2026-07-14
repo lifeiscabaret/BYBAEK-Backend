@@ -32,6 +32,100 @@ def _strip_comments(text: str) -> str:
     lines = [ln for ln in text.splitlines() if not ln.lstrip().startswith("#")]
     return "\n".join(lines).strip()
 
+
+# ──────────────────────────────────────────
+# [NEW] good_captions.md 톤별 선택 주입
+#
+# 문제: 기존엔 good_captions.md 전체(모든 톤 카테고리)를 항상 프롬프트에 통째로 넣었음.
+#       Few-shot 예시는 LLM 출력 스타일을 강하게 앵커링하기 때문에, 톤이 다른 샵끼리도
+#       전부 같은 예시를 보고 캡션을 쓰면 결국 다 비슷한 캡션이 나오는 "AI 냄새" 획일화 문제가 생김.
+#
+# 해결: 온보딩에서 수집한 brand_tone 배열과 good_captions.md의 톤 카테고리 태그
+#       (narrative/expertise/humor/community/tips)를 매칭해서, 겹치는 카테고리 1~2개만 선택 주입.
+#       RAG(STEP 4, search_rag)가 이미 그 샵의 실제 과거 캡션으로 개인화를 담당하고 있으므로,
+#       good_captions.md는 "콜드스타트 + 톤별 최소 품질 기준선" 역할만 하면 됨.
+# ──────────────────────────────────────────
+
+# 온보딩 auto-upload 위저드 Step3 STYLE_OPTIONS 라벨 → good_captions.md 카테고리 태그 매핑
+# (STYLE_OPTIONS: 힙/스트릿 바이브 · 클래식 프리미엄 · 친근한 동네 바버 · 감성/무드)
+_STYLE_TO_CAPTION_CATEGORY = {
+    "힙/스트릿 바이브": "humor",
+    "클래식 프리미엄": "expertise",
+    "친근한 동네 바버": "community",
+    "감성/무드": "narrative",
+}
+
+# brand_tone에 매칭되는 카테고리가 하나도 없을 때 사용할 무난한 기본 카테고리
+_DEFAULT_CAPTION_CATEGORIES = ["expertise", "community"]
+
+_CAPTION_CATEGORY_TAGS = {"narrative", "expertise", "humor", "community", "tips"}
+
+
+def _parse_good_captions_by_category(raw_text: str) -> dict:
+    """
+    good_captions.md를 '## N. tag — 설명' 레벨2 헤더 기준으로 섹션 분리.
+    known tag(narrative/expertise/humor/community/tips)로 시작하는 섹션만 인식하고,
+    그 외(사용법 표, '다음 단계' 안내 등 개발자용 메모)는 자동으로 제외됨.
+
+    반환: {tag: "헤더+본문 텍스트"}
+    """
+    sections = {}
+    parts = re.split(r'(?m)^(##\s+.*)$', raw_text)
+    # parts = [헤더 이전 텍스트, 헤더1, 본문1, 헤더2, 본문2, ...]
+    for i in range(1, len(parts) - 1, 2):
+        header = parts[i]
+        body = parts[i + 1] if i + 1 < len(parts) else ""
+        m = re.match(r'##\s*\d+\.\s*([a-zA-Z]+)', header)
+        if not m:
+            continue
+        tag = m.group(1).lower()
+        if tag in _CAPTION_CATEGORY_TAGS:
+            sections[tag] = (header + body).strip()
+    return sections
+
+
+def _select_good_captions(brand_tone_raw) -> str:
+    """
+    brand_tone(원본 리스트)과 good_captions.md 카테고리 태그가 겹치는 예시만 골라 반환.
+    최대 2개 카테고리까지만 (프롬프트 길이 + 톤 집중도 관리).
+    파싱 실패/매칭 실패 시엔 안전하게 파일 전체로 폴백 (기존 동작 유지, 파이프라인 중단 방지).
+    """
+    raw = _load_prompt_file("examples/good_captions.md")
+    if not raw:
+        return ""
+
+    sections = _parse_good_captions_by_category(raw)
+    if not sections:
+        print("[post_writer] good_captions.md 카테고리 파싱 실패 → 파일 전체로 폴백")
+        return _strip_comments(raw)
+
+    if isinstance(brand_tone_raw, str):
+        brand_tone_list = [brand_tone_raw]
+    else:
+        brand_tone_list = brand_tone_raw or []
+
+    matched_tags = []
+    for tone_value in brand_tone_list:
+        tag = _STYLE_TO_CAPTION_CATEGORY.get(tone_value)
+        if tag and tag not in matched_tags:
+            matched_tags.append(tag)
+
+    if not matched_tags:
+        matched_tags = [t for t in _DEFAULT_CAPTION_CATEGORIES if t in sections]
+        print(f"[post_writer] brand_tone 매칭 카테고리 없음 → 기본값 사용: {matched_tags}")
+    else:
+        print(f"[post_writer] good_captions 카테고리 선택 → {matched_tags} (brand_tone={brand_tone_list})")
+
+    matched_tags = matched_tags[:2]
+    selected = [sections[t] for t in matched_tags if t in sections]
+
+    if not selected:
+        print("[post_writer] good_captions 카테고리 매칭 완전 실패 → 파일 전체로 폴백")
+        return _strip_comments(raw)
+
+    return _strip_comments("\n\n".join(selected))
+
+
 # [메인] orchestrator에서 호출
 async def post_writer_agent(
     shop_id: str,
@@ -265,7 +359,9 @@ def _build_prompt(
     # 시스템 프롬프트 구성 — prompts/post_writer/system.md 에서 로드 후 치환
     # few-shot 예시(good/bad)는 examples/ 파일에서 주입
     # '#' 주석 줄은 파일 마커용이므로 프롬프트에서 제외 (예: 예시 비어있을 때)
-    good_captions = _strip_comments(_load_prompt_file("examples/good_captions.md"))
+    # [FIX 4] good_captions는 brand_tone과 매칭되는 톤 카테고리 1~2개만 선택 주입
+    # (원본 brand_settings에서 다시 조회 — 위에서 brand_tone 변수는 이미 문자열로 join됨)
+    good_captions = _select_good_captions(brand_settings.get("brand_tone", []))
     bad_captions  = _strip_comments(_load_prompt_file("examples/bad_captions.md"))
     good_block = f"{good_captions}\n\n" if good_captions else ""
     bad_block  = f"{bad_captions}\n\n"  if bad_captions  else ""
