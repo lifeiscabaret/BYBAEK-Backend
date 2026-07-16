@@ -8,6 +8,7 @@
 - web_search_agent 연결로 실시간 트렌드 반영
 """
 import json
+import re
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -208,8 +209,13 @@ async def generate_chat_stream(shop_id: str, message: str, photo_ids: List[str])
             system=system_prompt,
             messages=[{"role": "user", "content": user_prompt}]
         ) as stream:
-            for text in stream.text_stream:
-                yield text
+            full = "".join(stream.text_stream)  # 전체 수신 후 마크다운 펜스 제거
+
+        # Claude가 JSON을 ```json ... ``` 마크다운 펜스로 감싸는 경우 제거.
+        # (post_writer/orchestrator와 동일한 처리 — 프론트가 순수 JSON을 파싱하도록 보장)
+        cleaned = re.sub(r"^\s*```(?:json)?\s*", "", full.strip())
+        cleaned = re.sub(r"\s*```\s*$", "", cleaned)
+        yield cleaned
 
     except Exception as e:
         print(f"[custom_chat] 스트리밍 오류: {e}")
