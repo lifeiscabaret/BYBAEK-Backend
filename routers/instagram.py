@@ -250,7 +250,10 @@ async def publish_photos(ig_user_id: str, access_token: str,
         image_urls = image_urls[:10]
 
     # 비율 정규화 (범위 벗어난 사진만 크롭 후 임시 URL 생성)
-    normalized_urls = [await _normalize_aspect_ratio(url) for url in image_urls]
+    # [PERF] 이미지별 다운로드/크롭을 병렬 처리 (gather는 입력 순서 보존 → 캐러셀 순서 안전)
+    normalized_urls = list(await asyncio.gather(
+        *(_normalize_aspect_ratio(url) for url in image_urls)
+    ))
     temp_urls       = [u for u in normalized_urls if "temp_cropped/" in u]
 
     try:
@@ -262,10 +265,11 @@ async def publish_photos(ig_user_id: str, access_token: str,
             media_id = await publish_container(ig_user_id, creation_id, access_token)
             logger.info(f"[instagram] 단일 이미지 업로드 성공 → media_id={media_id}")
         else:
-            container_ids = [
-                await create_image_container(ig_user_id, access_token, url, is_carousel_item=True)
+            # [PERF] 캐러셀 아이템 컨테이너 생성을 병렬 처리 (gather 순서 보존 → children 순서 유지)
+            container_ids = list(await asyncio.gather(*(
+                create_image_container(ig_user_id, access_token, url, is_carousel_item=True)
                 for url in normalized_urls
-            ]
+            )))
             creation_id = await create_carousel_container(ig_user_id, access_token, container_ids, caption)
             await wait_until_ready(ig_user_id, creation_id, access_token)
             media_id = await publish_container(ig_user_id, creation_id, access_token)
