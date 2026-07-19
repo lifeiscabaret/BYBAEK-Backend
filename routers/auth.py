@@ -102,9 +102,12 @@ async def get_auth_status(shop_id: str):
     )
     is_insta_connected = bool(auth.get("insta_access_token"))
 
+    # 마이페이지 표시용 인스타 계정명 (연동 시 insta_analyzer가 저장해 둔 값을 읽기만 함).
+    # 미저장/미연동이면 null 폴백 — 여기서 Graph 호출은 하지 않음(빠르고 rate-limit 안전).
     return {
         "is_onedrive_connected": is_onedrive_connected,
         "is_insta_connected": is_insta_connected,
+        "instagram_username": auth.get("insta_username") if is_insta_connected else None,
     }
 
 
