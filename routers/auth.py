@@ -108,6 +108,9 @@ async def get_auth_status(shop_id: str):
         "is_onedrive_connected": is_onedrive_connected,
         "is_insta_connected": is_insta_connected,
         "instagram_username": auth.get("insta_username") if is_insta_connected else None,
+        # 마이페이지 표시용 MS 로그인 이메일. owner_email 우선, 없으면 /auth/me가 저장한 로그인 principal(name).
+        # shop_id 키 기준이라 test_barber_jiyeon 폴백 취약성 없음. Graph 호출 없음.
+        "email": auth.get("owner_email") or auth.get("name"),
     }
 
 
