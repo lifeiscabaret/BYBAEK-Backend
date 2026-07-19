@@ -53,6 +53,16 @@ async def analyze_instagram_history(shop_id: str) -> dict:
             print(f"[insta_analyzer] 인스타 인증 정보 없음 → 종료")
             return {}
 
+        # 인스타 계정 username/name 저장 (마이페이지 표시용).
+        # 게시물 유무·말투 분석 성공과 무관하게 먼저 저장하고, 실패해도 흐름에 영향 없음(에러 격리).
+        insta_profile = await _fetch_instagram_username(user_id, access_token)
+        if insta_profile.get("username"):
+            save_auth(shop_id, {
+                "insta_username": insta_profile.get("username"),
+                "insta_name":     insta_profile.get("name"),
+            })
+            print(f"[insta_analyzer] 인스타 계정명 저장 → @{insta_profile.get('username')}")
+
         posts = await _fetch_instagram_posts(user_id, access_token)
         if not posts:
             print(f"[insta_analyzer] 게시물 0개 수집 → 종료")
@@ -104,6 +114,26 @@ async def _fetch_instagram_posts(user_id: str, access_token: str) -> list:
     except Exception as e:
         print(f"[insta_analyzer] Instagram API 호출 에러: {e}")
         return []
+
+
+async def _fetch_instagram_username(user_id: str, access_token: str) -> dict:
+    """Instagram Graph API로 계정 username/name 조회 (마이페이지 표시용).
+
+    실패(토큰 만료·네트워크·API 오류) 시 {} 반환 → 저장/분석 흐름에 영향 없음.
+    [주의] fields를 최소로(username,name) 요청 — 필드를 많이 넣으면 Graph가 500을 냄.
+    """
+    url = f"https://graph.instagram.com/v25.0/{user_id}"
+    params = {"fields": "username,name", "access_token": access_token}
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(url, params=params)
+        if resp.status_code != 200:
+            print(f"[insta_analyzer] username 조회 실패 (status={resp.status_code})")
+            return {}
+        return resp.json()
+    except Exception as e:
+        print(f"[insta_analyzer] username 조회 에러: {e}")
+        return {}
 
 
 async def _analyze_with_gpt(posts: list) -> dict:
