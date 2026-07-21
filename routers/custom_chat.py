@@ -9,12 +9,13 @@
 """
 import json
 import re
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import List
 import anthropic
 
+from auth.token_verify import get_current_shop, require_shop_owner
 from utils.claude_auth import CLAUDE_BASE_URL, get_claude_token
 
 
@@ -223,7 +224,7 @@ async def generate_chat_stream(shop_id: str, message: str, photo_ids: List[str])
 
 
 @router.post("/manual_chat")
-async def manual_chat_agent(req: ManualChatRequest):
+async def manual_chat_agent(req: ManualChatRequest, current_shop: dict = Depends(get_current_shop)):
     """
     사장님 요청 → 트렌드 반영 캡션 스트리밍 생성
 
@@ -245,6 +246,7 @@ async def manual_chat_agent(req: ManualChatRequest):
         }
         ```
     """
+    require_shop_owner(current_shop, req.shop_id)
     return StreamingResponse(
         generate_chat_stream(req.shop_id, req.message, req.photo_ids),
         media_type="text/event-stream"

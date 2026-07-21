@@ -7,13 +7,14 @@
 - GET /api/agent/post/detail/{post_id}: 게시물 상세
 """
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import Optional, List
 from services.cosmos_db import get_post_by_shop
 from services.cosmos_db import save_draft
 from services.cosmos_db import save_post_data
 from services.cosmos_db import get_post_detail_data
+from auth.token_verify import get_current_shop, require_shop_owner
 from orchestrator_v2 import run_pipeline
 
 router = APIRouter()
@@ -60,7 +61,8 @@ class PostSaveRequest(BaseModel):
 
 
 @router.post("/run")
-async def agent_run(req: AgentRunRequest):
+async def agent_run(req: AgentRunRequest, current_shop: dict = Depends(get_current_shop)):
+    require_shop_owner(current_shop, req.shop_id)
     if req.trigger not in ("auto", "manual"):
         raise HTTPException(400, "trigger는 'auto' 또는 'manual'이어야 합니다.")
     try:
@@ -76,7 +78,8 @@ async def agent_run(req: AgentRunRequest):
 
 
 @router.post("/review")
-async def agent_review(req: AgentReviewRequest):
+async def agent_review(req: AgentReviewRequest, current_shop: dict = Depends(get_current_shop)):
+    require_shop_owner(current_shop, req.shop_id)
     if req.action not in ("ok", "edit", "cancel"):
         raise HTTPException(400, "action은 'ok', 'edit', 'cancel' 중 하나여야 합니다.")
 
@@ -97,13 +100,15 @@ async def agent_review(req: AgentReviewRequest):
 
 
 @router.get("/posts/{shop_id}")
-async def get_posts(shop_id: str):
+async def get_posts(shop_id: str, current_shop: dict = Depends(get_current_shop)):
+    require_shop_owner(current_shop, shop_id)
     posts = get_post_by_shop(shop_id)
     return {"posts": posts}
 
 
 @router.post("/save")
-async def save_post(req: PostSaveRequest):
+async def save_post(req: PostSaveRequest, current_shop: dict = Depends(get_current_shop)):
+    require_shop_owner(current_shop, req.shop_id)
     import uuid
     post_id = f"post_{uuid.uuid4().hex[:8]}"
     save_draft(
@@ -119,7 +124,8 @@ async def save_post(req: PostSaveRequest):
 
 
 @router.get("/post/detail/{post_id}")
-async def get_post_detail(post_id: str, shop_id: str):
+async def get_post_detail(post_id: str, shop_id: str, current_shop: dict = Depends(get_current_shop)):
+    require_shop_owner(current_shop, shop_id)
     post = get_post_detail_data(post_id, shop_id)
     if not post:
         raise HTTPException(status_code=404, detail="게시물을 찾을 수 없습니다.")
@@ -216,7 +222,8 @@ async def _handle_cancel(shop_id: str, post_id: str):
 
 
 @router.get("/metrics/{shop_id}")
-async def get_agent_metrics(shop_id: str):
+async def get_agent_metrics(shop_id: str, current_shop: dict = Depends(get_current_shop)):
+    require_shop_owner(current_shop, shop_id)
     try:
         from services.cosmos_db import get_cosmos_container
         container = get_cosmos_container("Post")

@@ -19,11 +19,12 @@
 
 import os
 import httpx
-from fastapi import APIRouter, HTTPException, BackgroundTasks, Request
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Request, Depends
 from fastapi.responses import StreamingResponse, Response
 from pydantic import BaseModel
 import uuid
 from typing import List
+from auth.token_verify import get_current_shop, require_shop_owner
 from services.cosmos_db import get_all_photos_by_shop
 from services.cosmos_db import get_photos_by_album
 from services.cosmos_db import get_album_list
@@ -91,7 +92,8 @@ def get_proxy_url(photo_id: str, shop_id: str) -> str:
 
 
 @router.get("/all/{shop_id}")
-async def read_all_photos(shop_id: str):
+async def read_all_photos(shop_id: str, current_shop: dict = Depends(get_current_shop)):
+    require_shop_owner(current_shop, shop_id)
     all_photos = get_all_photos_by_shop(shop_id)
     photos = [p for p in all_photos if p.get("is_usable") is True]
     for p in photos:
@@ -101,7 +103,8 @@ async def read_all_photos(shop_id: str):
 
 
 @router.get("/albums/{shop_id}")
-async def read_albums(shop_id: str):
+async def read_albums(shop_id: str, current_shop: dict = Depends(get_current_shop)):
+    require_shop_owner(current_shop, shop_id)
     albums = get_album_list(shop_id)
     for a in albums:
         if a.get("thumbnail_url"):
@@ -110,7 +113,8 @@ async def read_albums(shop_id: str):
 
 
 @router.get("/albums/{shop_id}/{album_id}")
-async def read_album_photos(shop_id: str, album_id: str):
+async def read_album_photos(shop_id: str, album_id: str, current_shop: dict = Depends(get_current_shop)):
+    require_shop_owner(current_shop, shop_id)
     photos = get_photos_by_album(shop_id, album_id)
     for p in photos:
         if p.get("blob_url"):
@@ -119,7 +123,8 @@ async def read_album_photos(shop_id: str, album_id: str):
 
 
 @router.post("/albums")
-async def create_album(req: AlbumCreateRequest):
+async def create_album(req: AlbumCreateRequest, current_shop: dict = Depends(get_current_shop)):
+    require_shop_owner(current_shop, req.shop_id)
     photo_list = [{"photo_id": pid} for pid in req.photo_ids]
     actual_album_id = req.album_id
     if not actual_album_id or actual_album_id == "new":
@@ -137,7 +142,8 @@ async def create_album(req: AlbumCreateRequest):
 
 
 @router.post("/filter", response_model=FilterTriggerResponse)
-async def trigger_photo_filter(req: FilterTriggerRequest, background_tasks: BackgroundTasks):
+async def trigger_photo_filter(req: FilterTriggerRequest, background_tasks: BackgroundTasks, current_shop: dict = Depends(get_current_shop)):
+    require_shop_owner(current_shop, req.shop_id)
     try:
         all_photos = get_all_photos_by_shop(req.shop_id)
         if req.force_refilter:
@@ -168,7 +174,8 @@ async def trigger_photo_filter(req: FilterTriggerRequest, background_tasks: Back
 
 
 @router.get("/status/{shop_id}", response_model=FilterStatusResponse)
-async def get_filter_status(shop_id: str):
+async def get_filter_status(shop_id: str, current_shop: dict = Depends(get_current_shop)):
+    require_shop_owner(current_shop, shop_id)
     try:
         all_photos = get_all_photos_by_shop(shop_id)
         if not all_photos:
@@ -228,7 +235,8 @@ async def proxy_photo(shop_id: str, photo_id: str, request: Request):
 
 
 @router.delete("/albums/{shop_id}/{album_id}")
-async def delete_album(shop_id: str, album_id: str):
+async def delete_album(shop_id: str, album_id: str, current_shop: dict = Depends(get_current_shop)):
+    require_shop_owner(current_shop, shop_id)
     success = delete_album_data(shop_id, album_id)
     if not success:
         raise HTTPException(status_code=500, detail="앨범 삭제 중 오류가 발생했습니다.")
@@ -236,7 +244,8 @@ async def delete_album(shop_id: str, album_id: str):
 
 
 @router.delete("/{shop_id}/{photo_id}")
-async def delete_photo(shop_id: str, photo_id: str):
+async def delete_photo(shop_id: str, photo_id: str, current_shop: dict = Depends(get_current_shop)):
+    require_shop_owner(current_shop, shop_id)
     success = delete_photo_data(shop_id, photo_id)
     if not success:
         raise HTTPException(status_code=500, detail="사진 삭제 중 오류가 발생했습니다.")
@@ -244,7 +253,8 @@ async def delete_photo(shop_id: str, photo_id: str):
 
 
 @router.post("/filter/test/{shop_id}")
-async def test_filter_sync(shop_id: str):
+async def test_filter_sync(shop_id: str, current_shop: dict = Depends(get_current_shop)):
+    require_shop_owner(current_shop, shop_id)
     try:
         from agents.photo_filter import run_photo_filter
         all_photos = get_all_photos_by_shop(shop_id)
