@@ -5,11 +5,12 @@ import uuid
 from typing import Optional
 
 import httpx
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, status, Depends
 from PIL import Image
 from pydantic import BaseModel, HttpUrl
 from azure.storage.blob import BlobServiceClient, ContentSettings
 from utils.logging import logger
+from auth.token_verify import get_current_shop
 
 router = APIRouter()
 
@@ -285,7 +286,9 @@ async def publish_photos(ig_user_id: str, access_token: str,
 
 @router.post("/upload", response_model=InstagramPhotoPublishResponse,
              status_code=status.HTTP_201_CREATED)
-async def upload(req: InstagramPhotoPublishRequest):
+async def upload(req: InstagramPhotoPublishRequest, current_shop: dict = Depends(get_current_shop)):
+    # 이 엔드포인트 바디에는 shop_id가 없어 소유권 대조는 불가하나,
+    # 로그인(유효 토큰)은 필수로 요구해 익명 호출을 차단한다.
     # SAS URL 변환 제거 - _normalize_aspect_ratio 내부에서 처리
     media_id = await publish_photos(
         ig_user_id=req.user_id,
