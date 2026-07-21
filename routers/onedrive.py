@@ -25,10 +25,11 @@ from typing import Dict, List, Optional
 import msal
 import requests
 from azure.storage.queue import QueueClient
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, HTTPException, Request, status, Depends
 from pydantic import BaseModel
 
 from utils.logging import logger
+from auth.token_verify import get_current_shop
 from services.cosmos_db import update_shop_onedrive_info
 
 
@@ -285,18 +286,23 @@ async def sync_photos_internal(shop_id: str) -> dict:
 # ──────────────────────────────────────────
 
 @router.post("/sync-photos", response_model=SyncPhotosResponse)
-def sync_onedrive_photos(req: SyncPhotosRequest, request: Request) -> SyncPhotosResponse:
+def sync_onedrive_photos(req: SyncPhotosRequest, request: Request,
+                         current_shop: dict = Depends(get_current_shop)) -> SyncPhotosResponse:
     """
     OneDrive 동기화 엔드포인트.
     변경된 사진 목록을 수집해 큐에 등록하고 즉시 응답.
     실제 업로드/필터링은 photo_queue_worker.py가 처리.
+
+    인증: 신원/소유권은 백엔드 자체 발급 토큰(current_shop)으로 확정한다.
+    단, Graph 호출용 위임 토큰(x-ms-token-aad-access-token)은 Easy Auth 헤더로 별도로 받아야 한다.
     """
     try:
         token = request.headers.get("x-ms-token-aad-access-token")
         if not token:
             raise HTTPException(status_code=401, detail="MS 로그인 필요.")
 
-        shop_id = request.headers.get("X-MS-CLIENT-PRINCIPAL-ID", "unknown")
+        # shop_id는 헤더의 "unknown" 폴백이 아니라 검증된 토큰에서 취한다.
+        shop_id = current_shop["shop_id"]
 
         from services.cosmos_db import get_auth
         shop_data = get_auth(shop_id)

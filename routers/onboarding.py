@@ -9,12 +9,13 @@
 - brand_tone_emoji 값을 feed_style.emoji_usage로도 함께 저장 (기존엔 brand_tone 배열에만 합쳐졌음)
 """
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, EmailStr
 from typing import List, Optional
 # from datetime import datetime
 from services.cosmos_db import save_onboarding as save_onboarding_db
 from services.cosmos_db import get_onboarding as get_onboarding_db
+from auth.token_verify import get_current_shop, require_shop_owner
 from agents.insta_analyzer import analyze_instagram_history
 
 router = APIRouter()
@@ -26,7 +27,8 @@ class ReferencePhotoRequest(BaseModel):
     label: str = "good"    # "good" 고정 (나쁜 예시는 없음)
 
 @router.post("/reference")
-async def save_reference_photos(req: ReferencePhotoRequest):
+async def save_reference_photos(req: ReferencePhotoRequest, current_shop: dict = Depends(get_current_shop)):
+    require_shop_owner(current_shop, req.shop_id)
     """
     온보딩 단계에서 사장님이 선택한 레퍼런스 사진 3장을 저장합니다.
 
@@ -172,8 +174,9 @@ class OnboardingRequest(BaseModel):
         }
 
 @router.post("/{shop_id}/reanalyze")
-async def reanalyze_insta_style(shop_id: str):
+async def reanalyze_insta_style(shop_id: str, current_shop: dict = Depends(get_current_shop)):
     """인스타 과거 게시물 재분석 → insta_style_profile 갱신 (수동 트리거)"""
+    require_shop_owner(current_shop, shop_id)
     try:
         result = await analyze_instagram_history(shop_id)
         if result:
@@ -185,10 +188,11 @@ async def reanalyze_insta_style(shop_id: str):
 
 
 @router.post("/{shop_id}")
-async def save_onboarding_api(shop_id: str, data: OnboardingRequest):
+async def save_onboarding_api(shop_id: str, data: OnboardingRequest, current_shop: dict = Depends(get_current_shop)):
     """
     온보딩 데이터 저장
     """
+    require_shop_owner(current_shop, shop_id)
     # Pydantic 모델을 dict로 변환 (None 값 제외)
     data_dict = data.model_dump(exclude_none=True)
 
@@ -243,10 +247,11 @@ async def save_onboarding_api(shop_id: str, data: OnboardingRequest):
 
 
 @router.get("/{shop_id}")
-async def get_onboarding_api(shop_id: str):
+async def get_onboarding_api(shop_id: str, current_shop: dict = Depends(get_current_shop)):
     """
     온보딩 데이터 조회
     """
+    require_shop_owner(current_shop, shop_id)
     result = get_onboarding_db(shop_id)
 
     if not result:

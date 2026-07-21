@@ -1,8 +1,9 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from datetime import datetime, timedelta, timezone
 import logging
 
+from auth.token_verify import get_current_shop, require_shop_owner
 from services.cosmos_db import get_shop_info, update_schedule_settings
 
 router = APIRouter()
@@ -17,10 +18,11 @@ class ScheduleUpdate(BaseModel):
 
 
 @router.get("/{shop_id}")
-async def get_schedule(shop_id: str):
+async def get_schedule(shop_id: str, current_shop: dict = Depends(get_current_shop)):
     """
     [조회] 사장님이 설정한 인스타 자동 업로드 시간 및 다음 실행 예정 시간 확인
     """
+    require_shop_owner(current_shop, shop_id)
     try:
         shop_info = get_shop_info(shop_id)
 
@@ -46,10 +48,11 @@ async def get_schedule(shop_id: str):
 
 
 @router.post("/{shop_id}/update")
-async def update_schedule(shop_id: str, req: ScheduleUpdate):
+async def update_schedule(shop_id: str, req: ScheduleUpdate, current_shop: dict = Depends(get_current_shop)):
     """
     [수정] 사장님이 앱에서 업로드 예약 시간을 변경할 때 호출
     """
+    require_shop_owner(current_shop, shop_id)
     try:
         success = update_schedule_settings(
             shop_id=shop_id,
