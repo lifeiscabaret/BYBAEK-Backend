@@ -47,6 +47,23 @@ def issue_token(shop_id: str) -> str:
     return jwt.encode(payload, _get_secret(), algorithm=JWT_ALGORITHM)
 
 
+def sign_short_lived(payload: dict, ttl_seconds: int) -> str:
+    """임의의 dict를 짧은 수명 JWT로 서명. OAuth flow 상태를 쿠키에 안전하게 담을 때 사용."""
+    now = datetime.now(timezone.utc)
+    body = {
+        "data": payload,
+        "iat": int(now.timestamp()),
+        "exp": int((now + timedelta(seconds=ttl_seconds)).timestamp()),
+    }
+    return jwt.encode(body, _get_secret(), algorithm=JWT_ALGORITHM)
+
+
+def verify_short_lived(token: str) -> dict:
+    """sign_short_lived로 만든 토큰을 검증하고 원래 dict를 반환. 실패 시 JWTError."""
+    body = jwt.decode(token, _get_secret(), algorithms=[JWT_ALGORITHM])
+    return body.get("data") or {}
+
+
 def _extract_bearer(request: Request) -> str:
     header = request.headers.get("Authorization") or request.headers.get("authorization")
     if not header or not header.lower().startswith("bearer "):
