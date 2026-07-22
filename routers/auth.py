@@ -6,8 +6,13 @@ import os
 import json
 import html
 import requests
+import msal
+from jose import JWTError
 from services.cosmos_db import save_auth, get_auth
-from auth.token_verify import issue_token, get_current_shop, require_shop_owner
+from auth.token_verify import (
+    issue_token, get_current_shop, require_shop_owner,
+    sign_short_lived, verify_short_lived,
+)
 from agents.insta_analyzer import analyze_instagram_history
 import logging
 from datetime import datetime
@@ -15,24 +20,50 @@ from fastapi.responses import RedirectResponse, HTMLResponse
 
 router = APIRouter()
 
+# ── 백엔드 자체 소유 OAuth (Authorization Code) 설정 ──
+# Easy Auth 의 OAuth 왕복을 우리가 대체한다. response_mode=query(GET 콜백) +
+# first-party SameSite=Lax 쿠키로 flow 상태를 나르므로, Easy Auth 가 form_post
+# 콜백에 쓰던 SameSite=None Nonce 쿠키(시크릿창에서 서드파티로 차단)를 피한다.
+MS_AUTHORITY = "https://login.microsoftonline.com/common"  # 개인 MS 계정 포함 → 반드시 /common
+MS_LOGIN_SCOPES = ["Files.Read"]  # OneDrive 워커 호환 (openid/profile/offline_access 는 MSAL 자동 추가)
+FLOW_COOKIE = "ms_auth_flow"
+FLOW_TTL_SECONDS = 600  # 로그인 개시~콜백 허용 시간 (10분)
+
+
 class InstagramLoginRequest(BaseModel):
     code: str
 
 
-def _establish_identity(request: Request) -> dict:
-    """Easy Auth 헤더로 신원을 확인하고, Shop 문서를 갱신한 뒤 자체 발급 토큰을 반환.
+def _build_msal_app() -> msal.ConfidentialClientApplication:
+    """OneDrive 워커(_acquire_graph_token_from_refresh)와 동일한 앱/authority 구성.
+    그래야 여기서 받은 refresh_token 을 워커가 그대로 갱신에 쓸 수 있다."""
+    client_id = os.getenv("AZURE_CLIENT_ID")
+    client_secret = os.getenv("AZURE_CLIENT_SECRET")
+    if not client_id or not client_secret:
+        logger.error("[auth] AZURE_CLIENT_ID/SECRET 미설정 — OAuth 로그인 불가")
+        raise HTTPException(status_code=500, detail="서버 인증 설정 오류")
+    return msal.ConfidentialClientApplication(
+        client_id=client_id,
+        authority=MS_AUTHORITY,
+        client_credential=client_secret,
+    )
 
-    Easy Auth 가 주입하는 헤더(X-MS-CLIENT-PRINCIPAL-ID 등)는 팝업이 착지한
-    same-origin(api2...) 컨텍스트에서만 신뢰 가능하다. 헤더가 없으면 401.
-    반환: {"shop_id", "is_new", "access_token"}
-    """
-    ms_user_id   = request.headers.get("X-MS-CLIENT-PRINCIPAL-ID")
-    ms_user_name = request.headers.get("X-MS-CLIENT-PRINCIPAL-NAME")
 
-    # Easy Auth 로 신원 확인에 실패하면 여기서 끝. 기본 계정 폴백 없음.
-    if not ms_user_id:
-        raise HTTPException(status_code=401, detail="로그인이 필요합니다")
+def _oauth_redirect_uri() -> str:
+    """App Registration 에 등록된 값과 정확히 일치해야 한다."""
+    return os.getenv(
+        "OAUTH_REDIRECT_URI",
+        "https://api2.bybaekofficial.com/api/auth/callback",
+    )
 
+
+def _frontend_origin() -> str:
+    return os.getenv("FRONTEND_URL", "http://localhost:3000")
+
+
+def _persist_and_issue(ms_user_id: str, ms_user_name: str, refresh_token: str = None) -> dict:
+    """신원(shop_id=oid)으로 Shop 문서를 갱신하고 자체 발급 토큰을 반환.
+    Easy Auth 헤더 경로와 자체 OAuth 경로가 공유하는 최종 단계."""
     current_time = datetime.utcnow().isoformat()
     existing_user = get_auth(ms_user_id)
 
@@ -41,11 +72,7 @@ def _establish_identity(request: Request) -> dict:
         "last_login_at":   current_time,
         "is_ms_connected": True,
     }
-
-    # ── refresh_token 저장 ──
-    # Worker가 OneDrive 파일 다운로드 시 토큰 만료 문제 해결용.
-    # Easy Auth 설정에서 offline_access 스코프 필요.
-    refresh_token = request.headers.get("x-ms-token-aad-refresh-token")
+    # refresh_token: Worker 가 OneDrive 파일 다운로드용 Graph 토큰 갱신에 사용.
     if refresh_token:
         auth_data["refresh_token"] = refresh_token
 
@@ -56,10 +83,7 @@ def _establish_identity(request: Request) -> dict:
         logging.info(f"기존 유저 로그인: {ms_user_id}")
 
     save_auth(ms_user_id, auth_data)
-
-    # 신원 확인 성공 → 이후 API 호출용 백엔드 자체 발급 토큰 발행.
     access_token = issue_token(ms_user_id)
-
     return {
         "shop_id": ms_user_id,
         "is_new": not existing_user,
@@ -67,33 +91,26 @@ def _establish_identity(request: Request) -> dict:
     }
 
 
-@router.get("/ms/callback")
-async def ms_callback(request: Request):
-    """로그인 팝업이 Easy Auth 인증을 마치고 착지하는 same-origin(api2...) 페이지.
+def _establish_identity(request: Request) -> dict:
+    """Easy Auth 헤더로 신원을 확인하고 자체 발급 토큰을 반환 (레거시/전환기 경로).
 
-    여기서 서버사이드로 Easy Auth 쿠키/헤더를 읽어 토큰을 발급하고,
-    opener(실제 앱 탭)에 postMessage 로 전달한 뒤 팝업을 닫는다.
-    opener 가 별도로 /auth/me 를 크로스오리진으로 호출할 필요가 없어져
-    로그인 전 과정에서 크로스오리진 쿠키를 읽어야 하는 지점이 사라진다.
+    Easy Auth 가 주입하는 헤더(X-MS-CLIENT-PRINCIPAL-ID 등)는 same-origin(api2...)
+    컨텍스트에서만 신뢰 가능. 헤더가 없으면 401 — 기본 계정 폴백 없음.
     """
-    target_origin = os.getenv("FRONTEND_URL", "http://localhost:3000")
-    try:
-        identity = _establish_identity(request)
-        payload = {
-            "type": "MS_LOGIN_SUCCESS",
-            "shop_id": identity["shop_id"],
-            "is_new": identity["is_new"],
-            "access_token": identity["access_token"],
-        }
-        status_msg = "로그인 성공. 창을 닫는 중…"
-    except HTTPException as e:
-        payload = {"type": "MS_LOGIN_ERROR", "detail": str(e.detail)}
-        status_msg = "로그인에 실패했습니다. 이 창을 닫고 다시 시도해주세요."
+    ms_user_id   = request.headers.get("X-MS-CLIENT-PRINCIPAL-ID")
+    ms_user_name = request.headers.get("X-MS-CLIENT-PRINCIPAL-NAME")
+    if not ms_user_id:
+        raise HTTPException(status_code=401, detail="로그인이 필요합니다")
+    refresh_token = request.headers.get("x-ms-token-aad-refresh-token")
+    return _persist_and_issue(ms_user_id, ms_user_name, refresh_token)
 
-    # 값은 JSON 으로 안전하게 직렬화해 스크립트 컨텍스트 이탈을 방지.
+
+def _popup_message_html(payload: dict, target_origin: str, status_msg: str) -> str:
+    """opener 로 postMessage 후 자동으로 닫히는 팝업 페이지.
+    값은 JSON 직렬화 + 메시지는 html escape 로 스크립트 이탈을 방지."""
     payload_json = json.dumps(payload)
     origin_json = json.dumps(target_origin)
-    page = f"""<!doctype html><html lang="ko"><head><meta charset="utf-8">
+    return f"""<!doctype html><html lang="ko"><head><meta charset="utf-8">
 <title>로그인 처리 중</title></head><body>
 <p>{html.escape(status_msg)}</p>
 <script>
@@ -109,7 +126,110 @@ async def ms_callback(request: Request):
   }})();
 </script>
 </body></html>"""
-    return HTMLResponse(content=page)
+
+
+@router.get("/login")
+async def ms_login():
+    """자체 OAuth 로그인 개시. 팝업이 이 경로를 열면 Microsoft 인증 페이지로 리다이렉트.
+
+    Easy Auth 의 /.auth/login/aad 를 대체한다. flow 상태(state/nonce/PKCE)는
+    first-party SameSite=Lax; Secure; HttpOnly 쿠키에 서명해 담는다 —
+    콜백이 top-level GET(response_mode=query)이라 Lax 쿠키가 정상 전송되고,
+    시크릿창에서도 first-party 라 차단되지 않는다.
+    """
+    msal_app = _build_msal_app()
+    flow = msal_app.initiate_auth_code_flow(
+        scopes=MS_LOGIN_SCOPES,
+        redirect_uri=_oauth_redirect_uri(),
+        response_mode="query",
+    )
+    auth_uri = flow.get("auth_uri")
+    if not auth_uri:
+        raise HTTPException(status_code=500, detail="로그인 개시 실패")
+
+    # 쿠키에는 auth_uri(대용량) 제외한 flow 만 서명해 저장.
+    flow_to_store = {k: v for k, v in flow.items() if k != "auth_uri"}
+    flow_token = sign_short_lived(flow_to_store, FLOW_TTL_SECONDS)
+
+    resp = RedirectResponse(url=auth_uri)
+    resp.set_cookie(
+        key=FLOW_COOKIE,
+        value=flow_token,
+        max_age=FLOW_TTL_SECONDS,
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        path="/api/auth",
+    )
+    return resp
+
+
+@router.get("/callback")
+async def ms_login_callback(request: Request):
+    """Microsoft 인증 후 착지하는 same-origin(api2...) 콜백.
+
+    쿠키의 flow 와 쿼리스트링(code/state)을 MSAL 로 교환해 신원을 확인하고,
+    자체 발급 토큰을 opener 로 postMessage 한 뒤 팝업을 닫는다.
+    """
+    target_origin = _frontend_origin()
+    try:
+        flow_token = request.cookies.get(FLOW_COOKIE)
+        if not flow_token:
+            raise HTTPException(status_code=400, detail="로그인 세션이 만료되었거나 쿠키가 차단되었습니다")
+        try:
+            flow = verify_short_lived(flow_token)
+        except JWTError:
+            raise HTTPException(status_code=400, detail="로그인 세션이 유효하지 않습니다")
+
+        msal_app = _build_msal_app()
+        result = msal_app.acquire_token_by_auth_code_flow(flow, dict(request.query_params))
+        if "error" in result:
+            logger.error(f"[auth] 토큰 교환 실패: {result.get('error')} / {result.get('error_description')}")
+            raise HTTPException(status_code=400, detail="Microsoft 인증에 실패했습니다")
+
+        claims = result.get("id_token_claims", {}) or {}
+        # shop_id 는 Easy Auth 의 X-MS-CLIENT-PRINCIPAL-ID 와 동일한 AAD oid.
+        ms_user_id = claims.get("oid") or claims.get("sub")
+        if not ms_user_id:
+            raise HTTPException(status_code=400, detail="사용자 식별자를 확인할 수 없습니다")
+        ms_user_name = claims.get("preferred_username") or claims.get("email") or claims.get("name")
+
+        identity = _persist_and_issue(ms_user_id, ms_user_name, result.get("refresh_token"))
+        payload = {
+            "type": "MS_LOGIN_SUCCESS",
+            "shop_id": identity["shop_id"],
+            "is_new": identity["is_new"],
+            "access_token": identity["access_token"],
+        }
+        status_msg = "로그인 성공. 창을 닫는 중…"
+    except HTTPException as e:
+        payload = {"type": "MS_LOGIN_ERROR", "detail": str(e.detail)}
+        status_msg = "로그인에 실패했습니다. 이 창을 닫고 다시 시도해주세요."
+
+    resp = HTMLResponse(content=_popup_message_html(payload, target_origin, status_msg))
+    resp.delete_cookie(FLOW_COOKIE, path="/api/auth")
+    return resp
+
+
+@router.get("/ms/callback")
+async def ms_callback(request: Request):
+    """[레거시] Easy Auth 로그인 팝업 착지 경로. Easy Auth 헤더가 있으면 토큰을 발급해
+    postMessage 한다. 자체 OAuth 로 전환하면(/login, /callback) 이 경로는 불필요해진다."""
+    target_origin = _frontend_origin()
+    try:
+        identity = _establish_identity(request)
+        payload = {
+            "type": "MS_LOGIN_SUCCESS",
+            "shop_id": identity["shop_id"],
+            "is_new": identity["is_new"],
+            "access_token": identity["access_token"],
+        }
+        status_msg = "로그인 성공. 창을 닫는 중…"
+    except HTTPException as e:
+        payload = {"type": "MS_LOGIN_ERROR", "detail": str(e.detail)}
+        status_msg = "로그인에 실패했습니다. 이 창을 닫고 다시 시도해주세요."
+    return HTMLResponse(content=_popup_message_html(payload, target_origin, status_msg))
+
 
 @router.get("/instagram")
 async def instagram_business_login(code: str, res: Response, fast_req: Request):
