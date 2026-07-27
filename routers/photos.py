@@ -32,7 +32,8 @@ from services.cosmos_db import save_album
 from services.cosmos_db import delete_album_data
 from services.cosmos_db import delete_photo_data
 from datetime import datetime, timedelta, timezone
-from azure.storage.blob import generate_blob_sas, BlobSasPermissions
+from azure.storage.blob import generate_blob_sas, BlobSasPermissions, BlobServiceClient
+from utils.logging import logger
 
 router = APIRouter()
 
@@ -70,20 +71,32 @@ class AlbumCreateRequest(BaseModel):
 
 
 def _to_sas_url(blob_url: str, hours: int = 2) -> str:
+    """bare blob URL → 읽기 SAS URL.
+
+    계정 키는 AZURE_STORAGE_CONNECTION_STRING 에서 도출한다.
+    (예전엔 미설정 env AZURE_STORAGE_KEY 를 써서 항상 except→bare 폴백되고 있었음)
+    컨테이너 비공개 전환 후 이 함수가 실패하면 이미지가 깨지므로, 실패는 경고 로그로 드러낸다.
+    """
     try:
         clean_url = blob_url.split("?")[0]
-        path = clean_url.replace("https://bybaekstore1.blob.core.windows.net/", "")
+        blob_service = BlobServiceClient.from_connection_string(
+            os.getenv("AZURE_STORAGE_CONNECTION_STRING")
+        )
+        account_name = blob_service.account_name
+        account_key = blob_service.credential.account_key
+        path = clean_url.split(".blob.core.windows.net/", 1)[1]
         container, blob_name = path.split("/", 1)
         sas_token = generate_blob_sas(
-            account_name="bybaekstore1",
+            account_name=account_name,
             container_name=container,
             blob_name=blob_name,
-            account_key=os.getenv("AZURE_STORAGE_KEY"),
+            account_key=account_key,
             permission=BlobSasPermissions(read=True),
             expiry=datetime.now(timezone.utc) + timedelta(hours=hours),
         )
         return f"{clean_url}?{sas_token}"
-    except Exception:
+    except Exception as e:
+        logger.warning(f"[photos] SAS 생성 실패 → bare URL 반환 ({blob_url}): {e}")
         return blob_url
 
 

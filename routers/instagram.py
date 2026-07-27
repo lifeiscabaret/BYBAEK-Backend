@@ -56,7 +56,7 @@ async def _normalize_aspect_ratio(blob_url: str) -> str:
         img = Image.open(io.BytesIO(resp.content)).convert("RGB")
     except Exception as e:
         logger.warning(f"[instagram] 이미지 다운로드 실패 ({blob_url}): {e} → 원본 사용")
-        return blob_url
+        return _generate_sas_url(blob_url)
 
     w, h = img.size
     ratio = w / h
@@ -64,7 +64,7 @@ async def _normalize_aspect_ratio(blob_url: str) -> str:
 
     if INSTA_MIN_RATIO <= ratio <= INSTA_MAX_RATIO:
         logger.info(f"[instagram] 비율 정상 → 원본 사용")
-        return blob_url
+        return _generate_sas_url(blob_url)
 
     # 크롭 목표 비율 결정
     if ratio < INSTA_MIN_RATIO:
@@ -108,11 +108,11 @@ async def _normalize_aspect_ratio(blob_url: str) -> str:
 
         new_url = f"https://bybaekstore1.blob.core.windows.net/{container_name}/{temp_blob_name}"
         logger.info(f"[instagram] 크롭 이미지 업로드 완료 → {new_url}")
-        return new_url
+        return _generate_sas_url(new_url)
 
     except Exception as e:
         logger.warning(f"[instagram] 크롭 이미지 업로드 실패 ({e}) → 원본 사용")
-        return blob_url
+        return _generate_sas_url(blob_url)
 
 
 def _cleanup_temp_blobs(urls: list[str]):

@@ -511,15 +511,13 @@ async def _auto_upload_instagram(shop_id, post_id, post_draft, selected_photos):
         cta          = post_draft.get("cta", "")
         full_caption = (caption + "\n\n" + " ".join(hashtags) + "\n" + cta).strip()
 
-        # [현재] Blob Storage 공개 설정 → blob_url 직접 사용 (SAS 파라미터 제거)
+        # Instagram(외부)이 직접 fetch하므로, 비공개 컨테이너 대비 SAS URL로 전달한다.
+        # (예전엔 split("?")[0]로 SAS를 벗겨 bare URL을 넘겼고, 공개 컨테이너에 의존했음)
+        from routers.photos import _to_sas_url
         image_urls = [
-            p["blob_url"].split("?")[0]
+            _to_sas_url(p["blob_url"])
             for p in selected_photos if p.get("blob_url")
         ]
-
-        # Blob 비공개 전환 시 아래 proxy 방식으로 교체 -> proxy 방식 실패, 다시 blo으로 전환
-        # from routers.photos import get_proxy_url
-        # image_urls = [get_proxy_url(p.get("id"), shop_id) for p in selected_photos if p.get("id")]
 
         if not image_urls:
             print("[orchestrator_v2] 업로드할 이미지 없음")
