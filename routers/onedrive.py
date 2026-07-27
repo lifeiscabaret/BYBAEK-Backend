@@ -25,7 +25,7 @@ from typing import Dict, List, Optional
 import msal
 import requests
 from azure.storage.queue import QueueClient
-from fastapi import APIRouter, HTTPException, Request, status, Depends
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 
 from utils.logging import logger
@@ -286,7 +286,7 @@ async def sync_photos_internal(shop_id: str) -> dict:
 # ──────────────────────────────────────────
 
 @router.post("/sync-photos", response_model=SyncPhotosResponse)
-def sync_onedrive_photos(req: SyncPhotosRequest, request: Request,
+def sync_onedrive_photos(req: SyncPhotosRequest,
                          current_shop: dict = Depends(get_current_shop)) -> SyncPhotosResponse:
     """
     OneDrive 동기화 엔드포인트.
@@ -294,19 +294,23 @@ def sync_onedrive_photos(req: SyncPhotosRequest, request: Request,
     실제 업로드/필터링은 photo_queue_worker.py가 처리.
 
     인증: 신원/소유권은 백엔드 자체 발급 토큰(current_shop)으로 확정한다.
-    단, Graph 호출용 위임 토큰(x-ms-token-aad-access-token)은 Easy Auth 헤더로 별도로 받아야 한다.
+    Graph 위임 토큰은 더 이상 Easy Auth 헤더(x-ms-token-aad-access-token)에서 받지 않는다.
+    Bearer 마이그레이션으로 프론트가 /.auth/me 를 호출하지 않게 되어 그 헤더가 사라졌기 때문에,
+    로그인 시 저장된 refresh_token 으로 Graph 토큰을 자체 발급한다(sync_photos_internal 과 동일 패턴).
     """
     try:
-        token = request.headers.get("x-ms-token-aad-access-token")
-        if not token:
-            raise HTTPException(status_code=401, detail="MS 로그인 필요.")
-
-        # shop_id는 헤더의 "unknown" 폴백이 아니라 검증된 토큰에서 취한다.
+        # shop_id는 검증된 Bearer 토큰에서 취한다.
         shop_id = current_shop["shop_id"]
 
         from services.cosmos_db import get_auth
-        shop_data = get_auth(shop_id)
-        delta_link = shop_data.get("one_delta_link") if shop_data else None
+        shop_data = get_auth(shop_id) or {}
+
+        refresh_token = shop_data.get("refresh_token") or shop_data.get("one_refresh_token")
+        if not refresh_token:
+            raise HTTPException(status_code=401, detail="OneDrive 재연동이 필요합니다 (refresh_token 없음).")
+
+        token = _acquire_graph_token_from_refresh(refresh_token)
+        delta_link = shop_data.get("one_delta_link")
 
         result = _run_photo_sync(shop_id, token, delta_link)
         return SyncPhotosResponse(**result)
