@@ -15,6 +15,7 @@ from services.cosmos_db import save_draft
 from services.cosmos_db import save_post_data
 from services.cosmos_db import get_post_detail_data
 from auth.token_verify import get_current_shop, require_shop_owner
+from routers.photos import _to_sas_url
 from orchestrator_v2 import run_pipeline
 
 router = APIRouter()
@@ -72,6 +73,9 @@ async def agent_run(req: AgentRunRequest, current_shop: dict = Depends(get_curre
             photo_ids=req.photo_ids,
             message=req.message
         )
+        # 프론트로 내려가는 photo_urls는 비공개 컨테이너 대비 SAS로 래핑
+        if isinstance(result, dict) and result.get("photo_urls"):
+            result["photo_urls"] = [_to_sas_url(u) for u in result["photo_urls"] if u]
         return result
     except Exception as e:
         raise HTTPException(500, f"에이전트 실행 실패: {str(e)}")
@@ -103,6 +107,11 @@ async def agent_review(req: AgentReviewRequest, current_shop: dict = Depends(get
 async def get_posts(shop_id: str, current_shop: dict = Depends(get_current_shop)):
     require_shop_owner(current_shop, shop_id)
     posts = get_post_by_shop(shop_id)
+    # 썸네일은 비공개 컨테이너 대비 SAS로 래핑 (placeholder.com 등 외부 URL은 그대로)
+    for p in posts:
+        t = p.get("thumbnail_url")
+        if t and "blob.core.windows.net" in t:
+            p["thumbnail_url"] = _to_sas_url(t)
     return {"posts": posts}
 
 
@@ -129,6 +138,15 @@ async def get_post_detail(post_id: str, shop_id: str, current_shop: dict = Depen
     post = get_post_detail_data(post_id, shop_id)
     if not post:
         raise HTTPException(status_code=404, detail="게시물을 찾을 수 없습니다.")
+    # 비공개 컨테이너 대비 blob URL들을 SAS로 래핑
+    for pd in post.get("photo_details", []):
+        if pd.get("blob_url"):
+            pd["blob_url"] = _to_sas_url(pd["blob_url"])
+    if post.get("photo_urls"):
+        post["photo_urls"] = [_to_sas_url(u) for u in post["photo_urls"] if u]
+    t = post.get("thumbnail_url")
+    if t and "blob.core.windows.net" in t:
+        post["thumbnail_url"] = _to_sas_url(t)
     return post
 
 
@@ -157,20 +175,15 @@ async def _handle_upload(shop_id: str, post_id: str, edited_caption: str = None)
 
     photo_ids = draft.get("photo_ids", [])
 
-    # [현재] Blob Storage 공개 설정 → blob_url 직접 사용 (SAS 파라미터 제거)
-    # Instagram에 직접 blob URL 전달 (공개 컨테이너 기준)
+    # Instagram(외부)이 직접 fetch하므로, 비공개 컨테이너 대비 SAS URL로 전달한다.
+    # (예전엔 split("?")[0]로 SAS를 벗겨 bare URL을 넘겼고, 공개 컨테이너에 의존했음)
     from services.cosmos_db import get_photo_by_id
     image_urls = []
     for pid in photo_ids:
         photo = get_photo_by_id(shop_id, pid)
         if photo and photo.get("blob_url"):
-            clean_url = photo["blob_url"].split("?")[0]
-            image_urls.append(clean_url)
-            print(f"[DEBUG] blob_url={clean_url}")
-
-    # Blob 비공개 전환 시 아래 proxy 방식으로 교체 -> proxy 테스트 실패해서 다시 전환.
-    # from routers.photos import get_proxy_url
-    # image_urls = [get_proxy_url(pid, shop_id) for pid in photo_ids]
+            sas_url = _to_sas_url(photo["blob_url"])
+            image_urls.append(sas_url)
 
     print(f"[DEBUG] 최종 image_urls={image_urls}")
     print(f"[DEBUG] 업로드 조건: user={bool(insta_user_id)}, token={bool(access_token)}, urls={bool(image_urls)}")
