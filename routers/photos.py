@@ -279,8 +279,10 @@ async def test_filter_sync(shop_id: str, current_shop: dict = Depends(get_curren
         result = await run_photo_filter(shop_id=shop_id, photo_list=prepared)
         return {"status": "ok", "result": result}
     except Exception as e:
-        import traceback
-        return {"status": "error", "error": str(e), "traceback": traceback.format_exc()}
+        # 스택트레이스/내부 예외 메시지는 서버 로그에만 남긴다.
+        # 응답 본문에 실으면 파일 경로·코드 구조·라이브러리 버전이 그대로 노출된다.
+        logger.error(f"[photos] 필터 테스트 실패 (shop_id={shop_id}): {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="사진 처리 중 오류가 발생했습니다.")
 
 
 async def _run_filter_process(shop_id: str, photo_list: list):
