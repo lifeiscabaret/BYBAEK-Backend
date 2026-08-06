@@ -1,8 +1,27 @@
 import os
 import json
+import random
 import re
 from string import Template
 import anthropic
+
+# ──────────────────────────────────────────
+# [다양성] insta_style_profile은 인스타 연동 시점에 1회 분석된 고정 스냅샷이다.
+# 재분석 트리거가 없어서, 매 생성마다 같은 특유표현/예시캡션이 통째로 주입되면
+# "말투는 똑같고 단어만 바뀌는" 캡션이 반복된다.
+# → 프로필 값 중 일부만 매번 무작위로 골라 힌트로 주입한다.
+# ──────────────────────────────────────────
+_SIGNATURE_EXPR_SAMPLE = 2   # signature_expressions 중 매번 뽑을 개수
+_TONE_EXAMPLE_SAMPLE   = 1   # tone_examples 중 매번 뽑을 개수
+
+
+def _sample_for_variety(items: list, k: int) -> list:
+    """items에서 최대 k개를 무작위로 뽑는다. 원소가 k개 이하면 그대로 반환."""
+    if not items:
+        return []
+    if len(items) <= k:
+        return list(items)
+    return random.sample(list(items), k)
 
 from utils.claude_auth import CLAUDE_BASE_URL, get_claude_token
 
@@ -181,11 +200,21 @@ async def post_writer_agent(
         # 금칙어 + 할루시네이션 검증
         result = _validate_and_clean(result, brand_settings)
 
-        # 할루시네이션 감지 시 한 번 재시도
+        # 위반/할루시네이션 감지 시 한 번 재시도
         if result.get("needs_retry"):
             reason = result.get("retry_reason", "할루시네이션")
+            violations = result.get("violations") or []
             print(f"[post_writer] {reason} 감지 → 재시도 (feedback 주입)")
-            feedback_msg = f"이전 캡션에서 '{reason}'이 감지됐어. 확인되지 않은 사실은 절대 쓰지 마."
+            if violations:
+                # 어떤 단어가 문제인지 명시해야 LLM이 그 단어만 피해서 다시 쓴다.
+                # (예전엔 그 단어를 코드가 지워버려서 문장이 깨졌다)
+                feedback_msg = (
+                    f"이전 캡션에 쓰면 안 되는 표현이 있었어: {', '.join(violations)}. "
+                    f"이 단어들을 쓰지 말고, 문장을 통째로 자연스럽게 다시 써줘. "
+                    f"단어만 빼서 어색해지면 안 돼."
+                )
+            else:
+                feedback_msg = f"이전 캡션에서 '{reason}'이 감지됐어. 확인되지 않은 사실은 절대 쓰지 마."
             response2 = await client.messages.create(
                 model="claude-sonnet-4-6",
                 max_tokens=600,
@@ -199,17 +228,22 @@ async def post_writer_agent(
             )
             raw2 = response2.content[0].text.strip().replace("```json", "").replace("```", "").strip()
             try:
-                result = _validate_and_clean(json.loads(raw2), brand_settings)
+                # 2차에도 위반이 남으면 그때만 문장 단위로 들어낸다 (last_resort)
+                result = _validate_and_clean(json.loads(raw2), brand_settings, last_resort=True)
             except Exception:
-                pass  # 재시도도 실패하면 원본 그대로 사용
+                pass  # 재시도 파싱 실패 시 1차 결과 그대로 사용
 
         result.pop("needs_retry", None)
         result.pop("retry_reason", None)
+        result.pop("violations", None)
 
         # CTA는 DB 값으로 강제 덮어씌우기 (GPT가 임의로 바꾸지 못하게)
         cta_fixed = brand_settings.get("cta", "").strip()
         if cta_fixed:
             result["cta"] = cta_fixed
+            # 본문에도 같은 CTA가 들어간 경우 제거한다.
+            # 발행 시 caption + hashtags + cta 를 이어붙이므로, 안 지우면 게시물에 CTA가 두 번 나온다.
+            result["caption"] = _strip_duplicate_cta(result.get("caption", ""), cta_fixed)
             print(f"[post_writer] CTA 고정 적용 → '{cta_fixed}'")
 
         print(f"[post_writer] 완료 → 캡션 {len(result.get('caption', ''))}자, "
@@ -328,8 +362,11 @@ def _build_prompt(
             if sentence_ending:
                 lines.append(f"- 자주 쓰는 종결어미: {sentence_ending} (이 말끝을 살려줘)")
             if signature_expr:
-                expr_str = ", ".join(f'"{e}"' for e in signature_expr[:5])
-                lines.append(f"- 이 사장님 특유의 표현(가능하면 자연스럽게 녹여): {expr_str}")
+                # [다양성] 매 생성마다 같은 표현 5개를 전부 못박아 주입하면
+                # "말투는 똑같고 단어만 바뀌는" 캡션이 나온다 → 일부만 무작위로 뽑아 힌트로 준다.
+                picked = _sample_for_variety(signature_expr, _SIGNATURE_EXPR_SAMPLE)
+                expr_str = ", ".join(f'"{e}"' for e in picked)
+                lines.append(f"- 이 사장님이 쓸 법한 표현(참고만, 꼭 넣을 필요 없음): {expr_str}")
 
         # 구조적 필드 — 언어 무관, 항상 주입
         if sentence_length:
@@ -340,9 +377,10 @@ def _build_prompt(
 
         # 예시 캡션도 언어종속 → 일치할 때만
         if not lang_mismatch and tone_examples:
-            # 이모지 스트립: "안 씀" shop이면 예시에서 이모지 제거
+            # [다양성] 같은 예시 캡션을 매번 통째로 보여주면 LLM이 그 문장 구조에 강하게 앵커링된다.
+            # → 매 생성마다 1개만 무작위로 뽑는다.
             examples_clean = []
-            for ex in tone_examples[:3]:
+            for ex in _sample_for_variety(tone_examples, _TONE_EXAMPLE_SAMPLE):
                 if emoji_usage == "안 씀":
                     ex = re.sub(r'[\U0001F000-\U0001FAFF\U00002600-\U000027BF\U0001F300-\U0001F9FF✀-➿☀-⛿✂✅✈-✍✏✒✔✖✨✳✴❄❇❌❎❓-❕❗❣❤➕-➗➡➰➿⤴⤵⬅-⬇⬛⬜⭐⭕]', '', ex).strip()
                 examples_clean.append(ex)
@@ -354,7 +392,12 @@ def _build_prompt(
             if lang_mismatch:
                 insta_style_block += f"\n위 말투 특징을 {lang_name} 표현으로 자연스럽게 반영해줘. (원문 말투 예시는 언어가 달라 생략)"
             else:
-                insta_style_block += "\n⚠️ 위 실제 말투와 최대한 동일하게. 광고체 절대 금지."
+                # "최대한 동일하게"는 예시 문장 자체를 베끼게 만들어 매번 같은 캡션이 나오는 원인이 됐다.
+                # → 목소리(말투)는 유지하되 문장은 새로 쓰라고 명시.
+                insta_style_block += (
+                    "\n⚠️ 말투와 목소리는 위와 똑같이 유지하되, 문장 구조와 표현은 매번 새로 써줘. "
+                    "예시 문장을 그대로 따라 쓰거나 단어만 바꿔 끼우지 마. 광고체 절대 금지."
+                )
 
     # 시스템 프롬프트 구성 — prompts/post_writer/system.md 에서 로드 후 치환
     # few-shot 예시(good/bad)는 examples/ 파일에서 주입
@@ -405,6 +448,25 @@ def _build_prompt(
     if brand_diff:
         parts.append(f"[우리 샵 차별점 - 첫 문장에 자연스럽게 녹여줘]\n{brand_diff}")
 
+    # 타겟 고객 - 차별점/첫문장 슬롯과 분리된 별도 슬롯.
+    # (예전엔 프론트가 이 문구를 shop_intro에 합쳐 보내서 "차별점 - 첫 문장에 녹여줘"로
+    #  잘못 쓰였고, 캡션이 타겟 설명으로 시작하는 원인이 됐다.)
+    # 프론트가 아직 별도 필드를 안 보내면 빈 값 → 이 블록 자체가 생략된다.
+    target_customer = brand_settings.get("target_customer_text", "").strip()
+    if target_customer:
+        parts.append(
+            f"[타겟 고객 - 이 사람들에게 말 걸듯이 써줘. 이 설명 자체를 캡션에 옮겨 적지는 마]\n"
+            f"{target_customer}"
+        )
+
+    # 경쟁샵 틈새 - competitor_analysis가 뽑은 gap_opportunity.
+    # 예전엔 계산만 되고 캡션 생성엔 전혀 안 쓰이던 값이었다.
+    # fallback(검색 실패 시 고정 문구)은 모든 샵에 같은 문장을 주입해 획일화를 키우므로 제외.
+    competitor = trend_data.get("competitor_insights") or {}
+    gap = (competitor.get("gap_opportunity") or "").strip()
+    if gap and competitor.get("source") != "fallback":
+        parts.append(f"[경쟁샵이 놓치고 있는 틈새 - 살릴 수 있으면 이 각도로]\n{gap}")
+
     # 실제 검색 스니펫 - 사람들이 실제로 쓰는 말투 참고용
     raw_snippets = trend_data.get("raw_snippets", [])
     if raw_snippets:
@@ -447,13 +509,18 @@ def _build_prompt(
                     ex_text += f"   해시태그: {' '.join(hashtags[:5])}\n"
             parts.append(ex_text)
 
-    # 4. 최근 게시물 말투 참고
-    if recent_posts:
-        recent_text = "[최근 게시물 말투 참고 (이 말투와 비슷하게)]\n"
-        for i, post in enumerate(recent_posts[:2], 1):
-            caption = post.get("caption", "")
-            recent_text += f"{i}. {caption[:60]}{'...' if len(caption) > 60 else ''}\n"
-        parts.append(recent_text)
+    # 4. (제거됨) 최근 게시물 말투 참고 슬롯
+    #
+    # 예전엔 recent_posts(= status='success'인 최근 게시물 3건)를
+    # "[최근 게시물 말투 참고 (이 말투와 비슷하게)]"로 주입했다.
+    # 그런데 그 게시물들은 대부분 직전에 이 파이프라인이 생성한 캡션이라,
+    # 매 생성이 직전 생성을 모방하는 자기강화 루프가 됐다
+    # ("말투가 매번 똑같고 단어만 바뀐다"의 직접 원인).
+    # 말투 개인화는 RAG(rag_context.examples)가 이미 같은 샵 캡션으로 담당하므로
+    # 이 슬롯은 순수 중복이었고, 유일한 추가 효과가 자기강화라서 제거했다.
+    #
+    # recent_posts 인자 자체는 호출부 4곳(orchestrator_v2 / 구 orchestrator / 테스트)이
+    # 그대로 넘기고 있어 시그니처 호환을 위해 남겨둔다. 다시 프롬프트에 넣지 말 것.
 
     # 5. 재작성 시 피드백 추가
     if previous_draft and feedback:
@@ -494,95 +561,202 @@ _FORBIDDEN_EXAGGERATIONS = [
 ]
 
 
-# [검증] 금칙어 + 할루시네이션 자동 제거
-def _validate_and_clean(result: dict, brand_settings: dict) -> dict:
-    """
-    AG-042 강화: 금칙어 + 주제 이탈 + 과장 표현 3중 검사
+def _strip_duplicate_cta(caption: str, cta: str) -> str:
+    """캡션 본문에 CTA가 그대로 들어가 있으면 제거한다.
 
-    1) 금칙어 (브랜드 설정)  → 자동 제거
-    2) 주제 이탈 키워드      → 자동 제거 + 경고
-    3) 과장 표현             → 자동 제거 + 경고
-
-    [FIX 4] shop_intro에 명시된 내용은 할루시네이션 오탐에서 제외
+    발행 시 caption + hashtags + cta 로 합쳐지므로(orchestrator_v2._auto_upload_instagram,
+    routers/agent._handle_upload), 본문에 남아 있으면 게시물에 CTA가 두 번 나온다.
+    오탐을 피하려고 '줄 전체가 CTA' 또는 '정확한 부분 문자열'인 경우만 제거한다.
     """
-    # forbidden_words 리스트 처리
+    if not caption or not cta:
+        return caption
+
+    norm = lambda s: re.sub(r'\s+', ' ', s).strip()
+    cta_norm = norm(cta)
+
+    kept = [ln for ln in caption.split("\n") if norm(ln) != cta_norm]
+    cleaned = "\n".join(kept)
+
+    if cta in cleaned:
+        cleaned = cleaned.replace(cta, "")
+
+    cleaned = re.sub(r'\n{3,}', '\n\n', cleaned).strip()
+    if cleaned != caption.strip():
+        print("[post_writer] 본문에 중복된 CTA 제거")
+    return cleaned
+
+
+def _finalize_hashtags(generated: list, required: list, brand_settings: dict) -> list:
+    """생성 해시태그 + 필수 해시태그를 합치고 feed_style.hashtag_count에 맞춘다.
+
+    [변경] 예전엔 필수 태그를 무조건 뒤에 덧붙이기만 해서, 온보딩에서 고른
+    hashtag_count(예: 13)를 항상 넘겼다 (실측: 13 설정에 결과 15~17개).
+    → 필수 태그는 반드시 유지하고, 초과분은 생성 태그 쪽에서 잘라낸다.
+      필수 태그만으로 이미 상한을 넘으면 상한을 못 지킨다는 사실을 로그로 남긴다.
+
+    순서: 주제 태그(생성분) 먼저 → 고정 태그(필수) 뒤.
+          인스타는 앞쪽 태그가 먼저 노출되므로 그날 내용과 맞는 태그를 앞에 둔다.
+    """
+    feed_style = brand_settings.get("feed_style", {}) or {}
+    try:
+        limit = int(feed_style.get("hashtag_count", 10))
+    except (TypeError, ValueError):
+        limit = 10
+
+    req = [t for t in required if t]
+    gen = [t for t in generated if t and t not in req]
+
+    if limit <= 0:
+        return gen + req
+
+    if len(req) >= limit:
+        if len(req) > limit:
+            print(f"[post_writer] 필수 해시태그 {len(req)}개가 설정값({limit}개)을 초과 "
+                  f"→ 필수 태그 유지, 생성 태그 제외")
+        return req
+
+    room = limit - len(req)
+    if len(gen) > room:
+        print(f"[post_writer] 해시태그 상한({limit}개) 초과 → 생성 태그 {len(gen)}개 중 {room}개만 사용")
+    return gen[:room] + req
+
+
+def _shop_allowed_terms(brand_settings: dict) -> str:
+    """이 샵에서는 정당하게 쓸 수 있는 단어들을 한 덩어리 문자열로 모은다.
+
+    _FORBIDDEN_TOPICS는 "바버샵과 무관한 주제"를 막으려는 목록인데,
+    샵에 따라 그 단어가 오히려 핵심 정보인 경우가 있다.
+    (실제 사례: "펌 시술 하지 않습니다"가 간판인 정통 바버샵 → '펌'이 정당한 단어)
+    shop_intro / exclude_conditions / preferred_styles에 이미 등장하는 단어는
+    이 샵의 맥락에서 정당하다고 보고 위반으로 잡지 않는다.
+    """
+    def flat(v):
+        if isinstance(v, list):
+            return " ".join(str(x) for x in v)
+        return str(v or "")
+
+    return " ".join([
+        flat(brand_settings.get("shop_intro")),
+        flat(brand_settings.get("exclude_conditions")),
+        flat(brand_settings.get("preferred_styles")),
+        flat(brand_settings.get("target_customer_text")),
+    ])
+
+
+def _strip_violating_sentences(caption: str, banned: list) -> str:
+    """최후 수단: 금지 단어가 든 '문장'을 통째로 제거한다.
+
+    예전엔 caption.replace(word, "")로 단어만 지워서
+    "펌 없이 컷·드라이만으로" → " 없이 컷·드라이만으로" 처럼 문장이 깨졌다.
+    단어가 아니라 문장 단위로 들어내면 최소한 말이 되는 글은 남는다.
+    """
+    kept_lines = []
+    for line in caption.split("\n"):
+        sentences = re.split(r'(?<=[.!?…])\s+', line)
+        kept = [s for s in sentences if not any(w and w in s for w in banned)]
+        joined = " ".join(s for s in kept if s.strip()).strip()
+        if joined:
+            kept_lines.append(joined)
+    return "\n".join(kept_lines).strip()
+
+
+# [검증] 금칙어 + 할루시네이션
+def _validate_and_clean(result: dict, brand_settings: dict, last_resort: bool = False) -> dict:
+    """
+    AG-042: 금칙어 + 주제 이탈 + 과장 표현 + 할루시네이션 검사.
+
+    [변경] 예전엔 위반 단어를 caption.replace(word, "")로 삭제했는데,
+    이게 문장을 파괴했다 (실측: 4회 생성 중 3회에서 "펌 없이 …" → " 없이 …").
+    → 할루시네이션과 동일하게 **재생성 플래그**로 바꿨다.
+      재시도 후에도 위반이 남으면(last_resort=True) 그때만 문장 단위로 들어낸다.
+
+    shop_intro 등 이 샵 설정에 이미 있는 단어는 오탐으로 보고 통과시킨다.
+    """
     forbidden_words = brand_settings.get("forbidden_words", [])
     if isinstance(forbidden_words, str):
         forbidden_words = [w.strip() for w in forbidden_words.split(",")]
+    forbidden_words = [w for w in forbidden_words if w]
 
-    # [FIX 4] shop_intro 값 미리 추출 — 오탐 방지용
     shop_intro = brand_settings.get("shop_intro", "").strip()
+    allowed_terms = _shop_allowed_terms(brand_settings)
 
     caption = result.get("caption", "")
 
-    # 0) 할루시네이션 패턴 감지 → 재생성 신호 (제거 말고 플래그)
+    # 0) 할루시네이션 패턴 → 재생성 신호
     hallucination_patterns = [
         (r'\d+년\s*경력',   "경력 연수 할루시네이션"),
         (r'\d+자리\s*남',   "예약 현황 할루시네이션"),
         (r'마감\s*임박',     "마감 임박 할루시네이션"),
         (r'오늘만\s*할인',   "근거없는 할인 할루시네이션"),
     ]
-    for pattern, label in hallucination_patterns:
-        match = re.search(pattern, caption)
-        if match:
-            # [FIX 4] shop_intro에 이미 있는 내용이면 오탐 → 통과
-            matched_text = match.group(0)
-            if shop_intro and matched_text in shop_intro:
-                print(f"[post_writer] '{matched_text}' → shop_intro에 명시된 사실, 통과")
-                continue
-            print(f"[post_writer] ⚠️  {label} 감지 → needs_retry=True")
-            result["needs_retry"] = True
-            result["retry_reason"] = label
-            return result
+    if not last_resort:
+        for pattern, label in hallucination_patterns:
+            match = re.search(pattern, caption)
+            if match:
+                matched_text = match.group(0)
+                if shop_intro and matched_text in shop_intro:
+                    print(f"[post_writer] '{matched_text}' → shop_intro에 명시된 사실, 통과")
+                    continue
+                print(f"[post_writer] ⚠️  {label} 감지 → needs_retry=True")
+                result["needs_retry"] = True
+                result["retry_reason"] = label
+                result["violations"] = []
+                return result
 
-    # 1) 금칙어 제거
-    found_forbidden = []
+    # 1) 위반 단어 수집 (여기서 지우지 않는다)
+    violations = []   # (분류, 단어)
     for word in forbidden_words:
         if word in caption:
-            found_forbidden.append(word)
-            caption = caption.replace(word, "")
-    if found_forbidden:
-        print(f"[post_writer] AG-042 금칙어 제거: {found_forbidden}")
-
-    # 2) 주제 이탈 제거
-    found_topics = []
+            violations.append(("금칙어", word))
     for word in _FORBIDDEN_TOPICS:
-        if word in caption:
-            found_topics.append(word)
-            caption = caption.replace(word, "")
-    if found_topics:
-        print(f"[post_writer] AG-042 주제 이탈 키워드 제거: {found_topics}")
-
-    # 3) 과장 표현 제거
-    found_exaggerations = []
+        if word in caption and word not in allowed_terms:
+            violations.append(("주제 이탈", word))
     for word in _FORBIDDEN_EXAGGERATIONS:
         if word in caption:
-            found_exaggerations.append(word)
-            caption = caption.replace(word, "")
-    if found_exaggerations:
-        print(f"[post_writer] AG-042 과장 표현 제거: {found_exaggerations}")
+            violations.append(("과장 표현", word))
+
+    if violations:
+        words = [w for _, w in violations]
+        summary = ", ".join(f"{kind}:'{w}'" for kind, w in violations)
+        if not last_resort:
+            print(f"[post_writer] ⚠️  위반 감지 ({summary}) → needs_retry=True")
+            result["needs_retry"] = True
+            result["retry_reason"] = summary
+            result["violations"] = words
+            return result
+        # 재시도 후에도 남았을 때만 문장 단위 제거
+        cleaned = _strip_violating_sentences(caption, words)
+        if cleaned:
+            print(f"[post_writer] 재시도 후에도 위반 잔존 ({summary}) → 해당 문장 제거")
+            caption = cleaned
+        else:
+            # 문장을 다 들어내면 캡션이 비어버리는 경우 — 단어 제거로 최소 복구
+            print(f"[post_writer] 위반 문장 제거 시 캡션이 비어 단어 단위로 대체 제거 ({summary})")
+            for w in words:
+                caption = caption.replace(w, "")
+            caption = re.sub(r'[ \t]{2,}', ' ', caption)
 
     result["caption"] = caption.strip()
 
-    # 해시태그에서도 금칙어 + 주제 이탈 제거
-    all_banned = forbidden_words + _FORBIDDEN_TOPICS
+    # 해시태그: 태그 단위 제거는 문법을 깨지 않으므로 그대로 필터링한다.
+    # 단, 이 샵 맥락에서 정당한 주제어는 제외하지 않는다.
+    banned_in_tags = forbidden_words + [w for w in _FORBIDDEN_TOPICS if w not in allowed_terms]
     hashtags = result.get("hashtags", [])
-    result["hashtags"] = [
-        tag for tag in hashtags
-        if not any(word in tag for word in all_banned)
-    ]
+    hashtags = [tag for tag in hashtags if not any(word in tag for word in banned_in_tags)]
 
-    # 필수 해시태그 강제 추가: hashtag_style 에서 #로 시작하는 항목 추출 (must_include_hashtags 필드 폐지)
+    # 필수 해시태그: hashtag_style 에서 #로 시작하는 항목 추출
     hashtag_style = brand_settings.get("hashtag_style", "")
     if isinstance(hashtag_style, list):
         hashtag_style = ", ".join(hashtag_style)
-    extracted_hashtags = [w.strip() for w in re.findall(r'#[^\s,]+', hashtag_style)]
-    for tag in extracted_hashtags:
+    required = []
+    for tag in re.findall(r'#[^\s,]+', hashtag_style):
+        tag = tag.strip()
         normalized = tag if tag.startswith("#") else f"#{tag}"
-        if normalized not in result["hashtags"]:
-            result["hashtags"].append(normalized)
+        if normalized not in required:
+            required.append(normalized)
 
-    print(f"[post_writer] 최종 hashtags: {result['hashtags']}")
+    result["hashtags"] = _finalize_hashtags(hashtags, required, brand_settings)
+    print(f"[post_writer] 최종 hashtags({len(result['hashtags'])}개): {result['hashtags']}")
     return result
 
 

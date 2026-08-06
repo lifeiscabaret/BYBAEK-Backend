@@ -15,7 +15,7 @@ from auth.token_verify import (
 )
 from agents.insta_analyzer import analyze_instagram_history
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from fastapi.responses import RedirectResponse, HTMLResponse
 
 router = APIRouter()
@@ -290,10 +290,16 @@ async def instagram_business_login(code: str, res: Response, fast_req: Request):
     if not ms_id:
         raise HTTPException(status_code=401, detail="로그인이 필요합니다")
 
+    # 장기 토큰은 60일 만료 → 만료 절대 시각을 함께 저장한다.
+    # workers/insta_token_refresh.py 가 이 값을 보고 만료 전에 미리 갱신한다.
+    issued_at = datetime.now(timezone.utc)
     insta_data = {
-        "insta_access_token": access_token,
-        "insta_user_id":      user_id,
-        "insta_updated_at":   datetime.utcnow().isoformat()
+        "insta_access_token":          access_token,
+        "insta_user_id":               user_id,
+        "insta_expires_in":            expires_in,
+        "insta_token_expires_at":      (issued_at + timedelta(seconds=int(expires_in))).isoformat(),
+        "insta_updated_at":            issued_at.isoformat(),
+        "insta_token_needs_reconnect": False,
     }
     save_auth(ms_id, insta_data)
 

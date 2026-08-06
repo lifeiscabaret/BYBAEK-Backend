@@ -30,7 +30,8 @@ def save_embedding(
     post_id: str,
     caption: str,
     embedding: list,
-    content_type: str = "caption_body"
+    content_type: str = "caption_body",
+    authored_by: str = "ai"
 ) -> bool:
     """
     캡션/해시태그/CTA/구조 패턴을 타입별로 Cosmos DB RagVectors 컨테이너에 저장.
@@ -55,6 +56,7 @@ def save_embedding(
         "caption": caption,
         "caption_vector": embedding,
         "content_type": content_type,
+        "authored_by": authored_by,
     }
 
     try:
@@ -96,7 +98,8 @@ def search_similar_captions(
     query_vector: list,
     top_k: int = 5,
     query_text: str = None,
-    content_type: str = None
+    content_type: str = None,
+    authored_by: str = None
 ) -> list:
     """
     Cosmos DB VectorDistance()로 유사 캡션 검색 (코사인 유사도 기준).
@@ -108,6 +111,9 @@ def search_similar_captions(
         query_text (str): 미사용 (Azure Search의 BM25 키워드 검색 인자였음;
                            Cosmos DB 전환 후 순수 벡터 검색만 수행 — 하이브리드는 후속 과제)
         content_type (str): "caption_body" | "hashtag_set" | "cta" | "structure" 필터
+        authored_by (str): "human"(사장님 원본) | "ai"(BYBAEK 생성분) 필터.
+                           말투 학습용 caption_body는 human을 우선 조회해서,
+                           AI가 자기 출력을 다시 학습하는 루프를 막는다.
 
     Returns:
         list: 유사도 높은 캡션 리스트 (score 포함), Azure Search 결과 형태와 호환되도록
@@ -133,6 +139,10 @@ def search_similar_captions(
     if content_type:
         query += " AND c.content_type = @content_type"
         parameters.append({"name": "@content_type", "value": content_type})
+
+    if authored_by:
+        query += " AND c.authored_by = @authored_by"
+        parameters.append({"name": "@authored_by", "value": authored_by})
 
     query += " ORDER BY VectorDistance(c.caption_vector, @embedding)"
 
