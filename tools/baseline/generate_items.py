@@ -110,13 +110,25 @@ def _ai_captions(limit=8):
 
 
 def _anchors():
-    """실제 사람이 쓴 인트로만 추출 (고정 정보블록은 형식이 달라 블라인드를 깨므로 제외)."""
+    """실제 사람이 쓴 게시물 — 원본 전체 텍스트 + 실제 해시태그 그대로.
+
+    [변경] 처음엔 인트로 한 줄만 뽑았다. 고정 정보블록이 형식으로 티가 나서
+    블라인드를 지키려던 것인데, 그 결과 앵커만 해시태그·CTA 없이 한 줄로 떠서
+    "구체성"·"첫 문장" 항목에서 글 품질과 무관한 이유로 불리해졌다.
+    → 채점 공정성이 우선. 원본 그대로 넣는다.
+      대신 앵커는 형식만으로 구별되므로 블라인드가 아니며,
+      조건 간 비교(ai_rag/human_rag/cold)의 참조점으로만 읽어야 한다.
+
+    인트로 없는 게시물은 본문이 고정 정보블록뿐이라 서로 완전히 같은 항목이 되므로
+    (8건 중 5건) 인트로가 있는 것만 앵커로 쓴다.
+    """
     out = []
     for p in POSTS:
-        intro = (p.get("intro") or "").strip()
-        if intro:
-            out.append({"text": intro, "likes": p.get("likes"),
-                        "comments": p.get("comments"), "note": p.get("note")})
+        if not (p.get("intro") or "").strip():
+            continue
+        out.append({"caption": p["caption"], "hashtags": p.get("hashtags", []),
+                    "likes": p.get("likes"), "comments": p.get("comments"),
+                    "note": p.get("note")})
     return out
 
 
@@ -180,6 +192,44 @@ async def repair():
     print(f"복구 완료: {fixed}/{len(broken)}건")
 
 
+def refresh_anchors():
+    """items.json의 앵커 문항만 현재 _anchors() 내용으로 갱신한다.
+
+    문항 ID와 정답표 정렬을 그대로 두므로, 이미 검토한 채점지의 번호가 바뀌지 않는다.
+    LLM 호출 없음.
+    """
+    items_path = os.path.join(OUT_DIR, "items.json")
+    key_path = os.path.join(OUT_DIR, "key.json")
+    items = json.load(open(items_path, encoding="utf-8"))
+    key = {k["id"]: k for k in json.load(open(key_path, encoding="utf-8"))}
+
+    anchor_ids = [it["id"] for it in items if key.get(it["id"], {}).get("condition") == "anchor"]
+    anchors = _anchors()
+    if len(anchor_ids) != len(anchors):
+        sys.exit(f"앵커 개수 불일치: 문항 {len(anchor_ids)}개 vs 원본 {len(anchors)}개. "
+                 f"전체 재생성(generate_items.py)이 필요합니다.")
+
+    # [중요] items.json은 섞인 순서라 POSTS 순서와 다르다.
+    # 위치로 zip하면 캡션과 정답표의 실제 좋아요/댓글 수가 서로 다른 게시물을 가리키게 된다.
+    # → key에 저장된 note로 원본을 되찾는다.
+    by_note = {a["note"]: a for a in anchors}
+    for item_id in anchor_ids:
+        note = key[item_id].get("note")
+        a = by_note.get(note)
+        if not a:
+            sys.exit(f"{item_id}의 note('{note}')에 해당하는 원본을 찾을 수 없습니다. "
+                     f"전체 재생성이 필요합니다.")
+        it = next(x for x in items if x["id"] == item_id)
+        it["caption"] = a["caption"]
+        it["hashtags"] = a["hashtags"]
+        it["cta"] = ""
+        print(f"  {item_id} 갱신 → {len(a['caption'])}자, 해시태그 {len(a['hashtags'])}개 "
+              f"| {note}")
+
+    json.dump(items, open(items_path, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
+    print(f"앵커 {len(anchor_ids)}개 갱신 완료 (문항 ID 유지)")
+
+
 async def main():
     os.makedirs(OUT_DIR, exist_ok=True)
     human_caps = [p["caption"] for p in POSTS if p["caption"].strip()]
@@ -207,7 +257,7 @@ async def main():
             key.append({"scenario": sc["key"], "condition": cond})
 
     for a in _anchors():
-        items.append({"caption": a["text"], "hashtags": [], "cta": ""})
+        items.append({"caption": a["caption"], "hashtags": a["hashtags"], "cta": ""})
         key.append({"scenario": "anchor", "condition": "anchor",
                     "real_likes": a["likes"], "real_comments": a["comments"], "note": a["note"]})
 
@@ -237,5 +287,7 @@ async def main():
 if __name__ == "__main__":
     if "--repair" in sys.argv:
         asyncio.run(repair())
+    elif "--refresh-anchors" in sys.argv:
+        refresh_anchors()
     else:
         asyncio.run(main())
