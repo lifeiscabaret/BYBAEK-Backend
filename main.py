@@ -145,6 +145,15 @@ async def lifespan(app: FastAPI):
         id="insta_token_refresh",
         replace_existing=True
     )
+    # 매시 30분 발행 게시물 실참여 수집 (발행 후 24h / 7d 시점)
+    # 정각(파이프라인 실행)과 겹치지 않게 30분에 돌린다.
+    from workers.insights_collector import collect_all_engagement
+    scheduler.add_job(
+        collect_all_engagement,
+        CronTrigger(minute=30),
+        id="insights_collect",
+        replace_existing=True
+    )
     scheduler.start()
     start_worker()  # ✅ lifespan 안으로 이동 (on_event 대체)
     print("[BYBAEK] 서버 시작 + 스케줄러 ON + 큐 워커 ON")

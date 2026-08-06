@@ -39,31 +39,105 @@ KST = timezone(timedelta(hours=9))
 # }
 
 
+# ──────────────────────────────────────────
+# 자동 피드백 게이트
+#
+# 예전 조건: 초안이 3개만 있어도 caption_score(자기평가) 상하위로 패턴을 뽑았다.
+#   → AI가 자기 점수로 자기 패턴을 강화하는 루프. 실제 마케팅 효과와 무관.
+#
+# 바뀐 조건: 실참여(insights_collector가 수집)에 **의미 있는 분산**이 생긴 뒤에만 켠다.
+#   표본 개수만으로 여는 건 틀린 기준이다 — 모든 게시물의 반응이 0이면
+#   300개를 모아도 학습할 신호가 없다 (실측 2026-08: 게시물 200개, 좋아요 총합 6,
+#   팔로워 1명 → 분산 0).
+#   그래서 아래 세 조건을 모두 만족해야 패턴 추출을 시작한다.
+# ──────────────────────────────────────────
+
+# 통계를 내려면 최소한 필요한 표본 (분산 조건의 전제일 뿐, 이것만으론 열리지 않는다)
+MIN_SAMPLES = 10
+# 반응이 0이 아닌 게시물이 최소 이만큼은 있어야 한다
+MIN_NONZERO = 5
+# 상위 그룹 평균이 하위 그룹 평균의 몇 배 이상이어야 "차이가 있다"고 볼지
+MIN_SPREAD_RATIO = 2.0
+
+
+def _engagement_value(post: dict) -> float | None:
+    """이 게시물의 대표 참여 지표. 24h 창을 우선 쓰고 없으면 7d.
+
+    total_interactions(좋아요+저장+댓글+공유)를 기본으로 하고,
+    없으면 좋아요+댓글로 폴백한다.
+    """
+    eng = post.get("engagement") or {}
+    snap = eng.get("24h") or eng.get("7d")
+    if not snap:
+        return None
+    total = snap.get("total_interactions")
+    if total is not None:
+        return float(total)
+    likes = snap.get("like_count") or 0
+    comments = snap.get("comments_count") or 0
+    return float(likes + comments)
+
+
+def _variance_gate(values: list) -> tuple:
+    """자동 피드백을 열어도 되는지 판정. (통과여부, 사유) 반환."""
+    n = len(values)
+    if n < MIN_SAMPLES:
+        return False, f"표본 부족 ({n}/{MIN_SAMPLES})"
+
+    nonzero = [v for v in values if v > 0]
+    if len(nonzero) < MIN_NONZERO:
+        return False, f"반응 있는 게시물 부족 ({len(nonzero)}/{MIN_NONZERO}) — 분산 없음"
+
+    ordered = sorted(values, reverse=True)
+    k = max(1, n // 3)
+    top_avg = sum(ordered[:k]) / k
+    bottom_avg = sum(ordered[-k:]) / k
+
+    if bottom_avg <= 0:
+        # 하위가 전부 0이면 비율이 무한대가 되므로 상위 절대값으로 판단
+        if top_avg < MIN_NONZERO:
+            return False, f"상하위 차이가 노이즈 수준 (상위평균 {top_avg:.1f})"
+        return True, f"상위평균 {top_avg:.1f} / 하위평균 0"
+
+    ratio = top_avg / bottom_avg
+    if ratio < MIN_SPREAD_RATIO:
+        return False, f"상하위 차이 부족 (배율 {ratio:.2f} < {MIN_SPREAD_RATIO})"
+    return True, f"상위평균 {top_avg:.1f} / 하위평균 {bottom_avg:.1f} (배율 {ratio:.2f})"
+
+
 async def node_fetch_performance(state: dict) -> dict:
     """
-    STEP 1.5: 최근 게시물 성과 데이터 분석 노드.
+    STEP 1.5: 최근 게시물 성과 분석 노드.
     fetch_data 이후, evaluate_trend 이전에 실행.
 
-    caption_score 기록 기반으로 성공/실패 패턴 추출.
-    인스타 실제 반응(좋아요/DM) 데이터가 나중에 연동되면
-    이 함수만 수정하면 자동으로 고도화됨.
+    **실참여 기준**으로 성공/실패 패턴을 추출한다.
+    분산 게이트를 통과하지 못하면 빈 프로파일을 반환한다 (= 자동 피드백 미적용).
     """
     shop_id = state["shop_id"]
     print(f"[performance] 성과 분석 시작 → shop_id={shop_id}")
 
     try:
-        from services.cosmos_db import get_recent_drafts_with_scores
-        drafts = get_recent_drafts_with_scores(shop_id, limit=20)
+        from services.cosmos_db import get_posts_with_engagement
+        posts = get_posts_with_engagement(shop_id, limit=50)
     except Exception as e:
         print(f"[performance] 성과 데이터 로드 실패 ({e}) → 빈 프로파일")
         return {**state, "performance_history": _empty_profile()}
 
-    if not drafts or len(drafts) < 3:
-        print(f"[performance] 데이터 부족 ({len(drafts)}개) → 빈 프로파일")
+    scored = []
+    for p in posts:
+        v = _engagement_value(p)
+        if v is not None:
+            scored.append({**p, "engagement_value": v})
+
+    passed, reason = _variance_gate([p["engagement_value"] for p in scored])
+    if not passed:
+        print(f"[performance] 자동 피드백 보류 → {reason} "
+              f"(수집된 게시물 {len(scored)}개)")
         return {**state, "performance_history": _empty_profile()}
 
-    profile = await _analyze_performance(drafts)
-    print(f"[performance] 분석 완료 → best_score_avg={profile['best_patterns']['best_score_avg']:.2f}")
+    print(f"[performance] 분산 게이트 통과 → {reason}")
+    profile = await _analyze_performance(scored)
+    print(f"[performance] 분석 완료 → best_engagement_avg={profile['best_patterns']['best_score_avg']:.2f}")
     return {**state, "performance_history": profile}
 
 
@@ -112,32 +186,25 @@ async def inject_performance_to_rag(
     return rag_context
 
 
-async def _analyze_performance(drafts: list) -> dict:
+async def _analyze_performance(scored: list) -> dict:
+    """실참여(engagement_value) 기준 상위/하위 1/3 패턴 비교.
+
+    호출 전에 _variance_gate를 통과했다는 전제 — 여기서 표본/분산을 다시 보지 않는다.
     """
-    저장된 게시물 + caption_score 기반 패턴 분석.
-    상위 30% vs 하위 30% 비교.
-    """
-    # caption_score 기준 정렬
-    scored = [d for d in drafts if d.get("caption_score") is not None]
-    scored.sort(key=lambda x: x["caption_score"], reverse=True)
+    scored = sorted(scored, key=lambda x: x["engagement_value"], reverse=True)
 
-    if len(scored) < 3:
-        return _empty_profile()
-
-    top_count    = max(1, len(scored) // 3)
-    bottom_count = max(1, len(scored) // 3)
-
-    top_posts    = scored[:top_count]
-    bottom_posts = scored[-bottom_count:]
+    k = max(1, len(scored) // 3)
+    top_posts    = scored[:k]
+    bottom_posts = scored[-k:]
 
     best_patterns  = _extract_patterns(top_posts)
     worst_patterns = _extract_patterns(bottom_posts)
 
     best_patterns["best_score_avg"]   = round(
-        sum(p["caption_score"] for p in top_posts) / len(top_posts), 2
+        sum(p["engagement_value"] for p in top_posts) / len(top_posts), 2
     )
     worst_patterns["worst_score_avg"] = round(
-        sum(p["caption_score"] for p in bottom_posts) / len(bottom_posts), 2
+        sum(p["engagement_value"] for p in bottom_posts) / len(bottom_posts), 2
     )
 
     return {
