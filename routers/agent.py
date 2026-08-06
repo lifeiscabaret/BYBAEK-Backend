@@ -7,6 +7,8 @@
 - GET /api/agent/post/detail/{post_id}: 게시물 상세
 """
 
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import Optional, List
@@ -205,7 +207,9 @@ async def _handle_upload(shop_id: str, post_id: str, edited_caption: str = None)
             "photo_ids":          photo_ids,
             "cta":                cta,
             "status":             "success" if instagram_media_id else "fail",
-            "instagram_media_id": instagram_media_id
+            "review_action":      "ok",
+            "instagram_media_id": instagram_media_id,
+            "published_at":       datetime.now(timezone.utc).isoformat(),
         }
     )
 
@@ -229,7 +233,8 @@ async def _handle_cancel(shop_id: str, post_id: str):
                 "hashtags":  draft.get("hashtags", []),
                 "photo_ids": draft.get("photo_ids", []),
                 "cta":       draft.get("cta", ""),
-                "status":    "cancel"
+                "status":    "cancel",
+                "review_action": "cancel"
             }
         )
 
@@ -240,8 +245,10 @@ async def get_agent_metrics(shop_id: str, current_shop: dict = Depends(get_curre
     try:
         from services.cosmos_db import get_cosmos_container
         container = get_cosmos_container("Post")
-        query = f"SELECT c.metrics FROM c WHERE c.shop_id = '{shop_id}' AND IS_DEFINED(c.metrics)"
-        items = list(container.query_items(query=query, enable_cross_partition_query=True))
+        query = "SELECT c.metrics FROM c WHERE c.shop_id = @shop_id AND IS_DEFINED(c.metrics)"
+        parameters = [{"name": "@shop_id", "value": shop_id}]
+        items = list(container.query_items(query=query, parameters=parameters,
+                                           enable_cross_partition_query=True))
 
         if not items:
             return {

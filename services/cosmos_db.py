@@ -132,7 +132,13 @@ def get_onboarding(shop_id: str) -> dict:
             "is_kakao_connected", "is_insta_connected", "is_gmail_connected",
             "rag_reference", "is_ms_connected", "owner_email", "district",
             "insta_style_profile", "photo_range_max",  # ← 추가
-            "insta_upload_days"
+            "insta_upload_days",
+            # feed_style 원천 필드 — 이 allowlist에 없으면 _get_brand_settings가
+            # 항상 기본값(2~4줄 / 10개)만 보게 되어 온보딩 선택이 무시된다.
+            "caption_length", "hashtag_count",
+            # 타겟 고객 설명. 예전엔 프론트가 shop_intro에 합쳐 보내서
+            # "샵 차별점 - 첫 문장에 녹여줘" 슬롯에까지 흘러들어갔다 → 별도 필드로 분리.
+            "target_customer_text"
         ]
 
         filtered_shop_info = {k: shop_item.get(k) for k in allowed_keys if k in shop_item}
@@ -244,7 +250,10 @@ def save_onboarding(shop_id: str, data: dict) -> bool:
         "forbidden_words", "locale", "city", "language",
         "is_kakao_connected", "is_insta_connected", "is_gmail_connected",
         "rag_reference", "is_ms_connected", "owner_email", "district",
-        "photo_range_max", "insta_upload_days"
+        "photo_range_max", "insta_upload_days",
+        # feed_style 원천 필드 (get_onboarding의 allowed_keys와 반드시 함께 유지)
+        "caption_length", "hashtag_count",
+        "target_customer_text"
     ]
 
     try:
@@ -303,39 +312,58 @@ def get_post_detail_data(post_id: str, shop_id: str) -> dict:
         return None
 
 def save_post_data(shop_id: str, post_data: dict) -> bool:
+    """발행/취소 결과를 Post 문서에 기록한다.
+
+    [중요] 예전엔 post_data로 문서를 통째로 교체(upsert)했기 때문에,
+    save_draft()가 남긴 metrics.caption_score가 발행 시점에 전부 사라졌다.
+    get_recent_drafts_with_scores()는 IS_DEFINED(c.metrics.caption_score)로
+    거르기 때문에, 결과적으로 성과 피드백이 "발행되지 않은 초안"만 보고 있었다.
+    → 기존 문서를 읽어 그 위에 이번 호출분만 병합(merge)한다.
+
+    status/review_action도 무조건 'success'/'pending'으로 덮어쓰던 것을
+    호출자가 준 값 우선으로 바꿨다. (취소된 초안이 success로 뒤집혀
+    get_post_by_shop / get_recent_posts에 발행 게시물로 섞여 들어가던 문제)
+    """
     container = get_cosmos_container("Post")
     try:
         current_time = datetime.utcnow()
         current_time_iso = current_time.isoformat()
         post_id = post_data.get('id')
+
+        existing_item = {}
         if not post_id:
-            new_uuid = str(uuid.uuid4())
-            post_id = f"post_{new_uuid}"
-            post_data['id'] = post_id
-            post_data['created_at'] = current_time_iso
+            post_id = f"post_{uuid.uuid4()}"
         else:
             try:
-                existing_item = container.read_item(item=post_id, partition_key=shop_id)
-                post_data['created_at'] = existing_item.get('created_at', current_time_iso)
+                existing_item = container.read_item(item=post_id, partition_key=shop_id) or {}
             except Exception:
-                post_data['created_at'] = current_time_iso
+                existing_item = {}
 
-        post_data['shop_id'] = shop_id
-        post_data['status'] = 'success'
-        post_data['updated_at'] = current_time_iso
-        post_data['trend_score'] = post_data.get('trend_score', 0)
-        post_data['caption_score'] = post_data.get('caption_score', 0)
-        post_data['model_used'] = post_data.get('model_used', '')
-        post_data['elapsed_seconds'] = post_data.get('elapsed_seconds', 0)
+        # 기존 문서 위에 이번 호출분만 덮어쓴다 (metrics 등 미전달 필드 보존)
+        item = {**existing_item, **post_data}
 
-        if 'review_deadline' not in post_data:
-            deadline = current_time + timedelta(hours=24)
-            post_data['review_deadline'] = deadline.isoformat()
-            
-        post_data['result_notified'] = False
-        post_data['review_action'] = 'pending'
+        item['id'] = post_id
+        item['shop_id'] = shop_id
+        item['created_at'] = existing_item.get('created_at', current_time_iso)
+        item['updated_at'] = current_time_iso
 
-        container.upsert_item(body=post_data)
+        # 호출자 지정값 > 기존값 > 기본값
+        item['status'] = post_data.get('status') or existing_item.get('status') or 'success'
+        item['review_action'] = (
+            post_data.get('review_action') or existing_item.get('review_action') or 'pending'
+        )
+
+        item.setdefault('trend_score', 0)
+        item.setdefault('caption_score', 0)
+        item.setdefault('model_used', '')
+        item.setdefault('elapsed_seconds', 0)
+        item.setdefault('metrics', {})
+        item.setdefault('result_notified', False)
+
+        if 'review_deadline' not in item:
+            item['review_deadline'] = (current_time + timedelta(hours=24)).isoformat()
+
+        container.upsert_item(body=item)
         return True
     except Exception as e:
         logging.error(f"마케팅 데이터 저장 실패 (shop_id: {shop_id}): {str(e)}")
@@ -552,15 +580,57 @@ def get_all_shops() -> list:
     
 def get_recent_drafts_with_scores(shop_id: str, limit: int = 20) -> list:
     container = get_cosmos_container("Post")
-    query = f"""
+    query = """
         SELECT c.id, c.caption, c.hashtags, c.metrics.caption_score AS caption_score, c.model_used, c.created_at
         FROM c
-        WHERE c.shop_id = '{shop_id}'
+        WHERE c.shop_id = @shop_id
         AND IS_DEFINED(c.metrics.caption_score)
         ORDER BY c._ts DESC
-        OFFSET 0 LIMIT {limit}
+        OFFSET 0 LIMIT @limit
     """
-    return list(container.query_items(query=query, enable_cross_partition_query=True))
+    parameters = [{"name": "@shop_id", "value": shop_id}, {"name": "@limit", "value": limit}]
+    return list(container.query_items(query=query, parameters=parameters, enable_cross_partition_query=True))
+
+
+def get_published_media_ids(shop_id: str) -> set:
+    """이 샵에서 BYBAEK이 발행한 Instagram media_id 집합.
+
+    온보딩 백필(_backfill_rag_index)이 인스타에서 최근 게시물을 긁어올 때
+    BYBAEK이 방금 올린 글까지 "사장님 과거 캡션"으로 재인덱싱하는 문제가 있었다.
+    → 백필 시 이 집합을 제외해서 자기강화 루프를 끊는다.
+    """
+    container = get_cosmos_container("Post")
+    query = """
+        SELECT c.instagram_media_id FROM c
+        WHERE c.shop_id = @shop_id AND IS_DEFINED(c.instagram_media_id)
+    """
+    parameters = [{"name": "@shop_id", "value": shop_id}]
+    try:
+        rows = container.query_items(query=query, parameters=parameters,
+                                     enable_cross_partition_query=True)
+        return {str(r["instagram_media_id"]) for r in rows if r.get("instagram_media_id")}
+    except Exception as e:
+        logging.error(f"발행 media_id 조회 실패 ({shop_id}): {str(e)}")
+        return set()
+
+
+def get_shops_with_instagram() -> list:
+    """인스타 장기 토큰을 보유한 샵 목록 (토큰 자동 갱신 잡 전용).
+
+    토큰 값 자체가 필요하므로 SELECT 대상에 포함한다 — 호출부는 workers/insta_token_refresh.py 뿐.
+    """
+    container = get_cosmos_container("Shop")
+    query = """
+        SELECT c.id, c.shop_id, c.insta_user_id, c.insta_access_token,
+               c.insta_token_expires_at, c.insta_updated_at
+        FROM c
+        WHERE IS_DEFINED(c.insta_access_token) AND c.insta_access_token != null
+    """
+    try:
+        return list(container.query_items(query=query, enable_cross_partition_query=True))
+    except Exception as e:
+        logging.error(f"인스타 연동 샵 목록 조회 실패: {str(e)}")
+        return []
 
 
 def save_rejection_log(shop_id: str, doc: dict) -> None:
@@ -570,10 +640,11 @@ def save_rejection_log(shop_id: str, doc: dict) -> None:
 
 def get_rejection_logs(shop_id: str, limit: int = 50) -> list:
     container = get_cosmos_container("RejectionLog")
-    query = f"""
+    query = """
         SELECT * FROM c
-        WHERE c.shop_id = '{shop_id}'
+        WHERE c.shop_id = @shop_id
         ORDER BY c._ts DESC
-        OFFSET 0 LIMIT {limit}
+        OFFSET 0 LIMIT @limit
     """
-    return list(container.query_items(query=query, enable_cross_partition_query=True))
+    parameters = [{"name": "@shop_id", "value": shop_id}, {"name": "@limit", "value": limit}]
+    return list(container.query_items(query=query, parameters=parameters, enable_cross_partition_query=True))
