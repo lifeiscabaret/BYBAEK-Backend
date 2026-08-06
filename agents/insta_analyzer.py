@@ -199,15 +199,28 @@ async def _analyze_with_gpt(posts: list) -> dict:
 
 async def _backfill_rag_index(shop_id: str, posts: list) -> None:
     """과거 게시물 캡션을 caption_body 타입으로 1회 일괄 인덱싱 (신규 샵 cold start 부트스트랩).
+
+    [중요] BYBAEK이 발행한 게시물은 제외한다.
+    인스타 Graph API는 계정의 '최근 게시물'을 돌려주므로, 운영이 시작된 뒤 재연동하면
+    BYBAEK이 방금 올린 캡션까지 "사장님의 과거 말투"로 다시 인덱싱된다.
+    → AI가 자기 출력을 학습하는 루프가 되어 말투가 한쪽으로 수렴한다.
+    (실측 2026-08: 운영 샵 caption_body 151건 중 93건이 AI 생성분이었음)
+
     절대 예외를 위로 던지지 않음."""
     from agents.rag_tool import get_embedding
     from services.vector_db import save_embeddings_batch
+    from services.cosmos_db import get_published_media_ids
     try:
+        published = get_published_media_ids(shop_id)
         docs = []
+        skipped = 0
         for p in posts:
             cap   = (p.get("caption") or "").strip()
             ig_id = p.get("id")
             if not cap or not ig_id:
+                continue
+            if str(ig_id) in published:
+                skipped += 1
                 continue
             vec = await get_embedding(cap)   # TODO: 추후 배치 임베딩으로 50콜→1콜 최적화 가능
             if not vec:
@@ -218,7 +231,11 @@ async def _backfill_rag_index(shop_id: str, posts: list) -> None:
                 "caption": cap,
                 "caption_vector": vec,
                 "content_type": "caption_body",
+                # 사장님이 직접 쓴 원본 (BYBAEK 발행분은 위에서 걸러짐)
+                "authored_by": "human",
             })
+        if skipped:
+            print(f"[insta_analyzer] BYBAEK 발행분 {skipped}개 백필 제외 (자기강화 루프 방지)")
         if docs:
             save_embeddings_batch(docs)
             print(f"[insta_analyzer] 백필 인덱싱 → {len(docs)}개")
