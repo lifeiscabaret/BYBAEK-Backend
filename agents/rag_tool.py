@@ -9,6 +9,15 @@ from semantic_kernel.contents import ChatHistory
 TOP_K = 5
 MAX_EXAMPLES = 3
 
+# 유사도 하한선.
+# Cosmos VectorDistance(cosine)는 '유사도'(1.0=동일)를 반환하고, 인덱스에 뭐가 들었든
+# top_k개를 무조건 채워서 돌려준다 → 문서가 몇 개뿐인 샵은 쿼리와 전혀 안 맞는
+# 자기 캡션도 "이 샵의 말투 패턴"으로 올려보내게 된다.
+# 실측(2026-08, RagVectors 295건): 관련 쿼리 0.55~0.57 / 같은 도메인 다른 스타일 0.40~0.45
+#                                  / 무관 0.27~0.37 / 완전 무관 0.23~0.27
+# → 0.40 미만은 "가장 가까운 것"일 뿐 근거가 아니므로 버린다.
+RAG_MIN_SCORE = float(os.getenv("RAG_MIN_SCORE", "0.40"))
+
 
 # [임베딩] 텍스트 → 벡터 변환
 async def get_embedding(text: str) -> list:
@@ -65,8 +74,21 @@ async def search_rag_context(
     from services.vector_db import search_similar_captions
     try:
         # 타입별 분리 검색
-        body_results     = search_similar_captions(shop_id, query_vector, top_k=3,
-                            query_text=query_text, content_type="caption_body")
+        # caption_body(말투 학습용)는 사장님 원본(authored_by="human")을 우선 조회한다.
+        # AI 생성분까지 섞어서 뽑으면 "AI가 자기 말투를 다시 학습"하는 루프가 된다.
+        # 사람 원본이 모자랄 때만 무필터 검색으로 보충한다(콜드스타트 대비).
+        body_results = search_similar_captions(shop_id, query_vector, top_k=3,
+                            query_text=query_text, content_type="caption_body",
+                            authored_by="human")
+        if len(body_results) < 3:
+            seen_ids = {r.get("id") for r in body_results}
+            topup = search_similar_captions(shop_id, query_vector, top_k=3,
+                        query_text=query_text, content_type="caption_body")
+            added = [r for r in topup if r.get("id") not in seen_ids]
+            if added:
+                print(f"[rag_tool] 사람 원본 {len(body_results)}건뿐 → AI 생성분 {len(added)}건으로 보충")
+            body_results = (body_results + added)[:3]
+
         hashtag_results  = search_similar_captions(shop_id, query_vector, top_k=2,
                             query_text=query_text, content_type="hashtag_set")
         cta_results      = search_similar_captions(shop_id, query_vector, top_k=2,
@@ -134,11 +156,15 @@ def _build_search_query(trend_data: dict, selected_photos: list, brand_settings:
 
 # [헬퍼] 후처리
 def _postprocess(raw_results: list) -> list:
+    """유사도 하한선(RAG_MIN_SCORE) 미달 결과를 버리고 상위 MAX_EXAMPLES*2개만 반환.
+
+    전부 미달이면 빈 리스트를 반환하고, 호출부(search_rag_context)가 fallback으로 넘어간다.
     """
-    Vector DB 결과는 id/caption만 있음
-    → 필터링/정렬 없이 상위 MAX_EXAMPLES*2개만 반환
-    """
-    return raw_results[:MAX_EXAMPLES * 2]
+    kept = [r for r in raw_results if r.get("@search.score", 0) >= RAG_MIN_SCORE]
+    dropped = len(raw_results) - len(kept)
+    if dropped:
+        print(f"[rag_tool] 유사도 컷오프(<{RAG_MIN_SCORE}) → {dropped}개 제외, {len(kept)}개 유지")
+    return kept[:MAX_EXAMPLES * 2]
 
 
 # [헬퍼] GPT로 컨텍스트 압축 
@@ -297,6 +323,8 @@ async def index_post_for_rag(shop_id: str, post_id: str,
                 "caption": text,
                 "caption_vector": vec,
                 "content_type": ctype,
+                # BYBAEK이 생성한 글 → 말투 학습 대상에서 우선순위를 낮추기 위한 태그
+                "authored_by": "ai",
             })
         if docs:
             save_embeddings_batch(docs)

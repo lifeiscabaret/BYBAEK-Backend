@@ -72,6 +72,7 @@ JSON만 반환. 다른 텍스트 없이."""
             "competitor_hashtags": parsed.get("competitor_hashtags", []),
             "gap_opportunity":     parsed.get("gap_opportunity", ""),
             "avoid_overlap":       parsed.get("avoid_overlap", ""),
+            "source":              "search",
         }
         print(f"[competitor_analysis] 완료 → 틈새: {result['gap_opportunity'][:40]}")
         return result
@@ -82,10 +83,16 @@ JSON만 반환. 다른 텍스트 없이."""
 
 
 def _competitor_fallback() -> dict:
+    """검색/파싱 실패 시 기본값.
+
+    source="fallback"을 반드시 유지할 것 — post_writer가 이 값을 보고 캡션 프롬프트 주입을
+    건너뛴다. 고정 문구가 모든 샵에 주입되면 "캡션이 다 비슷하다" 문제를 오히려 키운다.
+    """
     return {
         "competitor_styles":   ["페이드컷", "투블럭"],
         "competitor_hashtags": ["#바버샵", "#페이드컷", "#남자헤어"],
         "gap_opportunity":     "직장인 출근룩 연계 콘텐츠 부족",
         "avoid_overlap":       "일반 페이드컷 사진은 이미 포화",
+        "source":              "fallback",
     }
 

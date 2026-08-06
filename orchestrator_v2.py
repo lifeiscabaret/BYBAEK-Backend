@@ -8,6 +8,7 @@ import json
 import time
 import asyncio
 import uuid
+from datetime import datetime, timezone
 from typing import TypedDict, Literal, Optional
 # from PIL import Image
 
@@ -444,6 +445,9 @@ async def _get_brand_settings(shop_id: str) -> dict:
         "hashtag_style":              to_list(shop.get("hashtag_style")),
         "cta":                        shop.get("cta", "DM으로 예약 문의주세요"),
         "shop_intro":                 shop.get("shop_intro", ""),
+        # 타겟 고객 설명 — shop_intro와 분리된 별도 슬롯으로 post_writer에 전달한다.
+        # 프론트가 아직 이 필드를 안 보내면 빈 문자열 → 슬롯 자체가 생략되어 기존 동작 유지.
+        "target_customer_text":       shop.get("target_customer_text", "") or "",
         "photo_range":                {
             "min": 1,
             "max": shop.get("photo_range_max", 5)
@@ -535,7 +539,9 @@ async def _auto_upload_instagram(shop_id, post_id, post_draft, selected_photos):
             "photo_ids":          [p.get("id") for p in selected_photos],
             "cta":                cta,
             "status":             "success",
-            "instagram_media_id": media_id
+            "review_action":      "auto_approved",
+            "instagram_media_id": media_id,
+            "published_at":       datetime.now(timezone.utc).isoformat(),
         })
 
         # RAG 플라이휠: 발행 성공분 인덱싱 (헬퍼가 예외 격리됨)

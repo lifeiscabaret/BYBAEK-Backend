@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone, timedelta
+import asyncio
 import os
 from dotenv import load_dotenv
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -16,9 +17,25 @@ KST = timezone(timedelta(hours=9))
 scheduler = AsyncIOScheduler(timezone="Asia/Seoul")
 
 
+# 정각에 동시에 돌릴 파이프라인 수.
+# 파이프라인 1회가 웹서치+Claude+재시도까지 수십 초라, 예전처럼 순차 실행하면
+# 같은 시간대 샵이 몇 개만 몰려도 뒤쪽 샵이 다음 정각으로 밀렸다.
+# 무제한 동시 실행은 Azure OpenAI / Claude rate limit에 걸리므로 상한을 둔다.
+PIPELINE_CONCURRENCY = int(os.getenv("PIPELINE_CONCURRENCY", "4"))
+
+
+async def _run_pipeline_guarded(shop_id: str, sem: "asyncio.Semaphore"):
+    """샵 1개 파이프라인 실행. 한 샵 실패가 다른 샵을 막지 않도록 예외를 격리한다."""
+    from orchestrator_v2 import run_pipeline
+    async with sem:
+        try:
+            await run_pipeline(shop_id=shop_id, trigger="auto")
+        except Exception as e:
+            print(f"[scheduler] 파이프라인 실패 ({shop_id}): {e}")
+
+
 async def _check_and_run_schedules():
     from services.cosmos_db import get_all_shops
-    from orchestrator_v2 import run_pipeline
 
     now = datetime.now(KST)
     current_hour = now.strftime("%H:00")
@@ -30,6 +47,7 @@ async def _check_and_run_schedules():
         print(f"[scheduler] 샵 목록 조회 실패: {e}")
         return
 
+    due_shop_ids = []
     for shop in shops:
         upload_time = shop.get("insta_upload_time", "")
         if not upload_time:
@@ -73,11 +91,17 @@ async def _check_and_run_schedules():
         if not shop_id:
             continue
 
-        print(f"[scheduler] 파이프라인 실행 → shop_id={shop_id}, time={current_hour}")  # ← current_time → current_hour
-        try:
-            await run_pipeline(shop_id=shop_id, trigger="auto")
-        except Exception as e:
-            print(f"[scheduler] 파이프라인 실패 ({shop_id}): {e}")
+        due_shop_ids.append(shop_id)
+
+    if not due_shop_ids:
+        print(f"[scheduler] {current_hour} 실행 대상 샵 없음")
+        return
+
+    print(f"[scheduler] 파이프라인 실행 → {len(due_shop_ids)}개 샵, "
+          f"동시 {PIPELINE_CONCURRENCY}개, time={current_hour}")
+    sem = asyncio.Semaphore(PIPELINE_CONCURRENCY)
+    await asyncio.gather(*(_run_pipeline_guarded(sid, sem) for sid in due_shop_ids))
+    print(f"[scheduler] {current_hour} 배치 완료 ({len(due_shop_ids)}개 샵)")
 
 
 async def _sync_all_shops_onedrive():
@@ -111,6 +135,14 @@ async def lifespan(app: FastAPI):
         _sync_all_shops_onedrive,
         CronTrigger(minute=0, hour="*/4"),
         id="onedrive_sync",
+        replace_existing=True
+    )
+    # 매일 새벽 4시 인스타 장기 토큰 갱신 (60일 만료 → 만료 전 자동 연장)
+    from workers.insta_token_refresh import refresh_all_instagram_tokens
+    scheduler.add_job(
+        refresh_all_instagram_tokens,
+        CronTrigger(hour=4, minute=10),
+        id="insta_token_refresh",
         replace_existing=True
     )
     scheduler.start()
