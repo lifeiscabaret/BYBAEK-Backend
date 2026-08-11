@@ -1,0 +1,146 @@
+[
+  {
+    "id": "C01",
+    "scenario": "foreign",
+    "condition": "human_rag"
+  },
+  {
+    "id": "C02",
+    "scenario": "father_son",
+    "condition": "ai_rag"
+  },
+  {
+    "id": "C03",
+    "scenario": "father_son",
+    "condition": "human_rag"
+  },
+  {
+    "id": "C04",
+    "scenario": "rainy",
+    "condition": "ai_rag"
+  },
+  {
+    "id": "C05",
+    "scenario": "sidepart",
+    "condition": "human_rag"
+  },
+  {
+    "id": "C06",
+    "scenario": "sidepart",
+    "condition": "cold"
+  },
+  {
+    "id": "C07",
+    "scenario": "buzz",
+    "condition": "human_rag"
+  },
+  {
+    "id": "C08",
+    "scenario": "skinfade",
+    "condition": "cold"
+  },
+  {
+    "id": "C09",
+    "scenario": "foreign",
+    "condition": "cold"
+  },
+  {
+    "id": "C10",
+    "scenario": "sidepart",
+    "condition": "ai_rag"
+  },
+  {
+    "id": "C11",
+    "scenario": "father_son",
+    "condition": "cold"
+  },
+  {
+    "id": "C12",
+    "scenario": "skinfade",
+    "condition": "ai_rag"
+  },
+  {
+    "id": "C13",
+    "scenario": "buzz",
+    "condition": "cold"
+  },
+  {
+    "id": "C14",
+    "scenario": "beforeafter",
+    "condition": "human_rag"
+  },
+  {
+    "id": "C15",
+    "scenario": "beforeafter",
+    "condition": "ai_rag"
+  },
+  {
+    "id": "C16",
+    "scenario": "beforeafter",
+    "condition": "cold"
+  },
+  {
+    "id": "C17",
+    "scenario": "foreign",
+    "condition": "ai_rag"
+  },
+  {
+    "id": "C18",
+    "scenario": "team",
+    "condition": "ai_rag"
+  },
+  {
+    "id": "C19",
+    "scenario": "buzz",
+    "condition": "ai_rag"
+  },
+  {
+    "id": "C20",
+    "scenario": "rainy",
+    "condition": "human_rag"
+  },
+  {
+    "id": "C21",
+    "scenario": "anchor",
+    "condition": "anchor",
+    "real_likes": 88,
+    "real_comments": 0,
+    "note": "팀 단체샷"
+  },
+  {
+    "id": "C22",
+    "scenario": "anchor",
+    "condition": "anchor",
+    "real_likes": null,
+    "real_comments": 5,
+    "note": "2025/4/22, 댓글 5개 — 계정 내 참여 최고"
+  },
+  {
+    "id": "C23",
+    "scenario": "rainy",
+    "condition": "cold"
+  },
+  {
+    "id": "C24",
+    "scenario": "team",
+    "condition": "cold"
+  },
+  {
+    "id": "C25",
+    "scenario": "anchor",
+    "condition": "anchor",
+    "real_likes": 96,
+    "real_comments": 0,
+    "note": "2/23, 인트로 있음 — 좋아요 최다"
+  },
+  {
+    "id": "C26",
+    "scenario": "team",
+    "condition": "human_rag"
+  },
+  {
+    "id": "C27",
+    "scenario": "skinfade",
+    "condition": "human_rag"
+  }
+]
