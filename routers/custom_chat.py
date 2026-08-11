@@ -16,7 +16,7 @@ from typing import List
 import anthropic
 
 from auth.token_verify import get_current_shop, require_shop_owner
-from utils.claude_auth import CLAUDE_BASE_URL, get_claude_token
+from utils.claude_auth import CLAUDE_BASE_URL, get_claude_model, get_claude_token
 
 
 router = APIRouter()
@@ -196,7 +196,7 @@ async def generate_chat_stream(shop_id: str, message: str, photo_ids: List[str])
 
     user_prompt = "\n\n".join(user_parts)
 
-    # 6. 스트리밍 생성 (Claude Sonnet 4.6)
+    # 6. 스트리밍 생성 (Claude — 모델은 CLAUDE_MODEL_NAME 환경변수)
     client = anthropic.Anthropic(
         base_url=CLAUDE_BASE_URL,
         auth_token=claude_token
@@ -204,7 +204,7 @@ async def generate_chat_stream(shop_id: str, message: str, photo_ids: List[str])
 
     try:
         with client.messages.stream(
-            model="claude-sonnet-4-6",
+            model=get_claude_model(),
             max_tokens=600,
             temperature=0.7,
             system=system_prompt,

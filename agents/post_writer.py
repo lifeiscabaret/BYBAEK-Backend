@@ -23,7 +23,7 @@ def _sample_for_variety(items: list, k: int) -> list:
         return list(items)
     return random.sample(list(items), k)
 
-from utils.claude_auth import CLAUDE_BASE_URL, get_claude_token
+from utils.claude_auth import CLAUDE_BASE_URL, get_claude_model, get_claude_token
 from utils.photo_vision import build_photo_image_blocks
 
 # 프롬프트 파일 디렉터리 (프로젝트 루트/prompts)
@@ -250,6 +250,8 @@ async def post_writer_agent(
     print(f"[post_writer] 시작 → shop_id={shop_id}, 모드={mode}")
 
     client = _init_claude_client()
+    # 최초 호출과 재시도 호출이 같은 모델을 쓰도록 한 번만 읽는다.
+    model_name = get_claude_model()
 
     # 사진 실제 이미지(멀티모달) 준비 — 실패하면 빈 리스트라서 텍스트 태그만으로 진행된다.
     image_blocks = await build_photo_image_blocks(selected_photos)
@@ -280,7 +282,7 @@ async def post_writer_agent(
 
     try:
         response = await client.messages.create(
-            model="claude-sonnet-4-6",
+            model=model_name,
             max_tokens=600,
             temperature=0.85,   # 자연스러운 말투 + 일관성 균형
             system=system_prompt,
@@ -310,7 +312,7 @@ async def post_writer_agent(
             else:
                 feedback_msg = f"이전 캡션에서 '{reason}'이 감지됐어. 확인되지 않은 사실은 절대 쓰지 마."
             response2 = await client.messages.create(
-                model="claude-sonnet-4-6",
+                model=model_name,
                 max_tokens=600,
                 temperature=0.85,
                 system=system_prompt,
@@ -921,7 +923,8 @@ def _fallback_draft(brand_settings: dict, trend_data: dict) -> dict:
 
 # [Claude 클라이언트 초기화]
 def _init_claude_client():
-    # Claude Sonnet 4.6 (Azure Foundry) - AAD(Entra) 토큰 인증. /anthropic 경로는 api-key 미지원.
+    # Claude (Azure Foundry) - AAD(Entra) 토큰 인증. /anthropic 경로는 api-key 미지원.
+    # 모델 식별자는 get_claude_model() — CLAUDE_MODEL_NAME 환경변수로 바꾼다.
     return anthropic.AsyncAnthropic(
         base_url=CLAUDE_BASE_URL,
         auth_token=get_claude_token(),

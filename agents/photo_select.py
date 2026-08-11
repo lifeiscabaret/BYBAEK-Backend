@@ -11,7 +11,7 @@ import json
 import anthropic
 from datetime import datetime, timezone, timedelta
 
-from utils.claude_auth import CLAUDE_BASE_URL, get_claude_token
+from utils.claude_auth import CLAUDE_BASE_URL, get_claude_model, get_claude_token
 
 REUSE_COOLDOWN_DAYS = 14
 
@@ -270,7 +270,7 @@ async def _gpt_expand_selection(
             auth_token=get_claude_token()
         )
         response = await client.messages.create(
-            model="claude-sonnet-4-6",
+            model=get_claude_model(),
             max_tokens=300,
             messages=[{"role": "user", "content": prompt}]
         )
