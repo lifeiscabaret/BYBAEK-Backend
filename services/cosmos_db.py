@@ -614,6 +614,62 @@ def get_published_media_ids(shop_id: str) -> set:
         return set()
 
 
+def get_posts_for_engagement() -> list:
+    """실참여 수집 대상 — 인스타에 실제 발행된 게시물 전체 (워커 전용).
+
+    published_at은 2026-08 이후 발행분에만 있으므로, 없으면 created_at으로 폴백한다.
+    """
+    container = get_cosmos_container("Post")
+    query = """
+        SELECT c.id, c.shop_id, c.instagram_media_id, c.published_at, c.created_at, c.engagement
+        FROM c
+        WHERE IS_DEFINED(c.instagram_media_id) AND c.instagram_media_id != null
+    """
+    try:
+        return list(container.query_items(query=query, enable_cross_partition_query=True))
+    except Exception as e:
+        logging.error(f"참여 수집 대상 조회 실패: {str(e)}")
+        return []
+
+
+def save_post_engagement(shop_id: str, post_id: str, window: str, snapshot: dict) -> bool:
+    """Post 문서의 engagement[window]에 참여 지표 스냅샷을 기록한다.
+
+    window: "24h" | "7d" — 발행 후 경과 시점별로 따로 보관한다
+            (초기 확산과 롱테일을 구분해야 캡션 효과를 볼 수 있다).
+    """
+    container = get_cosmos_container("Post")
+    try:
+        item = container.read_item(item=post_id, partition_key=shop_id)
+        engagement = item.get("engagement") or {}
+        engagement[window] = snapshot
+        item["engagement"] = engagement
+        item["engagement_updated_at"] = datetime.utcnow().isoformat()
+        container.upsert_item(body=item)
+        return True
+    except Exception as e:
+        logging.error(f"참여 지표 저장 실패 (post_id: {post_id}, window: {window}): {str(e)}")
+        return False
+
+
+def get_posts_with_engagement(shop_id: str, limit: int = 50) -> list:
+    """성과 분석용 — 참여 지표가 수집된 게시물."""
+    container = get_cosmos_container("Post")
+    query = """
+        SELECT TOP @limit c.id, c.caption, c.hashtags, c.engagement, c.published_at, c.created_at
+        FROM c
+        WHERE c.shop_id = @shop_id AND IS_DEFINED(c.engagement)
+        ORDER BY c._ts DESC
+    """
+    parameters = [{"name": "@shop_id", "value": shop_id}, {"name": "@limit", "value": limit}]
+    try:
+        return list(container.query_items(query=query, parameters=parameters,
+                                          enable_cross_partition_query=True))
+    except Exception as e:
+        logging.error(f"참여 지표 게시물 조회 실패 ({shop_id}): {str(e)}")
+        return []
+
+
 def get_shops_with_instagram() -> list:
     """인스타 장기 토큰을 보유한 샵 목록 (토큰 자동 갱신 잡 전용).
 

@@ -24,6 +24,7 @@ def _sample_for_variety(items: list, k: int) -> list:
     return random.sample(list(items), k)
 
 from utils.claude_auth import CLAUDE_BASE_URL, get_claude_token
+from utils.photo_vision import build_photo_image_blocks
 
 # 프롬프트 파일 디렉터리 (프로젝트 루트/prompts)
 _PROMPT_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "prompts")
@@ -44,6 +45,84 @@ def _load_prompt_file(rel_path: str) -> str:
         content = ""
     _PROMPT_CACHE[rel_path] = content
     return content
+
+
+def _repair_unescaped_quotes(raw: str) -> str:
+    """JSON 문자열 값 안에 이스케이프 없이 들어간 큰따옴표를 복구한다.
+
+    실측: 이 샵 CTA가 '예약: 네이버 검색창 "us바버샵용산본점" / 문의: ...' 처럼 따옴표를 포함해서,
+    모델이 그대로 옮겨 적으면 json.loads가 깨지고 → fallback(목업) 캡션이 나갔다.
+    문자열 안의 " 뒤에 오는 첫 비공백 문자가 구조 문자(, : } ])가 아니면 값의 일부로 보고 이스케이프한다.
+    """
+    out = []
+    in_str = False
+    escaped = False
+    for i, ch in enumerate(raw):
+        if not in_str:
+            out.append(ch)
+            if ch == '"':
+                in_str = True
+            continue
+        if escaped:
+            out.append(ch)
+            escaped = False
+            continue
+        if ch == '\\':
+            out.append(ch)
+            escaped = True
+            continue
+        if ch == '"':
+            j = i + 1
+            while j < len(raw) and raw[j] in ' \t\r\n':
+                j += 1
+            if j >= len(raw) or raw[j] in ',:}]':
+                out.append(ch)
+                in_str = False
+            else:
+                out.append('\\"')
+            continue
+        out.append(ch)
+    return "".join(out)
+
+
+def _extract_json_object(raw: str) -> str:
+    """앞뒤에 붙은 설명 문장을 걷어내고 바깥 { ... } 덩어리만 남긴다.
+
+    실측: 사진이 바버샵과 무관한 이미지(샵 앨범에 섞여 있던 모델 사진)일 때
+    모델이 "이 사진은 여성 모델이라 …" 같은 안내 문장을 JSON 앞뒤에 덧붙였고,
+    그 때문에 파싱이 깨져 fallback(목업) 캡션이 나갔다.
+    """
+    start = raw.find("{")
+    end = raw.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return raw
+    return raw[start:end + 1]
+
+
+def _parse_draft_json(raw: str) -> dict:
+    """모델 응답 → dict. 이스케이프 누락으로 깨진 JSON은 한 번 복구해서 재시도한다.
+
+    복구 시도에만 strict=False를 쓴다. 캡션은 여러 줄이 기본이라 모델이 \\n 대신
+    실제 개행을 그대로 흘리면 표준 파서가 거부하는데(control character), 이때도
+    목업 캡션으로 빠지는 대신 값을 살린다. 정상 JSON의 해석은 달라지지 않는다.
+    """
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        pass
+
+    candidate = _extract_json_object(raw)
+    if candidate != raw:
+        try:
+            result = json.loads(candidate)
+            print("[post_writer] 응답에 섞인 설명 문장 제거 후 파싱 성공")
+            return result
+        except json.JSONDecodeError:
+            pass
+
+    result = json.loads(_repair_unescaped_quotes(candidate), strict=False)
+    print("[post_writer] JSON 이스케이프 오류 복구 후 파싱 성공")
+    return result
 
 
 def _strip_comments(text: str) -> str:
@@ -172,6 +251,9 @@ async def post_writer_agent(
 
     client = _init_claude_client()
 
+    # 사진 실제 이미지(멀티모달) 준비 — 실패하면 빈 리스트라서 텍스트 태그만으로 진행된다.
+    image_blocks = await build_photo_image_blocks(selected_photos)
+
     # 프롬프트 구성
     system_prompt, user_prompt = _build_prompt(
         trend_data=trend_data,
@@ -181,8 +263,20 @@ async def post_writer_agent(
         rag_context=rag_context,
         previous_draft=previous_draft,
         feedback=feedback,
-        user_request=user_request
+        user_request=user_request,
+        attached_photo_count=len(image_blocks)
     )
+
+    # 이미지가 있으면 content block 리스트로 구성한다.
+    # 이미지를 텍스트보다 앞에 두는 편이 인식률이 좋고, 여러 장일 땐 라벨을 붙여 구분한다.
+    if image_blocks:
+        user_content = []
+        for i, block in enumerate(image_blocks, 1):
+            user_content.append({"type": "text", "text": f"[사진 {i}]"})
+            user_content.append(block)
+        user_content.append({"type": "text", "text": user_prompt})
+    else:
+        user_content = user_prompt
 
     try:
         response = await client.messages.create(
@@ -190,12 +284,12 @@ async def post_writer_agent(
             max_tokens=600,
             temperature=0.85,   # 자연스러운 말투 + 일관성 균형
             system=system_prompt,
-            messages=[{"role": "user", "content": user_prompt}]
+            messages=[{"role": "user", "content": user_content}]
         )
 
         raw = response.content[0].text.strip()
         raw = raw.replace("```json", "").replace("```", "").strip()
-        result = json.loads(raw)
+        result = _parse_draft_json(raw)
 
         # 금칙어 + 할루시네이션 검증
         result = _validate_and_clean(result, brand_settings)
@@ -221,7 +315,8 @@ async def post_writer_agent(
                 temperature=0.85,
                 system=system_prompt,
                 messages=[
-                    {"role": "user", "content": user_prompt},
+                    # 재시도에도 같은 이미지가 유지돼야 한다 (user_content 그대로 재사용)
+                    {"role": "user", "content": user_content},
                     {"role": "assistant", "content": str(result.get("caption", ""))},
                     {"role": "user", "content": feedback_msg},
                 ]
@@ -229,7 +324,7 @@ async def post_writer_agent(
             raw2 = response2.content[0].text.strip().replace("```json", "").replace("```", "").strip()
             try:
                 # 2차에도 위반이 남으면 그때만 문장 단위로 들어낸다 (last_resort)
-                result = _validate_and_clean(json.loads(raw2), brand_settings, last_resort=True)
+                result = _validate_and_clean(_parse_draft_json(raw2), brand_settings, last_resort=True)
             except Exception:
                 pass  # 재시도 파싱 실패 시 1차 결과 그대로 사용
 
@@ -264,10 +359,14 @@ def _build_prompt(
     rag_context: dict,
     previous_draft: dict = None,
     feedback: str = None,
-    user_request: str = None
+    user_request: str = None,
+    attached_photo_count: int = 0
 ) -> tuple:
     """
     시스템 프롬프트 + 유저 프롬프트 구성
+
+    attached_photo_count: 메시지에 실제 이미지가 몇 장 첨부됐는지.
+      0이면 기존처럼 스타일 태그만 설명하고, 1장 이상이면 "사진을 직접 보고 써라"로 지시가 바뀐다.
 
     구조:
       시스템: 역할 + 브랜드 설정 + 응답 형식
@@ -482,6 +581,21 @@ def _build_prompt(
                 style_info.append(f"- {', '.join(tags)}")
         if style_info:
             parts.append(f"[오늘 올릴 사진 스타일]\n" + "\n".join(style_info))
+
+    # 2-1. 실제 이미지가 첨부된 경우 — 태그가 아니라 사진 자체를 보고 쓰라고 명시.
+    # (지시가 없으면 모델이 이미지를 참고만 하고 결국 태그 수준의 일반론으로 돌아간다)
+    if attached_photo_count:
+        parts.append(
+            f"[오늘 올릴 사진 — 실제 이미지 {attached_photo_count}장이 이 메시지에 첨부돼 있어]\n"
+            "위 태그 나열이 아니라 사진을 직접 보고 써줘. "
+            "그 사진에만 있는 구체적인 디테일(옆라인/기장 같은 시술 결과, 표정, 조명과 분위기, 배경, 옷차림)을 "
+            "한두 군데 자연스럽게 녹여서, 이 사진이 아니면 못 쓸 문장을 만들어줘.\n"
+            "단, 사진에서 확인되지 않는 건 절대 지어내지 마 "
+            "(손님 나이·직업·사연, 시술 시간, 사용 제품 등). 사진 설명문처럼 나열하지도 마.\n"
+            "⚠️ 사진이 바버샵/남성 헤어 내용과 안 맞거나 캡션에 쓰기 어려우면, "
+            "그 사진 얘기는 빼고 나머지 정보만으로 캡션을 완성해. "
+            "사진이 부적절하다고 설명하거나 되묻지 말고, 어떤 경우에도 JSON 외의 문장은 출력하지 마."
+        )
 
     # 3. RAG 예시 (과거 게시물 패턴)
     if rag_context:
