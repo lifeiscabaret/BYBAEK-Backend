@@ -2,7 +2,7 @@
 Instagram 과거 게시물 자동 분석 에이전트
 
 역할: 사장님 인스타 계정 연동 완료 시 과거 게시물을 수집하고
-      Claude(Sonnet 4.6)로 말투/이모지/해시태그 패턴을 분석하여 DB에 저장
+      Claude로 말투/이모지/해시태그 패턴을 분석하여 DB에 저장
 
 입력: shop_id (Shop 컨테이너에서 insta_user_id, insta_access_token 조회)
 출력: insta_style_profile 딕셔너리 → Shop DB에 자동 저장
@@ -10,7 +10,7 @@ Instagram 과거 게시물 자동 분석 에이전트
 흐름:
   1. Shop DB에서 인스타 인증 정보 조회
   2. Instagram Graph API로 과거 게시물 최대 50개 수집
-  3. Claude(Sonnet 4.6)로 말투/패턴 분석
+  3. Claude로 말투/패턴 분석
   4. 분석 결과를 Shop DB의 insta_style_profile 필드에 저장
 """
 
@@ -19,7 +19,7 @@ import asyncio
 import httpx
 import anthropic
 from services.cosmos_db import get_auth, save_auth
-from utils.claude_auth import CLAUDE_BASE_URL, get_claude_token
+from utils.claude_auth import CLAUDE_BASE_URL, get_claude_model, get_claude_token
 
 
 async def analyze_instagram_history(shop_id: str) -> dict:
@@ -137,7 +137,7 @@ async def _fetch_instagram_username(user_id: str, access_token: str) -> dict:
 
 
 async def _analyze_with_gpt(posts: list) -> dict:
-    """Claude(Sonnet 4.6)로 캡션 말투/스타일 패턴 분석 (NOVA식 구조 분석)"""
+    """Claude로 캡션 말투/스타일 패턴 분석 (NOVA식 구조 분석)"""
     # 캡션 목록 구성 (like_count 있으면 포함)
     caption_lines = []
     for i, post in enumerate(posts, 1):
@@ -181,7 +181,7 @@ async def _analyze_with_gpt(posts: list) -> dict:
 
     try:
         response = await client.messages.create(
-            model="claude-sonnet-4-6",
+            model=get_claude_model(),
             max_tokens=1500,   # 800 → 1500 (잘림 방지)
             system=system_prompt,
             messages=[{"role": "user", "content": user_prompt}]

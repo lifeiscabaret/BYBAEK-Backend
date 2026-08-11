@@ -33,6 +33,26 @@ CLAUDE_BASE_URL = os.getenv(
 #   (로컬 az login 사용자 토큰은 두 audience 모두 허용되지만, 배포본 MI는 ai.azure.com 만 통과.)
 _SCOPE = "https://ai.azure.com/.default"
 
+# 캡션 생성/인스타 분석에 쓰는 Claude 모델 식별자.
+# 예전엔 각 호출부에 "claude-sonnet-4-6"이 하드코딩돼 있어 모델을 바꾸려면 코드를 고쳐야 했다.
+DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-6"
+
+
+def get_claude_model() -> str:
+    """CLAUDE_MODEL_NAME 환경변수로 모델을 바꾼다. 없거나 비어 있으면 기존 모델 그대로.
+
+    [주의] 모듈 로드 시점의 os.getenv 상수로 두면 안 된다.
+      main.py는 routers를 import한 뒤(10행)에야 load_dotenv()를 호출하므로(14행),
+      이 모듈은 .env가 로드되기 전에 import된다. 상수로 굳히면 .env에 적은 값이
+      조용히 무시되고 기본값으로 돌아간다(App Service의 실제 환경변수는 동작하지만
+      로컬 .env 테스트가 안 됨). 그래서 호출 시점에 읽는다.
+
+    [주의] 빈 문자열도 기본값으로 취급한다.
+      .env.example을 그대로 복사하면 'CLAUDE_MODEL_NAME=' 가 되고, dotenv는 이걸
+      None이 아니라 ''로 넣는다. 그대로 넘기면 모델명 없이 API를 호출해 실패한다.
+    """
+    return os.getenv("CLAUDE_MODEL_NAME", "").strip() or DEFAULT_CLAUDE_MODEL
+
 # 단일 크리덴셜 인스턴스 → 토큰 캐시/자동 갱신 공유 (모듈 로드 시 네트워크 호출 없음)
 #
 # [중요] DefaultAzureCredential 대신 명시적 체인을 쓰는 이유
