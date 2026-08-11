@@ -680,7 +680,15 @@ def _strip_duplicate_cta(caption: str, cta: str) -> str:
 
     발행 시 caption + hashtags + cta 로 합쳐지므로(orchestrator_v2._auto_upload_instagram,
     routers/agent._handle_upload), 본문에 남아 있으면 게시물에 CTA가 두 번 나온다.
-    오탐을 피하려고 '줄 전체가 CTA' 또는 '정확한 부분 문자열'인 경우만 제거한다.
+    오탐을 피하려고 CTA 문자열이 정확히 들어 있는 경우만 건드린다.
+
+    [변경] 예전엔 cleaned.replace(cta, "")로 CTA 부분만 도려냈다. CTA가 문장 중간에
+    섞여 있으면("...스타일 고민 있으면 편하게 DM으로 예약해주세요") 앞부분이 잘린 채
+    "스타일 고민 있으면 편하게" 로 남아 캡션이 문장 중간에서 끊겼다 (실측: 5조합 10건 중 6건).
+    금칙어를 단어 단위로 지웠다가 문장이 깨졌던 것과 같은 패턴이라, 같은 해법을 쓴다
+    → CTA가 든 줄은 _strip_violating_sentences()로 그 **문장**을 통째로 들어낸다.
+    (캡션 전체에 걸지 않고 해당 줄에만 적용하는 이유: 그 함수는 빈 줄을 버리므로
+     캡션 전체에 걸면 문단 구분이 사라진다.)
     """
     if not caption or not cta:
         return caption
@@ -688,11 +696,28 @@ def _strip_duplicate_cta(caption: str, cta: str) -> str:
     norm = lambda s: re.sub(r'\s+', ' ', s).strip()
     cta_norm = norm(cta)
 
-    kept = [ln for ln in caption.split("\n") if norm(ln) != cta_norm]
+    # CTA 자체가 여러 문장이면 어느 한 문장도 CTA 전체를 담지 못해 문장 단위 비교에 걸리지 않는다.
+    # 이럴 때만 CTA를 문장 조각으로도 함께 넘겨서 각 조각이 든 문장을 제거한다.
+    cta_parts = [p for p in re.split(r'(?<=[.!?…])\s+', cta) if p.strip()]
+    banned = [cta] + (cta_parts if len(cta_parts) > 1 else [])
+
+    kept = []
+    for line in caption.split("\n"):
+        if norm(line) == cta_norm:
+            continue                # 줄 전체가 CTA → 줄째 제거 (기존 동작 유지)
+        if cta in line:
+            line = _strip_violating_sentences(line, banned)
+            if not line.strip():
+                continue            # 그 줄이 CTA 문장뿐이었으면 줄째 제거
+        kept.append(line)
+
     cleaned = "\n".join(kept)
 
-    if cta in cleaned:
-        cleaned = cleaned.replace(cta, "")
+    # 문장 단위로 지웠더니 캡션이 통째로 비는 극단적인 경우만 최후 수단으로 부분 제거.
+    # (빈 캡션보다는 잘린 문장이라도 남기는 편이 낫다 — _validate_and_clean의 처리와 동일한 안전망)
+    if not cleaned.strip() and caption.strip():
+        print("[post_writer] CTA 문장 제거 시 캡션이 비어 부분 제거로 대체")
+        cleaned = caption.replace(cta, "")
 
     cleaned = re.sub(r'\n{3,}', '\n\n', cleaned).strip()
     if cleaned != caption.strip():
