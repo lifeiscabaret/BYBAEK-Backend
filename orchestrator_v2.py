@@ -561,9 +561,15 @@ async def _send_push_notification(shop_id, post_id, post_draft):
     try:
         from services.cosmos_db import get_auth
         shop_auth   = await asyncio.to_thread(get_auth, shop_id) or {}
-        owner_email = shop_auth.get("owner_email") or shop_auth.get("gmail")
-        if not owner_email: return
-        from services.email_service import send_draft_notification
-        await send_draft_notification(owner_email, post_id, post_draft.get("caption", ""))
+        # owner_email 이 비어 있으면 MS 로그인 이메일까지 폴백 (resolve_owner_email 참고).
+        from services.email_service import resolve_owner_email, send_draft_notification
+        owner_email = resolve_owner_email(shop_auth)
+        if not owner_email:
+            print(f"[orchestrator_v2] 알림 받을 이메일 없음 → 발송 스킵 (shop_id={shop_id})")
+            return
+        # shop_id를 넘겨야 메일 본문에 실제 /review 링크가 들어간다.
+        await send_draft_notification(
+            owner_email, post_id, post_draft.get("caption", ""), shop_id=shop_id
+        )
     except Exception as e:
         print(f"[orchestrator_v2] 알림 에러 (무시): {e}")

@@ -16,7 +16,12 @@ from services.cosmos_db import get_post_by_shop
 from services.cosmos_db import save_draft
 from services.cosmos_db import save_post_data
 from services.cosmos_db import get_post_detail_data
-from auth.token_verify import get_current_shop, require_shop_owner
+from auth.token_verify import (
+    get_current_shop,
+    get_current_shop_or_review,
+    require_shop_owner,
+    require_post_access,
+)
 from routers.photos import _to_sas_url
 from orchestrator_v2 import run_pipeline
 
@@ -43,6 +48,8 @@ class AgentReviewRequest(BaseModel):
     post_id: str
     action: str
     edited_caption: Optional[str] = None
+    # 검토 화면에서 사진을 갈아끼우거나 순서를 바꾼 경우. None 이면 초안 사진 그대로.
+    edited_photo_ids: Optional[List[str]] = None
 
     class Config:
         json_schema_extra = {
@@ -50,7 +57,8 @@ class AgentReviewRequest(BaseModel):
                 "shop_id": "3sesac18",
                 "post_id": "post_abc12345",
                 "action": "ok",
-                "edited_caption": None
+                "edited_caption": None,
+                "edited_photo_ids": None
             }
         }
 
@@ -84,8 +92,12 @@ async def agent_run(req: AgentRunRequest, current_shop: dict = Depends(get_curre
 
 
 @router.post("/review")
-async def agent_review(req: AgentReviewRequest, current_shop: dict = Depends(get_current_shop)):
-    require_shop_owner(current_shop, req.shop_id)
+async def agent_review(
+    req: AgentReviewRequest,
+    current_shop: dict = Depends(get_current_shop_or_review),
+):
+    # 메일 검토 링크 토큰으로도 들어올 수 있으므로, 샵 소유권 + 대상 post_id 까지 검증한다.
+    require_post_access(current_shop, req.shop_id, req.post_id)
     if req.action not in ("ok", "edit", "cancel"):
         raise HTTPException(400, "action은 'ok', 'edit', 'cancel' 중 하나여야 합니다.")
 
@@ -98,7 +110,11 @@ async def agent_review(req: AgentReviewRequest, current_shop: dict = Depends(get
             return {"post_id": req.post_id, "status": "cancelled"}
 
         caption_to_use = req.edited_caption if req.action == "edit" else None
-        await _handle_upload(req.shop_id, req.post_id, caption_to_use)
+        await _handle_upload(
+            req.shop_id, req.post_id, caption_to_use,
+            edited_photo_ids=req.edited_photo_ids,
+            review_action=req.action,
+        )
         return {"post_id": req.post_id, "status": "uploaded"}
 
     except Exception as e:
@@ -135,8 +151,14 @@ async def save_post(req: PostSaveRequest, current_shop: dict = Depends(get_curre
 
 
 @router.get("/post/detail/{post_id}")
-async def get_post_detail(post_id: str, shop_id: str, current_shop: dict = Depends(get_current_shop)):
-    require_shop_owner(current_shop, shop_id)
+async def get_post_detail(
+    post_id: str,
+    shop_id: str,
+    current_shop: dict = Depends(get_current_shop_or_review),
+):
+    # /review 가 메일 링크 토큰만 들고 초안을 불러오는 경로. 대상 post_id 까지 검증한다.
+    # (get_post_detail_data 는 read_item 직접 조회라 status='pending' 인 초안도 나온다.)
+    require_post_access(current_shop, shop_id, post_id)
     post = get_post_detail_data(post_id, shop_id)
     if not post:
         raise HTTPException(status_code=404, detail="게시물을 찾을 수 없습니다.")
@@ -152,14 +174,24 @@ async def get_post_detail(post_id: str, shop_id: str, current_shop: dict = Depen
     return post
 
 
-async def _handle_upload(shop_id: str, post_id: str, edited_caption: str = None):
-    """초안 조회 → (캡션 수정) → Instagram 업로드 → 이력 저장"""
+async def _handle_upload(
+    shop_id: str,
+    post_id: str,
+    edited_caption: str = None,
+    edited_photo_ids: list = None,
+    review_action: str = "ok",
+):
+    """초안 조회 → (캡션/사진 수정) → Instagram 업로드 → 이력 저장"""
     from services.cosmos_db import get_draft, save_post_data
 
     draft = get_draft(shop_id=shop_id, post_id=post_id)
     print(f"[DEBUG] draft 조회 결과: {draft}")
     if not draft:
         raise ValueError(f"초안을 찾을 수 없습니다: {post_id}")
+
+    # AI 원본 캡션은 덮어쓰기 전에 따로 챙긴다. 재검토로 두 번 들어와도 최초 원본이
+    # 유지되도록, 이미 ai_caption 이 있으면 그걸 그대로 쓴다.
+    ai_caption = draft.get("ai_caption") or draft.get("caption", "")
 
     if edited_caption:
         draft["caption"] = edited_caption
@@ -175,7 +207,8 @@ async def _handle_upload(shop_id: str, post_id: str, edited_caption: str = None)
     cta          = draft.get("cta", "")
     full_caption = f"{caption}\n\n{' '.join(hashtags)}\n{cta}".strip()
 
-    photo_ids = draft.get("photo_ids", [])
+    # 검토 화면에서 사진을 바꿨으면 그 목록(순서 포함)을 쓴다. None 이면 초안 그대로.
+    photo_ids = edited_photo_ids if edited_photo_ids is not None else draft.get("photo_ids", [])
 
     # Instagram(외부)이 직접 fetch하므로, 비공개 컨테이너 대비 SAS URL로 전달한다.
     # (예전엔 split("?")[0]로 SAS를 벗겨 bare URL을 넘겼고, 공개 컨테이너에 의존했음)
@@ -203,11 +236,13 @@ async def _handle_upload(shop_id: str, post_id: str, edited_caption: str = None)
         post_data={
             "id":                 post_id,
             "caption":            caption,
+            # AI 원본. 사장님이 고친 caption 과 나란히 남겨야 "원본 vs 수정본" 비교가 가능하다.
+            "ai_caption":         ai_caption,
             "hashtags":           hashtags,
             "photo_ids":          photo_ids,
             "cta":                cta,
             "status":             "success" if instagram_media_id else "fail",
-            "review_action":      "ok",
+            "review_action":      review_action,
             "instagram_media_id": instagram_media_id,
             "published_at":       datetime.now(timezone.utc).isoformat(),
         }

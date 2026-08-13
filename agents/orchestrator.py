@@ -590,16 +590,17 @@ async def _send_push_notification(shop_id: str, post_id: str, post_draft: dict):
     """
     try:
         from services.cosmos_db import get_auth
-        shop_auth   = get_auth(shop_id) or {}
-        owner_email = shop_auth.get("owner_email") or shop_auth.get("gmail")
+        shop_auth = get_auth(shop_id) or {}
+        # owner_email 이 비어 있으면 MS 로그인 이메일까지 폴백 (resolve_owner_email 참고).
+        from services.email_service import resolve_owner_email, send_draft_notification
+        owner_email = resolve_owner_email(shop_auth)
 
         if not owner_email:
             print(f"[orchestrator] 이메일 없음 → 알림 스킵 (shop_id={shop_id})")
             return
 
-        from services.email_service import send_draft_notification
         caption = post_draft.get("caption", "")
-        success = await send_draft_notification(owner_email, post_id, caption)
+        success = await send_draft_notification(owner_email, post_id, caption, shop_id=shop_id)
 
         if success:
             print(f"[orchestrator] 알림 메일 발송 완료 → {owner_email}")
