@@ -76,6 +76,17 @@ def _persist_and_issue(ms_user_id: str, ms_user_name: str, refresh_token: str = 
     if refresh_token:
         auth_data["refresh_token"] = refresh_token
 
+    # 알림 수신 주소 자동 채움.
+    # 검토 알림 메일을 보낼 owner_email 을 실제로 입력받는 화면이 라이브에 하나도 없어서
+    # (OnboardingSurvey 컴포넌트는 어디에서도 렌더되지 않음) 전 샵이 비어 있었고,
+    # 그래서 초안 알림이 한 번도 발송되지 않았다. MS 로그인 principal 이 이미
+    # 이메일 형식으로 들어오므로 이걸 기본값으로 깔아준다.
+    # 사장님이 직접 설정한 값은 절대 덮어쓰지 않는다 — 비어 있을 때만 채운다.
+    from services.email_service import looks_like_email
+    if not (existing_user or {}).get("owner_email") and looks_like_email(ms_user_name):
+        auth_data["owner_email"] = str(ms_user_name).strip()
+        logging.info(f"[auth] owner_email 자동 설정 ({ms_user_id})")
+
     if not existing_user:
         auth_data["created_at"] = current_time
         logging.info(f"신규 유저 가입: {ms_user_id}")
