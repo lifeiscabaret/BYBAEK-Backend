@@ -26,6 +26,11 @@ from utils.logging import logger
 JWT_ALGORITHM = "HS256"
 TOKEN_TTL_HOURS = 24
 
+# 이메일 검토 링크 전용 토큰. 초안의 review_deadline(24h)보다 넉넉히 잡아
+# "메일은 왔는데 링크는 이미 죽어있는" 상황을 피한다.
+REVIEW_TOKEN_TTL_HOURS = 48
+REVIEW_TOKEN_HEADER = "X-Review-Token"
+
 
 def _get_secret() -> str:
     """JWT_SECRET 환경변수. 미설정이면 서버 설정 오류로 500 (기본값 폴백 금지)."""
@@ -109,3 +114,55 @@ def require_shop_owner(current_shop: dict, shop_id: str) -> None:
     """
     if current_shop.get("shop_id") != shop_id:
         raise HTTPException(status_code=403, detail="다른 샵의 데이터에 접근할 수 없습니다")
+
+
+def issue_review_token(shop_id: str, post_id: str) -> str:
+    """이메일 검토 알림 링크에 실을 '초안 1건 전용' 토큰.
+
+    [왜 필요한가]
+    프론트는 세션 access_token 을 sessionStorage 에 둔다. sessionStorage 는 탭 단위라
+    메일 앱에서 눌러 새로 열린 탭에는 토큰이 없다 → 검토 링크는 사실상 항상 401 이었다.
+
+    [왜 세션 토큰을 그냥 주지 않는가]
+    메일 링크가 새어나가면 샵 전체 권한이 넘어간다. 그래서 sign_short_lived 로
+    {"data": {...}} 형태로 감싸 서명한다. 이 토큰은 top-level 에 shop_id 가 없으므로
+    get_current_shop() 으로는 절대 통과하지 못하고, 오직 아래 get_current_shop_or_review()
+    를 쓰는 엔드포인트에서 payload 의 post_id 하나에 대해서만 통한다.
+    """
+    return sign_short_lived(
+        {"scope": "review", "shop_id": shop_id, "post_id": post_id},
+        ttl_seconds=REVIEW_TOKEN_TTL_HOURS * 3600,
+    )
+
+
+async def get_current_shop_or_review(request: Request) -> dict:
+    """세션 토큰(Authorization) 우선, 없으면 검토 전용 토큰(X-Review-Token)을 받는다.
+
+    검토 토큰으로 통과한 경우 반환 dict 에 review_post_id 가 담긴다.
+    이 값이 있으면 반드시 require_post_access() 로 대상 post_id 를 함께 검증해야 한다.
+    (require_shop_owner 만 쓰면 검토 토큰이 샵 전체 권한처럼 동작해버린다.)
+    """
+    if request.headers.get("Authorization") or request.headers.get("authorization"):
+        return await get_current_shop(request)
+
+    token = request.headers.get(REVIEW_TOKEN_HEADER)
+    if not token:
+        raise HTTPException(status_code=401, detail="인증 토큰이 필요합니다")
+
+    try:
+        data = verify_short_lived(token)
+    except JWTError:
+        raise HTTPException(status_code=401, detail="만료되었거나 유효하지 않은 검토 링크입니다")
+
+    if data.get("scope") != "review" or not data.get("shop_id") or not data.get("post_id"):
+        raise HTTPException(status_code=401, detail="유효하지 않은 검토 링크입니다")
+
+    return {"shop_id": data["shop_id"], "review_post_id": data["post_id"]}
+
+
+def require_post_access(current_shop: dict, shop_id: str, post_id: str) -> None:
+    """require_shop_owner + 검토 전용 토큰이면 링크에 서명된 post_id 로 범위를 제한한다."""
+    require_shop_owner(current_shop, shop_id)
+    review_post_id = current_shop.get("review_post_id")
+    if review_post_id is not None and review_post_id != post_id:
+        raise HTTPException(status_code=403, detail="이 검토 링크로는 접근할 수 없는 게시물입니다")
