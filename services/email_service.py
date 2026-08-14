@@ -1,5 +1,4 @@
 import os
-import re
 import base64
 import asyncio
 import logging
@@ -11,6 +10,11 @@ from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
+
+# 주소 판별은 google 의존성이 없는 utils 쪽에 있다 (분리 이유는 해당 모듈 참고).
+# 여기서 re-export 해서 기존 `from services.email_service import looks_like_email`
+# 호출부가 깨지지 않게 한다.
+from utils.email_utils import looks_like_email  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
@@ -79,15 +83,6 @@ async def send_email(to_email: str, subject: str, body: str) -> bool:
     비동기 래퍼 - FastAPI 컨텍스트에서 블로킹 없이 호출 가능
     """
     return await asyncio.to_thread(_send_email_sync, to_email, subject, body)
-
-
-# 발송 가능한 주소인지 최소 확인용. 엄격한 RFC 검증이 아니라
-# "UPN 이 메일 주소 꼴인가"를 거르는 용도다 (아래 resolve_owner_email 참고).
-_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-
-
-def looks_like_email(value) -> bool:
-    return bool(value and _EMAIL_RE.match(str(value).strip()))
 
 
 def resolve_owner_email(shop_auth: dict) -> str:

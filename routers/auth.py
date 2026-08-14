@@ -82,7 +82,10 @@ def _persist_and_issue(ms_user_id: str, ms_user_name: str, refresh_token: str = 
     # 그래서 초안 알림이 한 번도 발송되지 않았다. MS 로그인 principal 이 이미
     # 이메일 형식으로 들어오므로 이걸 기본값으로 깔아준다.
     # 사장님이 직접 설정한 값은 절대 덮어쓰지 않는다 — 비어 있을 때만 채운다.
-    from services.email_service import looks_like_email
+    # utils.email_utils 에서 가져온다 — services.email_service 는 최상단에서
+    # google-auth / googleapiclient 를 import 하므로, 그쪽을 참조하면 로그인이
+    # Gmail 발송 의존성에 묶인다 (그래서 실제로 로그인이 통째로 500 났다).
+    from utils.email_utils import looks_like_email
     if not (existing_user or {}).get("owner_email") and looks_like_email(ms_user_name):
         auth_data["owner_email"] = str(ms_user_name).strip()
         logging.info(f"[auth] owner_email 자동 설정 ({ms_user_id})")
