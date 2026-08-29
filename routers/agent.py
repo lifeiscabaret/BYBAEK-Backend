@@ -32,6 +32,9 @@ class AgentRunRequest(BaseModel):
     trigger: str
     photo_ids: Optional[List[str]] = None
     message: Optional[str] = None   # 사장님 직접 요청 (manual 트리거 시)
+    photo_intent: Optional[str] = "haircut"  # [v2] "haircut" | "shop_intro"
+    # [v2.1] 비포/애프터 쌍 (manual 전용, 정확히 2개 photo_id). auto 트리거는 대상 아님.
+    before_after_pair_ids: Optional[List[str]] = None
 
     class Config:
         json_schema_extra = {
@@ -39,7 +42,9 @@ class AgentRunRequest(BaseModel):
                 "shop_id": "3sesac18",
                 "trigger": "auto",
                 "photo_ids": None,
-                "message": None
+                "message": None,
+                "photo_intent": "haircut",
+                "before_after_pair_ids": None
             }
         }
 
@@ -76,12 +81,23 @@ async def agent_run(req: AgentRunRequest, current_shop: dict = Depends(get_curre
     require_shop_owner(current_shop, req.shop_id)
     if req.trigger not in ("auto", "manual"):
         raise HTTPException(400, "trigger는 'auto' 또는 'manual'이어야 합니다.")
+
+    # [v2.1] 비포/애프터 검증: manual 전용 + 정확히 2개 photo_id
+    before_after_pair_ids = req.before_after_pair_ids
+    if before_after_pair_ids:
+        if req.trigger != "manual":
+            raise HTTPException(400, "before_after_pair_ids는 manual 트리거에서만 사용할 수 있습니다.")
+        if len(before_after_pair_ids) != 2:
+            raise HTTPException(400, "before_after_pair_ids는 정확히 2개의 photo_id여야 합니다.")
+
     try:
         result = await run_pipeline(
             shop_id=req.shop_id,
             trigger=req.trigger,
             photo_ids=req.photo_ids,
-            message=req.message
+            message=req.message,
+            photo_intent=req.photo_intent or "haircut",
+            before_after_pair_ids=before_after_pair_ids
         )
         # 프론트로 내려가는 photo_urls는 비공개 컨테이너 대비 SAS로 래핑
         if isinstance(result, dict) and result.get("photo_urls"):

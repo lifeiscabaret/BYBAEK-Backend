@@ -234,7 +234,9 @@ async def post_writer_agent(
     rag_context: dict,
     previous_draft: dict = None,    # 재작성 시 이전 초안
     feedback: str = None,           # 재작성 시 피드백
-    user_request: str = None        # 사장님 직접 요청 (manual)
+    user_request: str = None,       # 사장님 직접 요청 (manual)
+    photo_intent: str = "haircut",   # [v2] 사진 의도 분기 (haircut/shop_intro)
+    before_after_pair_ids: list = None  # [v2.1] 비포/애프터 쌍 (manual 전용, 2개)
 ) -> dict:
     """
     게시물 작성 에이전트 메인 함수
@@ -266,7 +268,9 @@ async def post_writer_agent(
         previous_draft=previous_draft,
         feedback=feedback,
         user_request=user_request,
-        attached_photo_count=len(image_blocks)
+        attached_photo_count=len(image_blocks),
+        photo_intent=photo_intent,
+        before_after_pair_ids=before_after_pair_ids
     )
 
     # 이미지가 있으면 content block 리스트로 구성한다.
@@ -362,7 +366,9 @@ def _build_prompt(
     previous_draft: dict = None,
     feedback: str = None,
     user_request: str = None,
-    attached_photo_count: int = 0
+    attached_photo_count: int = 0,
+    photo_intent: str = "haircut",
+    before_after_pair_ids: list = None
 ) -> tuple:
     """
     시스템 프롬프트 + 유저 프롬프트 구성
@@ -427,6 +433,32 @@ def _build_prompt(
     # shop_intro 있으면 시스템 프롬프트에 포함 (할루시네이션 오탐 방지용)
     shop_intro = brand_settings.get("shop_intro", "").strip()
     shop_intro_line = f"\n[샵 소개 - 이 내용은 사실이므로 캡션에 자연스럽게 활용 가능]\n{shop_intro}" if shop_intro else ""
+
+    # [v2] photo_intent에 따른 게시물 목적 톤 분기
+    if photo_intent == "shop_intro":
+        intent_block = (
+            "\n\n[게시물 목적 — 매장·바버 소개]\n"
+            "이번 게시물은 시술 결과 홍보가 아니라 매장 분위기/바버 소개가 목적이야.\n"
+            "- 시술 기술력이나 페이드 디테일을 강조하지 마\n"
+            "- 매장의 분위기, 공간감, 바버의 캐릭터를 자연스럽게 전달해줘\n"
+            "- CTA도 예약 강요 대신 '편하게 둘러보러 오세요' / '궁금한 건 DM 주세요' 톤으로\n"
+            "- 해시태그도 #바버샵인테리어 #매장소개 같은 공간·분위기 태그 위주로"
+        )
+    else:
+        intent_block = ""
+
+    # [v2.1] 비포/애프터 쌍: 정확히 2장이 비포/애프터로 지정된 경우만 비교 블록 주입.
+    # (사람이 사진 고를 때만 발생 — 자동 분류/AI 추론 없음. intent_block과 별도 블록.)
+    if before_after_pair_ids and len(before_after_pair_ids) == 2:
+        before_after_block = (
+            "\n\n[게시물 형식 — 비포/애프터 비교]\n"
+            "첨부된 두 사진은 같은 손님의 '시술 전(비포)'과 '시술 후(애프터)' 쌍이야.\n"
+            "- 변화(before → after)를 자연스럽게 대비시켜 캡션을 써줘\n"
+            "- '이렇게 달라졌어요' 식의 변화 강조가 핵심이야\n"
+            "- 과장·거짓 변화 묘사는 금지, 실제 사진에서 보이는 차이만 언급"
+        )
+    else:
+        before_after_block = ""
 
     # ── 출력 언어 지시 (레이어1: 언어별 프롬프트 파일 없이 동적 주입) ──
     language = brand_settings.get("language", "ko")
@@ -513,6 +545,8 @@ def _build_prompt(
     system_template = _load_prompt_file("post_writer/system.md")
     system_prompt = Template(system_template).safe_substitute(
         shop_intro_line=shop_intro_line,
+        intent_block=intent_block,
+        before_after_block=before_after_block,
         insta_style_block=insta_style_block,
         lang_instruction=lang_instruction,
         brand_tone=brand_tone,
