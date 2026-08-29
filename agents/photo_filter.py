@@ -17,6 +17,10 @@
 - [FIX] _evaluate_photo: model_vibe를 instant_fail 대상에서 제외 (뒷면 사진 보호)
 - [FIX] _save_pass_result: scores 필드 저장 추가 (photo_select에서 참조)
 - [FIX] _generate_sas_url: BlobServiceClient 싱글톤 캐시로 성능 개선
+- [v2] photo_category 분류 추가 (haircut_result/shop_atmosphere/barber_portrait/other_service/irrelevant)
+- [v2] 카테고리별 instant_fail 제외 로직 분기 (shop_atmosphere/barber_portrait/other_service → gradient 제외)
+- [v2] _save_pass_result: photo_category 필드 저장 추가 (photo_select 연동용)
+- [v2.1] other_service 카테고리 추가 (미용실 스타일 시술 → gradient+model_vibe FAIL 제외, 기법 기준 분류)
 """
 
 import os
@@ -284,15 +288,24 @@ async def _evaluate_photo(
         raw = raw.replace("```json", "").replace("```", "").strip()
         gpt_result = json.loads(raw)
 
-        scores      = gpt_result.get("scores", {})
-        total_score = gpt_result.get("total", sum(scores.values()))
+        scores         = gpt_result.get("scores", {})
+        total_score    = gpt_result.get("total", sum(scores.values()))
+        photo_category = gpt_result.get("photo_category", "haircut_result")
 
-        # [FIX] model_vibe는 instant_fail 판정에서 제외
+        # [FIX] instant_fail 판정 — 카테고리별 제외 항목 분기
+        exclude = set(STAGE2_INSTANT_FAIL_EXCLUDE)  # {"model_vibe"}
+        if photo_category in ("shop_atmosphere", "barber_portrait", "other_service"):
+            exclude.add("gradient")
         instant_fail = any(
             v <= STAGE2_INSTANT_FAIL
             for k, v in scores.items()
-            if k not in STAGE2_INSTANT_FAIL_EXCLUDE
+            if k not in exclude
         )
+
+        # irrelevant는 기존 그대로 즉시 FAIL
+        if photo_category == "irrelevant":
+            instant_fail = True
+
         stage2_pass  = (total_score >= STAGE2_PASS_THRESHOLD) and not instant_fail
 
         fade_cut_score = round(scores.get("gradient", 0) / 5, 2)
@@ -310,11 +323,12 @@ async def _evaluate_photo(
             "fade_cut_score":      fade_cut_score,
             "detected_angle":      angle,
             "brightness":          _judge_brightness(scores.get("lighting", 3)),
-            "sharpness":           "high" if scores.get("sharpness", 0) >= 3 else "low"
+            "sharpness":           "high" if scores.get("sharpness", 0) >= 3 else "low",
+            "photo_category":      photo_category,
         }
 
         status = "PASS" if stage2_pass else "FAIL"
-        print(f"[photo_filter] {status} {image_id} -> {total_score}/25점 (페이드:{fade_cut_score}, 각도:{angle})")
+        print(f"[photo_filter] {status} {image_id} -> {total_score}/25점 (카테고리:{photo_category}, 페이드:{fade_cut_score}, 각도:{angle})")
         return result
 
     except Exception as e:
@@ -357,7 +371,15 @@ def _build_vision_prompt(blob_url: str, good_refs: list, bad_refs: list) -> list
     system_content = """너는 경력 20년의 바버샵 전문가이자 인스타그램 마케터야.
 바버샵 홍보용 사진의 퀄리티를 전문가 기준으로 평가해줘.
 
-[평가 기준 - 각 5점, 총 25점]
+[1단계: 사진 카테고리 분류 - 반드시 먼저 판단]
+- "haircut_result"  : 바버샵 스타일 헤어컷 결과 사진 (페이드/언더컷 등 바버 기법 — 성별 무관)
+- "shop_atmosphere" : 매장 인테리어/분위기가 주가 되는 사진
+- "barber_portrait" : 바버(직원) 인물이 주가 되는 사진
+- "other_service"   : 이 샵과 관련은 있지만 바버샵 스타일이 아닌 헤어 시술 사진
+                      (미용실 스타일 펌/레이어드컷/염색 등 — 성별이 아니라 기법으로 판단)
+- "irrelevant"      : 위 넷 다 아닌 완전 무관 사진 (풍경/음식/스크린샷 등)
+
+[2단계: 카테고리별 평가 기준 - 각 5점, 총 25점]
 1. gradient  : 페이드 그라데이션이 자연스럽고 경계가 뭉치지 않을 것
 2. lighting  : 너무 어둡거나 과노출되지 않고 자연스러울 것
 3. background: 복잡하거나 지저분하지 않고 깔끔할 것
@@ -365,9 +387,21 @@ def _build_vision_prompt(blob_url: str, good_refs: list, bad_refs: list) -> list
               ※ 뒷면/측면 사진은 표정이 안 보이므로 자세/헤어스타일 완성도로 평가
 5. sharpness : 핀트가 맞고 구도가 홍보용으로 적합할 것
 
+[카테고리별 평가 규칙]
+● haircut_result → 5개 항목 모두 정상 평가
+● shop_atmosphere / barber_portrait → gradient는 평가 대상 아님, 0으로 고정.
+  lighting/background/model_vibe/sharpness 위주로 평가 (gradient=0이어도 FAIL 아님)
+● other_service → gradient 평가 대상 아님(0 고정), lighting/background/sharpness 위주로 평가.
+  model_vibe와 gradient 둘 다 즉시 FAIL 대상에서 제외 (미용실 스타일 시술 예외 동작 복원)
+● irrelevant → 모든 항목 0점, 즉시 FAIL
+
 [통과 기준]
 - 총점 25점 기준 15점 이상 PASS
-- gradient/lighting/background/sharpness 중 하나라도 1점 이하면 즉시 FAIL
+- haircut_result: gradient/lighting/background/sharpness 중 하나라도 1점 이하면 즉시 FAIL
+- shop_atmosphere/barber_portrait: lighting/background/sharpness 중 하나라도 1점 이하면 즉시 FAIL
+  (gradient는 제외, model_vibe도 제외)
+- other_service: lighting/background/sharpness 중 하나라도 1점 이하면 즉시 FAIL
+  (gradient는 제외, model_vibe도 제외)
 - model_vibe는 즉시 FAIL 대상 제외 (뒷면 사진 보호)
 
 [각도 감지]
@@ -375,12 +409,9 @@ def _build_vision_prompt(blob_url: str, good_refs: list, bad_refs: list) -> list
 - "front"    : 정면 (스타일링 중심)
 - "unknown"  : 판단 불가
 
-[바버샵 비관련 사진 처리]
-- 헤어컷/시술과 무관한 사진 (풍경, 사물, 음식 등): gradient=0, 즉시 FAIL
-- 여성 헤어, 펌, 염색 사진: gradient=1, sharpness 기준으로만 평가
-
 [응답 형식] JSON으로만:
 {
+  "photo_category": "haircut_result" | "shop_atmosphere" | "barber_portrait" | "other_service" | "irrelevant",
   "scores": {
     "gradient": 0~5,
     "lighting": 0~5,
@@ -453,6 +484,7 @@ async def _save_pass_result(shop_id: str, photo: dict, result: dict):
             "fade_cut_score": result["fade_cut_score"],
             "detected_angle": result["detected_angle"],
             "scores":         result.get("scores", {}),   # [FIX] photo_select에서 참조
+            "photo_category": result.get("photo_category", "haircut_result"),
             "is_usable":      True,
             "filter_status":  "passed",
             "analyzed_at":    now_kst
