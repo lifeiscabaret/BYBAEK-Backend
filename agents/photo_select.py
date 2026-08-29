@@ -5,6 +5,18 @@
   * exclude_conditions: 매칭되는 사진은 후보에서 하드 제외 (전량 제외되면 안전하게 필터 완화)
   * preferred_styles: 매칭되는 사진에 우선순위 가중치 부여 (제외는 아니고 정렬 우선순위만 상승)
 - _categorize_by_angle 정렬 기준에 _preference_boost 반영 (동일 조건이면 선호 스타일 우선)
+
+[변경 이력 - v2 photo_intent 기반 조합 분기]
+- photo_select_agent()에 photo_intent 파라미터 추가 (기본값 "haircut", 하위 호환)
+- _categorize_by_angle()에 shop_intro 버킷 추가 (photo_category가 shop_atmosphere/barber_portrait인 사진)
+- _apply_shop_intro_pattern() 추가: shop_intro intent일 때 매장/바버 사진 위주 조합
+- _apply_director_pattern()에 photo_intent 분기 (shop_intro면 별도 패턴 적용)
+
+[변경 이력 - v2.1 other_service 자동선택 제외]
+- _categorize_by_angle(): other_service(미용실 스타일 시술) 사진은 어떤 자동 버킷
+  (back_side/front/vibe/shop_intro)에도 넣지 않음 → 자동 게시물 후보에서 완전 제외.
+  (필터는 통과해 /photos 수동선택 목록엔 그대로 보이되, AI 자동 선택엔 안 뽑힘)
+  * 메인 루프 + 쿨다운 완화 보충 루프 양쪽 모두 적용, 보충 풀에서도 사전 제외.
 """
 
 import json
@@ -20,17 +32,17 @@ async def photo_select_agent(
     shop_id: str,
     trend_data: dict,
     photo_candidates: list,
-    brand_settings: dict
+    brand_settings: dict,
+    photo_intent: str = "haircut"
 ) -> list:
     """
     사진 선택 메인 함수
 
-    원장님 조합 전략:
-    1. 페이드 2장 (뒷면/측면)
-    2. 스타일링 1장 (앞모습)
-    3. 분위기 1장
+    원장님 조합 전략 (photo_intent별 분기):
+    - "haircut" (기본): 페이드 2장 + 스타일링 1장 + 분위기 1장
+    - "shop_intro": 매장/바버 소개 → shop_intro 버킷 위주 조합
     """
-    print(f"[photo_select] 시작 → shop_id={shop_id}, 후보={len(photo_candidates)}장")
+    print(f"[photo_select] 시작 → shop_id={shop_id}, 후보={len(photo_candidates)}장, intent={photo_intent}")
 
     min_photos = brand_settings.get("photo_range", {}).get("min", 1)
     max_photos = brand_settings.get("photo_range", {}).get("max", 5)
@@ -49,6 +61,7 @@ async def photo_select_agent(
     print(f"  - 뒷면/측면 (페이드): {len(categorized['back_side'])}장")
     print(f"  - 앞면 (스타일링): {len(categorized['front'])}장")
     print(f"  - 분위기: {len(categorized['vibe'])}장")
+    print(f"  - 매장/바버 소개: {len(categorized['shop_intro'])}장")
 
     # STEP 2: 원장님 조합 패턴 적용
     selected = await _apply_director_pattern(
@@ -56,7 +69,8 @@ async def photo_select_agent(
         trend_data=trend_data,
         brand_settings=brand_settings,
         min_count=min_photos,
-        max_count=max_photos
+        max_count=max_photos,
+        photo_intent=photo_intent
     )
 
     # 선택된 사진 used_at 업데이트 (14일 재사용 방지)
@@ -122,6 +136,7 @@ def _categorize_by_angle(candidates: list, max_count: int = 5) -> dict:
     back_side = []
     front = []
     vibe = []
+    shop_intro = []
 
     for photo in candidates:
         used_at = photo.get("used_at")
@@ -133,6 +148,19 @@ def _categorize_by_angle(candidates: list, max_count: int = 5) -> dict:
             days_ago = (now_kst - used_dt).days
             if days_ago < REUSE_COOLDOWN_DAYS:
                 continue
+
+        # [v2] photo_category 기반 shop_intro 버킷 분류
+        photo_category = photo.get("photo_category", "haircut_result")
+        if photo_category in ("shop_atmosphere", "barber_portrait"):
+            photo["_sort_score"] = photo.get("scores", {}).get("lighting", 0)
+            shop_intro.append(photo)
+            continue
+        # [v2.1] other_service(미용실 스타일 시술)는 필터는 통과했지만 자동 선택 후보에서는 제외.
+        # 어떤 자동 버킷(back_side/front/vibe/shop_intro)에도 넣지 않는다.
+        # → /photos(is_usable=true)에는 그대로 보이되(수동 선택/오분류 구제용),
+        #    자동 게시물에는 절대 안 뽑힘.
+        if photo_category == "other_service":
+            continue
 
         angle = photo.get("detected_angle", "unknown")
         scores = photo.get("scores", {})
@@ -152,8 +180,9 @@ def _categorize_by_angle(candidates: list, max_count: int = 5) -> dict:
     back_side.sort(key=lambda x: (x.get("_preference_boost", 0), x.get("_sort_score", 0)), reverse=True)
     front.sort(key=lambda x: (x.get("_preference_boost", 0), x.get("_sort_score", 0)), reverse=True)
     vibe.sort(key=lambda x: (x.get("_preference_boost", 0), x.get("_vibe_score", 0)), reverse=True)
+    shop_intro.sort(key=lambda x: (x.get("_preference_boost", 0), x.get("_sort_score", 0)), reverse=True)
 
-    categorized_ids = {p["id"] for p in back_side + front + vibe}
+    categorized_ids = {p["id"] for p in back_side + front + vibe + shop_intro}
     if len(categorized_ids) < max_count:
         needed = max_count - len(categorized_ids)
         print(f"[photo_select] 쿨다운 완화 → 부족분 {needed}장을 가장 오래된 사진으로 보충 "
@@ -162,8 +191,23 @@ def _categorize_by_angle(candidates: list, max_count: int = 5) -> dict:
             candidates,
             key=lambda x: x.get("used_at") or "2000-01-01T00:00:00"
         )
-        supplement = [p for p in sorted_by_used if p["id"] not in categorized_ids][:needed]
+        # [v2.1] other_service는 자동 선택 대상이 아니므로 보충 풀에서 미리 제외 →
+        # needed 개수를 유효한(자동선택 가능) 사진으로 채운다.
+        supplement = [
+            p for p in sorted_by_used
+            if p["id"] not in categorized_ids
+            and p.get("photo_category", "haircut_result") != "other_service"
+        ][:needed]
         for photo in supplement:
+            photo_category = photo.get("photo_category", "haircut_result")
+            if photo_category in ("shop_atmosphere", "barber_portrait"):
+                photo["_sort_score"] = photo.get("scores", {}).get("lighting", 0)
+                shop_intro.append(photo)
+                continue
+            # [v2.1] 방어적 이중 체크 — other_service는 자동 버킷에 절대 안 들어감.
+            if photo_category == "other_service":
+                continue
+
             angle = photo.get("detected_angle", "unknown")
             scores = photo.get("scores", {})
             if angle == "back_side":
@@ -179,17 +223,61 @@ def _categorize_by_angle(candidates: list, max_count: int = 5) -> dict:
         back_side.sort(key=lambda x: (x.get("_preference_boost", 0), x.get("_sort_score", 0)), reverse=True)
         front.sort(key=lambda x: (x.get("_preference_boost", 0), x.get("_sort_score", 0)), reverse=True)
         vibe.sort(key=lambda x: (x.get("_preference_boost", 0), x.get("_vibe_score", 0)), reverse=True)
+        shop_intro.sort(key=lambda x: (x.get("_preference_boost", 0), x.get("_sort_score", 0)), reverse=True)
 
-    return {"back_side": back_side, "front": front, "vibe": vibe}
+    return {"back_side": back_side, "front": front, "vibe": vibe, "shop_intro": shop_intro}
 
+
+
+def _apply_shop_intro_pattern(categorized: dict, min_count: int, max_count: int) -> list:
+    """
+    [v2] shop_intro intent: 매장/바버 소개 사진 위주 조합.
+    조합: shop_intro 3장 + vibe 1장 (가용 범위 내 유동적).
+    """
+    shop_intro_photos = categorized.get("shop_intro", [])
+    vibe_photos = categorized.get("vibe", [])
+
+    # shop_intro 우선, 부족하면 vibe로 보충
+    selected = shop_intro_photos[:min(3, max_count)]
+    selected_ids = {p["id"] for p in selected}
+
+    # vibe에서 1장 추가 (중복 제거)
+    for p in vibe_photos:
+        if len(selected) >= max_count:
+            break
+        if p["id"] not in selected_ids:
+            selected.append(p)
+            selected_ids.add(p["id"])
+            break
+
+    # 아직 min_count 미달이면 나머지 버킷에서 보충
+    if len(selected) < min_count:
+        all_remaining = [
+            p for p in (categorized["back_side"] + categorized["front"] + categorized["vibe"])
+            if p["id"] not in selected_ids
+        ]
+        fill = all_remaining[:min_count - len(selected)]
+        selected += fill
+
+    if len(selected) > max_count:
+        selected = selected[:max_count]
+
+    print(f"[photo_select] 매장/바버 소개 패턴 → shop_intro {min(len(shop_intro_photos), 3)}장 + 보충 "
+          f"(최종 {len(selected)}장)")
+    return selected
 
 async def _apply_director_pattern(
     categorized: dict,
     trend_data: dict,
     brand_settings: dict,
     min_count: int,
-    max_count: int
+    max_count: int,
+    photo_intent: str = "haircut"
 ) -> list:
+    # [v2] photo_intent에 따른 조합 분기
+    if photo_intent == "shop_intro":
+        return _apply_shop_intro_pattern(categorized, min_count, max_count)
+
     fade_2 = categorized["back_side"][:2]
     style_1 = categorized["front"][:1]
     vibe_1 = categorized["vibe"][:1]

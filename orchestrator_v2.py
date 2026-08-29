@@ -46,6 +46,8 @@ class PostState(TypedDict):
     trigger:          str
     photo_ids:        Optional[list]
     message:          Optional[str]   # 사장님 직접 요청 (manual)
+    photo_intent:     str             # [v2] "haircut" | "shop_intro"
+    before_after_pair_ids: Optional[list]  # [v2.1] 비포/애프터 쌍 (manual 전용, 2개)
     performance_history: dict
     tier:             str
     trend_data:       dict
@@ -113,6 +115,7 @@ async def node_retry_trend(state: PostState) -> PostState:
 async def node_select_photos(state: PostState) -> PostState:
     trigger   = state["trigger"]
     photo_ids = state.get("photo_ids") or []
+    photo_intent = state.get("photo_intent", "haircut")
     if trigger == "manual" and photo_ids:
         print(f"[orchestrator_v2] node_select_photos → manual, {len(photo_ids)}장")
         selected = await _get_photos_by_ids(state["shop_id"], photo_ids)
@@ -121,7 +124,8 @@ async def node_select_photos(state: PostState) -> PostState:
             shop_id=state["shop_id"],
             trend_data=state["trend_data"],
             photo_candidates=state["photo_candidates"],
-            brand_settings=state["brand_settings"]
+            brand_settings=state["brand_settings"],
+            photo_intent=photo_intent
         ))
         if len(selected) < MIN_PHOTO_COUNT:
             print(f"[orchestrator_v2] 사진 부족 ({len(selected)}장) → 날짜 확장")
@@ -130,7 +134,8 @@ async def node_select_photos(state: PostState) -> PostState:
                 shop_id=state["shop_id"],
                 trend_data=state["trend_data"],
                 photo_candidates=extended,
-                brand_settings=state["brand_settings"]
+                brand_settings=state["brand_settings"],
+                photo_intent=photo_intent
             ))
     print(f"[orchestrator_v2] node_select_photos → {len(selected)}장 선택")
     return {**state, "selected_photos": selected}
@@ -167,7 +172,9 @@ async def node_write_post(state: PostState) -> PostState:
             rag_context=state["rag_context"],
             previous_draft=previous_draft,
             feedback=feedback,
-            user_request=state.get("message")
+            user_request=state.get("message"),
+            photo_intent=state.get("photo_intent", "haircut"),
+            before_after_pair_ids=state.get("before_after_pair_ids")
         ))
         caption_score = await _timed("6._evaluate_caption(Azure)", _evaluate_caption(kernel, post_draft, state["brand_settings"]))
         print(f"[orchestrator_v2] node_write_post → score={caption_score:.2f}, retries={retries}")
@@ -261,13 +268,15 @@ def build_graph() -> StateGraph:
     return graph.compile()
 
 
-async def run_pipeline(shop_id: str, trigger: str, photo_ids: list = None, message: str = None) -> dict:
+async def run_pipeline(shop_id: str, trigger: str, photo_ids: list = None, message: str = None, photo_intent: str = "haircut", before_after_pair_ids: list = None) -> dict:
     app = build_graph()
     initial_state: PostState = {
         "shop_id":           shop_id,
         "trigger":           trigger,
         "photo_ids":         photo_ids or [],
         "message":           message,
+        "photo_intent":      photo_intent,
+        "before_after_pair_ids": before_after_pair_ids,
         "tier":              "mini",
         "trend_data":        {},
         "brand_settings":    {},
@@ -284,7 +293,7 @@ async def run_pipeline(shop_id: str, trigger: str, photo_ids: list = None, messa
         "status":            "running",
         "performance_history": {}
     }
-    print(f"[orchestrator_v2] 파이프라인 시작 → shop_id={shop_id}, trigger={trigger}")
+    print(f"[orchestrator_v2] 파이프라인 시작 → shop_id={shop_id}, trigger={trigger}, photo_intent={photo_intent}")
     _pipeline_start = time.perf_counter()
     final_state = await app.ainvoke(initial_state)
     print(f"[TIMING] ===== run_pipeline TOTAL → {time.perf_counter() - _pipeline_start:.2f}s =====")
