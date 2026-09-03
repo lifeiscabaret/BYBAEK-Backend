@@ -265,11 +265,17 @@ def _run_photo_sync(shop_id: str, token: str, delta_link: Optional[str]) -> dict
     }
 
 
-async def sync_photos_internal(shop_id: str) -> dict:
+async def sync_photos_internal(shop_id: str, force_full: bool = False) -> dict:
     """
     스케줄러/내부 호출용 OneDrive 동기화.
     request 헤더가 없으므로 DB에 저장된 refresh_token으로 Graph 토큰을
     발급받아 동기화한다. refresh_token이 없으면 재연동이 필요하다.
+
+    force_full=True 이면 저장된 one_delta_link 를 무시하고 전체 재스캔한다.
+    (대책2: 주기적 전체 재점검 — delta 커서가 잘못 앞서 나가 신규 사진이 영구
+     누락되는 문제의 자가 치유. 전체 스캔 후 _run_photo_sync 가 next_delta_link 를
+     다시 저장하므로 커서 자체도 최신으로 재정렬된다. 워커의 DB 중복 체크가
+     Graph 다운로드 전에 걸리므로 이미 처리된 사진은 재다운로드하지 않는다.)
     """
     from services.cosmos_db import get_auth
     shop_data = get_auth(shop_id) or {}
@@ -278,7 +284,8 @@ async def sync_photos_internal(shop_id: str) -> dict:
         raise RuntimeError("refresh_token 없음 → OneDrive 재연동 필요")
 
     token = _acquire_graph_token_from_refresh(refresh_token)
-    return _run_photo_sync(shop_id, token, shop_data.get("one_delta_link"))
+    delta_link = None if force_full else shop_data.get("one_delta_link")
+    return _run_photo_sync(shop_id, token, delta_link)
 
 
 # ──────────────────────────────────────────

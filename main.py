@@ -121,6 +121,30 @@ async def _sync_all_shops_onedrive():
             print(f"[scheduler] OneDrive 동기화 실패 → shop_id={shop_id}: {e}")
 
 
+async def _full_rescan_all_shops_onedrive():
+    """
+    [대책2] 하루 1회 OneDrive 전체 재점검 (delta 무시, 전체 스캔).
+
+    delta 커서(one_delta_link)가 어떤 이유로든 신규 업로드보다 앞서 나가
+    사진이 영구 누락되는 문제의 자가 치유 안전망. force_full=True 로 전체 스캔하면
+    이미 처리된 사진은 워커의 DB 중복 체크로 스킵되고(다운로드 전에 걸림),
+    누락됐던 신규 사진만 큐에 새로 태워진다. 스캔 후 delta 커서도 최신으로 재정렬된다.
+    """
+    from services.cosmos_db import get_all_shops
+    from routers.onedrive import sync_photos_internal
+
+    shops = get_all_shops()
+    for shop in shops:
+        shop_id = shop.get("shop_id")
+        if not shop_id:
+            continue
+        try:
+            result = await sync_photos_internal(shop_id, force_full=True)
+            print(f"[scheduler] OneDrive 전체 재점검 완료 → shop_id={shop_id}, queued={result.get('queued')}")
+        except Exception as e:
+            print(f"[scheduler] OneDrive 전체 재점검 실패 → shop_id={shop_id}: {e}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # 매 정각마다 스케줄 체크
@@ -135,6 +159,15 @@ async def lifespan(app: FastAPI):
         _sync_all_shops_onedrive,
         CronTrigger(minute=0, hour="*/4"),
         id="onedrive_sync",
+        replace_existing=True
+    )
+    # [대책2] 하루 1회 OneDrive 전체 재점검 (delta 무시 전체 스캔 → 신규 사진 유실 자가 치유)
+    # 3:45 배치: 기존 잡과 겹치지 않게 (auto_upload=:00, insights_collect=:30,
+    # onedrive_sync=hour 0/4/8.., insta_token_refresh=4:10)
+    scheduler.add_job(
+        _full_rescan_all_shops_onedrive,
+        CronTrigger(hour=3, minute=45),
+        id="onedrive_full_rescan",
         replace_existing=True
     )
     # 매일 새벽 4시 인스타 장기 토큰 갱신 (60일 만료 → 만료 전 자동 연장)
