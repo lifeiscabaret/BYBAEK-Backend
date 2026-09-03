@@ -38,9 +38,19 @@ from azure.storage.blob import BlobSasPermissions, generate_blob_sas, BlobServic
 # ── 설정값 ────────────────────────────────────────────────────────────────────
 
 # 1차 기준 (밝기/흔들림만)
-STAGE1_LAPLACIAN_MIN  = 40     # 흔들림 기준
-STAGE1_BRIGHTNESS_MIN = 30     # 최소 밝기
+# 선명도: 명백한 흔들림(< STAGE1_LAPLACIAN_MIN)만 즉시 탈락시키고, 그 이상 경계 구간은
+# Stage2 GPT Vision(sharpness 항목, instant_fail 대상)에 최종 판단을 위임한다.
+# 40 → 10 하향: 선명하지만 고주파 엣지가 적은 사진(얕은 심도 인물·미니멀 배경 등)이
+# 흔들림으로 오탈락하던 문제 해결. 진짜 흔들린 사진은 Stage2 sharpness가 잡는다.
+STAGE1_LAPLACIAN_MIN  = 10     # 명백한 흔들림 즉시탈락 기준 (측정 전 해상도 정규화 후 적용)
+STAGE1_BRIGHTNESS_MIN = 20     # 최소 밝기 (의도적 다크톤 브랜딩 컷 허용 위해 30→20 하향)
 STAGE1_BRIGHTNESS_MAX = 240    # 최대 밝기
+
+# [FIX] 선명도 측정 해상도 정규화
+# 라플라시안 분산은 절대 해상도에 강하게 의존 → 저해상도 사진은 선명해도 값이 구조적으로 낮게 나옴
+# (예: 43KB 헤어샘플 사진이 선명한데도 12.6으로 오탈락).
+# 측정 직전 장변을 이 값으로 통일(작으면 확대·크면 축소)해 해상도 편향을 제거한다.
+STAGE1_MEASURE_LONG_EDGE = 1024
 # [FIX] STAGE1_SKIN_RATIO_MIN 제거 → 바버샵 관련성 체크 Stage 2에 위임
 
 # 2차 기준
@@ -141,6 +151,26 @@ async def run_stage1_filter(photo_list: list) -> list:
     return results
 
 
+def _normalize_for_sharpness(gray: "np.ndarray") -> "np.ndarray":
+    """
+    선명도(라플라시안 분산) 측정 전용 해상도 정규화.
+
+    장변을 STAGE1_MEASURE_LONG_EDGE 로 통일한다(작으면 확대·크면 축소).
+    라플라시안 분산은 픽셀 수에 의존하므로, 정규화하지 않으면 저해상도 사진은
+    선명해도 값이 낮게 나와 오탈락한다. 축소는 INTER_AREA, 확대는 INTER_CUBIC 사용.
+
+    이 정규화는 '측정용'이며 저장/업로드 이미지에는 영향을 주지 않는다.
+    """
+    h, w = gray.shape[:2]
+    long_edge = max(h, w)
+    if long_edge == STAGE1_MEASURE_LONG_EDGE:
+        return gray
+    scale = STAGE1_MEASURE_LONG_EDGE / long_edge
+    new_size = (max(1, round(w * scale)), max(1, round(h * scale)))
+    interp = cv2.INTER_AREA if scale < 1 else cv2.INTER_CUBIC
+    return cv2.resize(gray, new_size, interpolation=interp)
+
+
 async def _analyze_stage1(blob_url: str) -> tuple:
     """
     blob URL → SAS 발급 → 임시 파일 다운로드 → 밝기/흔들림 체크.
@@ -168,16 +198,20 @@ async def _analyze_stage1(blob_url: str) -> tuple:
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
         # 1) 흔들림 체크 (Laplacian variance)
-        laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
+        # [FIX] 측정 전 장변을 STAGE1_MEASURE_LONG_EDGE 로 정규화 → 해상도 편향 제거.
+        #       (저해상도 선명 사진이 구조적으로 낮은 분산으로 오탈락하던 문제 해결)
+        gray_norm = _normalize_for_sharpness(gray)
+        laplacian_var = cv2.Laplacian(gray_norm, cv2.CV_64F).var()
         if laplacian_var < STAGE1_LAPLACIAN_MIN:
             return "Fail", f"초점 흐림 ({laplacian_var:.1f})"
 
-        # 2) 밝기 체크
+        # 2) 밝기 체크 (원본 해상도 기준 — 밝기는 해상도 불변이므로 정규화 불필요)
         avg_brightness = np.mean(gray)
         if avg_brightness < STAGE1_BRIGHTNESS_MIN or avg_brightness > STAGE1_BRIGHTNESS_MAX:
             return "Fail", f"밝기 부적절 ({avg_brightness:.1f})"
 
         # [FIX] 바버샵 관련성 체크 제거 → Stage 2 GPT Vision에 위임
+        # 선명도 경계 구간(STAGE1_LAPLACIAN_MIN 이상)도 Stage2 sharpness 평가에 위임
         return "Pass", f"1차 통과 (선명도:{laplacian_var:.0f}, 밝기:{avg_brightness:.0f})"
 
     finally:
