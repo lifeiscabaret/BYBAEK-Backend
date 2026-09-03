@@ -455,6 +455,12 @@ def save_photo_meta(shop_id: str, doc: dict) -> bool:
             "fail_reason": doc.get("fail_reason", existing_item.get("fail_reason")),
             "filter_status": doc.get("filter_status", existing_item.get("filter_status")),
             "used_at": doc.get("used_at", existing_item.get("used_at")),
+            # [FIX] Stage2 분류/점수 결과를 실제 저장 (다운스트림 photo_select 등에서 참조).
+            #       기존엔 화이트리스트에 없어 doc에 담겨도 버려졌음 → photo_category 등이 비어있던 근본 원인.
+            "photo_category": doc.get("photo_category", existing_item.get("photo_category")),
+            "total_score": doc.get("total_score", existing_item.get("total_score")),
+            "scores": doc.get("scores", existing_item.get("scores")),
+            "analyzed_at": doc.get("analyzed_at", existing_item.get("analyzed_at")),
             "updated_at": datetime.utcnow().isoformat()
         })
         container.upsert_item(body=existing_item)
