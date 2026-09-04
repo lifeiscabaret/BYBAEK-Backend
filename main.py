@@ -155,9 +155,12 @@ async def lifespan(app: FastAPI):
         replace_existing=True
     )
     # 4시간마다 OneDrive 자동 동기화
+    # minute=30 으로 오프셋 → 매시 정각(minute=0)에 도는 auto_upload 파이프라인과
+    # 동시 실행되어 단일 워커가 메모리/CPU 폭증으로 SIGKILL 되는 문제 방지.
+    # (09:00 KST=00:00 UTC 예약이 */4 경계와 겹쳐 워커가 죽던 이슈)
     scheduler.add_job(
         _sync_all_shops_onedrive,
-        CronTrigger(minute=0, hour="*/4"),
+        CronTrigger(minute=30, hour="*/4"),
         id="onedrive_sync",
         replace_existing=True
     )
