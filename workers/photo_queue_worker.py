@@ -55,6 +55,7 @@ from services.cosmos_db import save_photo, get_photo_by_id
 QUEUE_NAME = "bybaek-photo-sync"
 INSTAGRAM_SUPPORTED = {".jpg", ".jpeg", ".png"}
 HEIC_FORMATS = {".heic", ".heif"}
+WEBP_FORMATS = {".webp"}
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 POLL_INTERVAL_SECONDS = 30
 MAX_MESSAGES_PER_POLL = 10
@@ -92,6 +93,19 @@ def _generate_sas_url(blob_url: str, hours: int = 1) -> str:
         expiry=datetime.now(timezone.utc) + timedelta(hours=hours),
     )
     return f"{blob_url}?{sas_token}"
+
+
+def _convert_webp_to_jpg(raw_bytes: bytes) -> bytes:
+    """WEBP 바이트 → JPEG 바이트 변환. 애니메이션 webp는 첫 프레임만 사용."""
+    try:
+        from PIL import Image
+
+        img = Image.open(io.BytesIO(raw_bytes))
+        output = io.BytesIO()
+        img.convert("RGB").save(output, format="JPEG", quality=95)
+        return output.getvalue()
+    except Exception as e:
+        raise RuntimeError(f"WEBP 변환 실패: {e}")
 
 
 def _convert_heic_to_jpg(raw_bytes: bytes) -> bytes:
@@ -191,8 +205,8 @@ def process_message(message_body: dict) -> dict:
 
         # ✅ Blob 경로: shop_id 기준 격리
         path_hash = hashlib.md5(relative_path.encode()).hexdigest()
-        # HEIC는 변환 후 .jpg로 저장
-        target_ext = ".jpg" if ext in HEIC_FORMATS else ext
+        # HEIC/WEBP는 변환 후 .jpg로 저장
+        target_ext = ".jpg" if ext in HEIC_FORMATS | WEBP_FORMATS else ext
         isolated_path = f"{shop_id}/{path_hash}{target_ext}"
 
         try:
@@ -229,6 +243,16 @@ def process_message(message_body: dict) -> dict:
             if ext in HEIC_FORMATS:
                 logger.info(f"[worker] 🔄 HEIC 변환 중: {name}")
                 raw = _convert_heic_to_jpg(raw)
+                name = os.path.splitext(name)[0] + ".jpg"
+                content_type = "image/jpeg"
+                ext = ".jpg"
+
+            # ✅ WEBP → JPG 자동 변환
+            # 변환하지 않으면 INSTAGRAM_SUPPORTED 게이트에 걸려 Blob에만 남고
+            # Cosmos에 저장되지 않아 조용히 유실됨
+            elif ext in WEBP_FORMATS:
+                logger.info(f"[worker] 🔄 WEBP 변환 중: {name}")
+                raw = _convert_webp_to_jpg(raw)
                 name = os.path.splitext(name)[0] + ".jpg"
                 content_type = "image/jpeg"
                 ext = ".jpg"
