@@ -336,8 +336,11 @@ async def _evaluate_photo(
             if k not in exclude
         )
 
-        # irrelevant는 기존 그대로 즉시 FAIL
-        if photo_category == "irrelevant":
+        # [1차 런칭 스코프] 바버샵 기법(페이드/언더컷 등) 결과만 통과.
+        # other_service(롱헤어·펌·염색 등 미용실 스타일)는 irrelevant와 동일하게 즉시 탈락.
+        # photo_category 값 자체는 그대로 저장되므로, 추후 샵별 "다운펌/염색 허용" 예외
+        # 설정을 열 때 이 태그를 재활용할 수 있음.
+        if photo_category in ("irrelevant", "other_service"):
             instant_fail = True
 
         stage2_pass  = (total_score >= STAGE2_PASS_THRESHOLD) and not instant_fail
@@ -407,11 +410,23 @@ def _build_vision_prompt(blob_url: str, good_refs: list, bad_refs: list) -> list
 
 [1단계: 사진 카테고리 분류 - 반드시 먼저 판단]
 - "haircut_result"  : 바버샵 스타일 헤어컷 결과 사진 (페이드/언더컷 등 바버 기법 — 성별 무관)
+                      ※ 반드시 "실제 매장에서 촬영한 실사 사진"이어야 함.
 - "shop_atmosphere" : 매장 인테리어/분위기가 주가 되는 사진
 - "barber_portrait" : 바버(직원) 인물이 주가 되는 사진
+                      ※ 반드시 바버샵 맥락 단서(매장 배경/유니폼/시술 도구/이발 장면 등)가
+                        함께 보여야 함. 맥락 없는 순수 인물 클로즈업·셀카·모델 화보는 여기에
+                        해당하지 않음(→ irrelevant).
 - "other_service"   : 이 샵과 관련은 있지만 바버샵 스타일이 아닌 헤어 시술 사진
                       (미용실 스타일 펌/레이어드컷/염색 등 — 성별이 아니라 기법으로 판단)
-- "irrelevant"      : 위 넷 다 아닌 완전 무관 사진 (풍경/음식/스크린샷 등)
+- "irrelevant"      : 위 넷 다 아닌 완전 무관 사진, 또는 홍보용으로 부적합한 사진.
+                      아래에 하나라도 해당하면 무조건 irrelevant로 분류:
+                      • 실사 사진이 아닌 것: 일러스트/인포그래픽/헤어스타일 차트/그림/합성 이미지
+                      • 앱 화면 스크린샷: 상태바(시계·배터리)·앱 버튼·타임라인·재생바·
+                        "취소/완료/비디오/조절/필터/자르기" 등 UI 텍스트, 인스타/틱톡/Siri 등
+                        앱 인터페이스가 조금이라도 보이면 실제 헤어가 찍혀 있어도 irrelevant
+                      • 매장/시술 맥락이 전혀 없는 스톡·모델 화보(스튜디오 무지 배경의 인물
+                        사진 등)
+                      • 풍경/음식/기타 무관 사진
 
 [2단계: 카테고리별 평가 기준 - 각 5점, 총 25점]
 1. gradient  : 페이드 그라데이션이 자연스럽고 경계가 뭉치지 않을 것
@@ -428,6 +443,16 @@ def _build_vision_prompt(blob_url: str, good_refs: list, bad_refs: list) -> list
 ● other_service → gradient 평가 대상 아님(0 고정), lighting/background/sharpness 위주로 평가.
   model_vibe와 gradient 둘 다 즉시 FAIL 대상에서 제외 (미용실 스타일 시술 예외 동작 복원)
 ● irrelevant → 모든 항목 0점, 즉시 FAIL
+
+[분류 우선순위 — 무엇보다 먼저 적용]
+아래 중 하나라도 해당하면 헤어가 잘 보여도 반드시 "irrelevant"로 분류한다
+(haircut_result/barber_portrait로 절대 분류 금지):
+1) 실사 사진이 아님 (일러스트·인포그래픽·헤어스타일 차트·그림·합성)
+2) 앱 UI 스크린샷 (상태바·앱 버튼·영상 타임라인/재생바·인스타/틱톡/Siri 화면·
+   "취소/완료/비디오/조절/필터/자르기" 등 인터페이스 텍스트가 보임)
+3) 매장·시술 맥락이 전혀 없는 스톡/모델 화보 (스튜디오 무지 배경 인물 등)
+그리고 barber_portrait는 바버샵 맥락 단서(매장/유니폼/도구/이발 장면)가 없으면
+model_vibe가 아무리 높아도 barber_portrait가 아니라 irrelevant다.
 
 [통과 기준]
 - 총점 25점 기준 15점 이상 PASS
