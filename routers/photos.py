@@ -1,6 +1,7 @@
 """
 역할: 사진 관련 라우터
 - GET  /api/photos/all/{shop_id}
+- GET  /api/photos/before-after-pool/{shop_id}
 - GET  /api/photos/albums/{shop_id}
 - GET  /api/photos/albums/{shop_id}/{album_id}
 - POST /api/photos/albums
@@ -113,6 +114,31 @@ async def read_all_photos(shop_id: str, current_shop: dict = Depends(get_current
         if p.get("blob_url"):
             p["blob_url"] = _to_sas_url(p["blob_url"])
     return {"photos": photos}
+
+
+@router.get("/before-after-pool/{shop_id}")
+async def read_before_after_pool(shop_id: str, current_shop: dict = Depends(get_current_shop)):
+    """비포/애프터 선택 전용 추가 풀.
+
+    1차 런칭 스코프에서 필터 탈락(is_usable=false)했지만 '이 샵 관련은 있으나 바버샵
+    스타일만 아닌' 사진(photo_category='other_service', 예: 롱헤어·펌·염색)만 반환한다.
+    비포/애프터는 사장님이 직접 두 장을 골라 지정하는 수동 기능이라 AI 재심사가 불필요하며,
+    '비포'는 본질적으로 다듬어지기 전 상태라 일반 필터로는 통과하지 못하는 병목을 해소한다.
+
+    - /photos/all(is_usable=true, 애프터 후보)과는 별개 풀. 프론트에서 두 응답을 합쳐 사용.
+    - irrelevant(강아지·스크린샷 등)나 품질 탈락분은 포함하지 않음
+      (탈락 사진에는 photo_category가 저장되지 않아 other_service만 정확히 매칭됨).
+    """
+    require_shop_owner(current_shop, shop_id)
+    all_photos = get_all_photos_by_shop(shop_id)
+    pool = [
+        p for p in all_photos
+        if p.get("is_usable") is False and p.get("photo_category") == "other_service"
+    ]
+    for p in pool:
+        if p.get("blob_url"):
+            p["blob_url"] = _to_sas_url(p["blob_url"])
+    return {"photos": pool}
 
 
 @router.get("/albums/{shop_id}")
