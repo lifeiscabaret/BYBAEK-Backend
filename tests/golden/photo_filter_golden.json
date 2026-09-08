@@ -1,0 +1,398 @@
+{
+  "_meta": {
+    "purpose": "photo_filter 회귀 테스트용 골든셋. 필터 프롬프트/임계값/게이트 수정 시 배포 전 반드시 이 셋으로 회귀 실행하고 결과를 PR에 첨부한다.",
+    "goal": "어느 샵의 어떤 사진이 들어와도 일정한 기준/퀄리티 유지. 데모샵 청소가 목적이 아님 — 경계사례 위주로 '처음 보는 사진에도 규칙이 작동하는가'를 측정.",
+    "shop_id": "00000000-0000-0000-0718-3a306722d45c",
+    "labels_final": false,
+    "note": "labels_final=false 인 동안은 초안. 지현님 최종 확인 후 true로 승격한다. label_status: draft_confirmed(Kiro가 육안 확인) / needs_review(육안 미확인 또는 판단 대기).",
+    "criteria_source": "현직 바버샵 원장 자문(2026-09-08, 지현님 어머님). 추정 기준을 전문가 판정으로 대체. 이 문서가 기존 코드/프롬프트 문구보다 우선.",
+    "criteria": {
+      "single_criterion": "바버샵에서 하는 시술 형태가 사진에서 식별되는가 (성별·출처·매장맥락·포즈·장소·'헤어가 주제인지'는 모두 무관).",
+      "pass_basis_clarification": "통과 사유는 오직 '시술이 식별됨' 하나. '홍보에 쓸 만해 보인다/분위기 좋다/착장이 멋지다'는 통과 사유가 아니다. 분위기·착장 사진이라도 시술이 안 보이면 탈락. (2026-09-08 확정)",
+      "correction_1_barbershop_also": "탈락 기준은 '바버샵에서만 하는 시술인가'가 아니라 '바버샵에서도 하는가'. 미용실도 하는 시술이라는 건 탈락 사유가 아니다. 탈락은 '미용실에서만 하고 바버샵에서는 안 하는 시술'로 한정.",
+      "correction_2_length_not_criterion": "머리 길이는 판단 기준이 아니다. 멀릿컷/슬릭백/롱트림 등 길이 있는 바버샵 시술 존재. '롱헤어라서 탈락'은 틀린 근거이며, 올바른 탈락 근거는 '바버샵 시술 형태가 식별되지 않음'이다."
+    },
+    "barber_service_names": [
+      "가일컷",
+      "버스트페이드컷",
+      "사이드파트",
+      "크루컷",
+      "포마드컷",
+      "크롭컷",
+      "드랍컷",
+      "아이비리그컷",
+      "슬릭백",
+      "슬릭백언더컷",
+      "플랫탑",
+      "롱트림",
+      "리젠트컷",
+      "버즈컷",
+      "페이드컷",
+      "멀릿컷",
+      "모히칸"
+    ],
+    "fade_options": [
+      "제로 페이드",
+      "로우 페이드",
+      "미들 페이드",
+      "하이 페이드",
+      "스킨 페이드",
+      "mm 단위 지정(1mm/3mm 등)",
+      "버스트 페이드"
+    ],
+    "service_structure_note": "시술명(가일컷/크루컷/사이드파트 …) + 페이드옵션(제로/로우/미들/하이/스킨, mm) 의 2층 조합 구조. 프롬프트도 이 구조로 작성할 것.",
+    "service_list_usage": "위 목록은 판단을 돕는 예시. '목록에 없으면 무조건 탈락'으로 쓰지 말 것 (원장이 기억나는 대로 준 것이라 전부 아님). 판정 기준은 여전히 '바버샵에서 하는 시술 형태가 식별되는가'.",
+    "pending_from_owner": {
+      "salon_only_services": "미용실에서만 하는 시술 목록(=other_service 탈락 기준) 원장 회신 대기. 현재 프롬프트엔 '펌/레이어드컷/염색'만 있음 — 정확/추가 확인 필요.",
+      "g28_shag": "남자7(g28) 셰그컷이 원장 목록에 없음. 멀릿 인접 계열로 바버샵 시술 가능성. 원장 확인 후 라벨 확정 (현재 needs_review 보류)."
+    },
+    "missing_coverage": [
+      {
+        "case": "#1 짧은 머리인데 바버 시술 형태를 지목할 근거가 없는 스냅. 철회(2026-09-08): 버즈컷이 통과 대상이 된 이상 성립 불가, \"머리 판단 불가\"는 g33이 커버.",
+        "status": "철회"
+      },
+      {
+        "case": "#2 페이드 없는 균일 버즈컷 결과물. expected_pass=true.",
+        "status": "확보(g24)"
+      },
+      {
+        "case": "#3 바버 시술 형태는 명확한데 포즈·상황이 홍보용이 아닌 사진. expected_pass=true. 결정4 검증.",
+        "status": "확보(g34 카페+강아지, g35 차안셀카)"
+      },
+      {
+        "case": "#4 길이가 있는 바버샵 시술(멀릿컷/슬릭백/롱트림 등) 결과물. expected_pass=true. 현 골든셋 35장은 전부 짧은 시술(페이드/크롭/테이퍼/버즈)이라 긴 바버 시술이 0장 → 수정A(롱헤어=미용실=탈락 오류 제거)의 효과를 측정할 표본이 없음. 이 사진이 있어야 수정A 효과 측정 + \"긴머리=미용실\" 오류 재발을 골든셋이 잡음.",
+        "status": "미확보 (지현 최우선 조달, 어머님 자문 5-3으로 우선순위 상향)",
+        "needed_photo": "멀릿컷/슬릭백/롱트림 등 길이 있는 바버샵 시술 결과물 사진 1~2장. 미용실 펌/레이어드가 아니라 바버 시술이어야 함.",
+        "priority": "HIGH — 원장 자문 5-3: 긴 스타일은 전문가도 사진 판별이 애매한 필터 최대 불확실 영역. 이 구간을 측정하는 유일한 항목이므로 최우선 조달."
+      }
+    ],
+    "created": "2026-09-07",
+    "updated": "2026-09-08",
+    "count": 35,
+    "excluded_candidates": [
+      {
+        "original_name": "골든셋_페이드_일상2.png",
+        "blob_hash": "0840f1b5268d09c4c4279f3435ab5302",
+        "reason": "길거리 전신샷이라 인물이 작아 시술 식별이 경계선상. 통과/탈락이 갈리는 자리라 정답이 애매 → 시험 문제로 부적합하여 골든셋 제외(2026-09-08)."
+      }
+    ]
+  },
+  "items": [
+    {
+      "id": "g01",
+      "blob_url": "https://bybaekstore1.blob.core.windows.net/photos/00000000-0000-0000-0718-3a306722d45c/9804cd7767a84afa236ea89a7b4e4136.jpg",
+      "original_name": "페이드컷.jpg",
+      "expected_category": "haircut_result",
+      "expected_pass": true,
+      "rationale": "명확한 페이드컷 결과 사진 (파일명·현행 25점).",
+      "label_status": "draft_confirmed"
+    },
+    {
+      "id": "g02",
+      "blob_url": "https://bybaekstore1.blob.core.windows.net/photos/00000000-0000-0000-0718-3a306722d45c/f15867c6a1d3c1183b3d9829c631660c.jpg",
+      "original_name": "바버샵 사진.jpg",
+      "expected_category": "haircut_result",
+      "expected_pass": true,
+      "rationale": "바버샵 헤어컷 결과 (현행 25점).",
+      "label_status": "draft_confirmed"
+    },
+    {
+      "id": "g03",
+      "blob_url": "https://bybaekstore1.blob.core.windows.net/photos/00000000-0000-0000-0718-3a306722d45c/45356c41481c4cb60c4024409ea21ec8.jpg",
+      "original_name": "바버샵5.jpg",
+      "expected_category": "haircut_result",
+      "expected_pass": true,
+      "rationale": "바버샵 헤어컷 결과 (현행 25점).",
+      "label_status": "draft_confirmed"
+    },
+    {
+      "id": "g04",
+      "blob_url": "https://bybaekstore1.blob.core.windows.net/photos/00000000-0000-0000-0718-3a306722d45c/d13eb8670982651ca4441e96f10edd6d.jpg",
+      "original_name": "바버샵3.jpg",
+      "expected_category": "haircut_result",
+      "expected_pass": true,
+      "rationale": "바버샵 헤어컷 결과 (현행 25점).",
+      "label_status": "draft_confirmed"
+    },
+    {
+      "id": "g05",
+      "blob_url": "https://bybaekstore1.blob.core.windows.net/photos/00000000-0000-0000-0718-3a306722d45c/00ccf761974c2291f0bb085095ae965f.jpg",
+      "original_name": "바버샵2.jpg",
+      "expected_category": "haircut_result",
+      "expected_pass": true,
+      "rationale": "바버샵 헤어컷 결과 (현행 25점).",
+      "label_status": "draft_confirmed"
+    },
+    {
+      "id": "g06",
+      "blob_url": "https://bybaekstore1.blob.core.windows.net/photos/00000000-0000-0000-0718-3a306722d45c/f9a42df6510a75277d3c9c86a53afebd.jpg",
+      "original_name": "3575148a....jpg",
+      "expected_category": "haircut_result",
+      "expected_pass": true,
+      "rationale": "바버샵 헤어컷 결과 (현행 24점).",
+      "label_status": "draft_confirmed"
+    },
+    {
+      "id": "g07",
+      "blob_url": "https://bybaekstore1.blob.core.windows.net/photos/00000000-0000-0000-0718-3a306722d45c/4f461fdc58da71f862117a1d33e751e0.jpg",
+      "original_name": "바버샵4.jpg",
+      "expected_category": "haircut_result",
+      "expected_pass": true,
+      "rationale": "바버샵 헤어컷 결과 (현행 24점).",
+      "label_status": "draft_confirmed"
+    },
+    {
+      "id": "g08",
+      "blob_url": "https://bybaekstore1.blob.core.windows.net/photos/00000000-0000-0000-0718-3a306722d45c/c6a246ea4a83eabb3ea56c8b72013f32.jpg",
+      "original_name": "바버샵머리사진.jpg",
+      "expected_category": "haircut_result",
+      "expected_pass": true,
+      "rationale": "바버샵 헤어컷 결과 (현행 22점).",
+      "label_status": "draft_confirmed"
+    },
+    {
+      "id": "g09",
+      "blob_url": "https://bybaekstore1.blob.core.windows.net/photos/00000000-0000-0000-0718-3a306722d45c/82c5a495f40d60969a20b97925cd58a4.png",
+      "original_name": "IMG_6679.PNG",
+      "expected_category": "haircut_result",
+      "expected_pass": true,
+      "rationale": "PNG 헤어컷 결과 (현행 21점). 포맷 다양성 확보용.",
+      "label_status": "draft_confirmed"
+    },
+    {
+      "id": "g10",
+      "blob_url": "https://bybaekstore1.blob.core.windows.net/photos/00000000-0000-0000-0718-3a306722d45c/a5ae3c1a9a1282c593eb4a5670b7bacc.jpeg",
+      "original_name": "원드라이브테스트사진.jpeg",
+      "expected_category": "haircut_result",
+      "expected_pass": true,
+      "rationale": "헤어컷 결과 (현행 19점). 저점 통과 경계.",
+      "label_status": "draft_confirmed"
+    },
+    {
+      "id": "g11",
+      "blob_url": "https://bybaekstore1.blob.core.windows.net/photos/00000000-0000-0000-0718-3a306722d45c/9f5ee2b862e00d454704d151cca6a1b4.jpeg",
+      "original_name": "pick8.jpeg",
+      "expected_category": "haircut_result",
+      "expected_pass": true,
+      "rationale": "헤어컷 결과, 현행 16점 = 통과선(15) 바로 위. 임계값 회귀 감지용 경계.",
+      "label_status": "draft_confirmed"
+    },
+    {
+      "id": "g12",
+      "blob_url": "https://bybaekstore1.blob.core.windows.net/photos/00000000-0000-0000-0718-3a306722d45c/68658735692a705b64939bbd2deae027.jpeg",
+      "original_name": "KakaoTalk_..._13-17-42 001.jpeg",
+      "expected_category": "haircut_result",
+      "expected_pass": true,
+      "rationale": "실제 헤어샘플 (현행 21점).",
+      "label_status": "draft_confirmed"
+    },
+    {
+      "id": "g13",
+      "blob_url": "https://bybaekstore1.blob.core.windows.net/photos/00000000-0000-0000-0718-3a306722d45c/28c2f4368d8c36c3e289d0376340dd04.jpg",
+      "original_name": "20250201_iOS.JPG",
+      "expected_category": "barber_portrait",
+      "expected_pass": true,
+      "rationale": "Kiro 육안 확인: 실제 바버가 커트하는 장면(가위/이발보·매장). 바버 기법 맥락 명확. 현행 barber_portrait 15점 PASS.",
+      "label_status": "draft_confirmed"
+    },
+    {
+      "id": "g14",
+      "blob_url": "https://bybaekstore1.blob.core.windows.net/photos/00000000-0000-0000-0718-3a306722d45c/06e8f0b25ea9954d1c4ca47f8f12cede.jpg",
+      "original_name": "바버샵3.jpg(커트장면)",
+      "expected_category": "barber_portrait",
+      "expected_pass": true,
+      "rationale": "Kiro 육안 확인: 바버가 가위로 커트 중인 장면. PASS 맞음.",
+      "label_status": "draft_confirmed"
+    },
+    {
+      "id": "g15",
+      "blob_url": "https://bybaekstore1.blob.core.windows.net/photos/00000000-0000-0000-0718-3a306722d45c/47d113efd26550d982bb18bc32160a20.jpg",
+      "original_name": "미용실 사진.jpg",
+      "expected_category": "shop_atmosphere",
+      "expected_pass": true,
+      "rationale": "매장 인테리어. 기법 게이트 예외 대상(사람 없음). 현행 20점.",
+      "label_status": "draft_confirmed"
+    },
+    {
+      "id": "g16",
+      "blob_url": "https://bybaekstore1.blob.core.windows.net/photos/00000000-0000-0000-0718-3a306722d45c/e87a27c132928a4ea93ebdb7b79364f3.jpg",
+      "original_name": "바버샵.jpg",
+      "expected_category": "shop_atmosphere",
+      "expected_pass": true,
+      "rationale": "매장 인테리어. 현행 19점.",
+      "label_status": "draft_confirmed"
+    },
+    {
+      "id": "g17",
+      "blob_url": "https://bybaekstore1.blob.core.windows.net/photos/00000000-0000-0000-0718-3a306722d45c/12c76fb8e47c4161b10d454aedf9c02a.jpg",
+      "original_name": "20250405_iOS.jpg",
+      "expected_category": "shop_atmosphere",
+      "expected_pass": true,
+      "rationale": "매장 분위기. 현행 17점 = shop_atmosphere 중 저점 경계.",
+      "label_status": "draft_confirmed"
+    },
+    {
+      "id": "g18",
+      "blob_url": "https://bybaekstore1.blob.core.windows.net/photos/00000000-0000-0000-0718-3a306722d45c/5086afe3b9544b1fb526f55ba46a7b5d.jpg",
+      "original_name": "여자2.jpg",
+      "expected_category": "irrelevant",
+      "expected_pass": false,
+      "rationale": "Kiro 육안 확인: AI 화보풍 여성, 손으로 얼굴 받침·어깨노출, 헤어 기법 0. [이번 구멍] 현행 barber_portrait 20점 오통과.",
+      "label_status": "draft_confirmed"
+    },
+    {
+      "id": "g19",
+      "blob_url": "https://bybaekstore1.blob.core.windows.net/photos/00000000-0000-0000-0718-3a306722d45c/8e92c57ec357906a1ccc3f4d7e28ef87.jpg",
+      "original_name": "남자.jpg",
+      "expected_category": "irrelevant",
+      "expected_pass": false,
+      "rationale": "Kiro 육안 확인: 흑백 연예인풍, 고개 젖힌 상반신 누드컷, 헤어 기법 0. 현행 barber_portrait 17점 오통과.",
+      "label_status": "draft_confirmed"
+    },
+    {
+      "id": "g20",
+      "blob_url": "https://bybaekstore1.blob.core.windows.net/photos/00000000-0000-0000-0718-3a306722d45c/71137cb1f76f8ac7e5a773027f7f08a8.jpg",
+      "original_name": "남자6.jpg",
+      "expected_category": "irrelevant",
+      "expected_pass": false,
+      "rationale": "결정4 재검토: 성별·화보·표정은 배제하고 판단. 정면 흉상 클로즈업으로 헤어 상단 일부만 보이고 측/후면이 프레임 밖이라 바버샵 시술 형태(페이드/사이드파트/크롭 등)를 지목할 근거가 없음. 길이가 아니라 '시술 형태 식별 불가'가 탈락 근거.",
+      "label_status": "draft_confirmed"
+    },
+    {
+      "id": "g21",
+      "blob_url": "https://bybaekstore1.blob.core.windows.net/photos/00000000-0000-0000-0718-3a306722d45c/c7484130d737615a118fbaa0c122fd87.jpg",
+      "original_name": "남자5.jpg",
+      "expected_category": "irrelevant",
+      "expected_pass": false,
+      "rationale": "Kiro 육안 확인: 무지 배경 정면 얼굴 클로즈업, 스타일링 요소 없음(증명사진풍). 현행 barber_portrait 16점 오통과.",
+      "label_status": "draft_confirmed"
+    },
+    {
+      "id": "g22",
+      "blob_url": "https://bybaekstore1.blob.core.windows.net/photos/00000000-0000-0000-0718-3a306722d45c/e88a7571a3e42234ced5c93a99308564.jpg",
+      "original_name": "02F9A4CE....JPG",
+      "expected_category": "irrelevant",
+      "expected_pass": false,
+      "rationale": "손톱아트를 든 셀카(주제가 손/네일). 헤어에 페이드·트림·사이드파트 등 바버샵 시술 형태가 식별되지 않음(길이 무관). 시술 형태 식별 불가로 FAIL. 현행 barber_portrait 18점 오통과.",
+      "label_status": "draft_confirmed"
+    },
+    {
+      "id": "g23",
+      "blob_url": "https://bybaekstore1.blob.core.windows.net/photos/00000000-0000-0000-0718-3a306722d45c/2ad6836e1918a67c842a0d6c1a9ee074.jpg",
+      "original_name": "D7010A28....JPG",
+      "expected_category": "irrelevant",
+      "expected_pass": false,
+      "rationale": "Kiro 육안 확인: 친구 2명(안경 여성+금발 여성) 실내 셀카, 헤어 기법 0. 현행 barber_portrait 16점 오통과.",
+      "label_status": "draft_confirmed"
+    },
+    {
+      "id": "g24",
+      "blob_url": "https://bybaekstore1.blob.core.windows.net/photos/00000000-0000-0000-0718-3a306722d45c/87d6e14e094cc4361716c82f84578157.jpg",
+      "original_name": "1d4dd1a9....jpg",
+      "expected_category": "haircut_result",
+      "expected_pass": true,
+      "service_name": "버즈컷",
+      "rationale": "원장 판정(2026-09-08): 균일 버즈컷 = 바버샵에서도 하는 시술. '바버샵 머리이기도 미용실 머리이기도' → 포함. 페이드 유무 무관, 버즈컷 자체가 바버 시술. missing_coverage #2 확보.",
+      "label_status": "confirmed_owner"
+    },
+    {
+      "id": "g25",
+      "blob_url": "https://bybaekstore1.blob.core.windows.net/photos/00000000-0000-0000-0718-3a306722d45c/4552da084583698a57ad805ff6f03384.jpg",
+      "original_name": "남자8.jpg",
+      "expected_category": "irrelevant",
+      "expected_pass": false,
+      "rationale": "헝클어진 헤어가 얼굴 덮은 상반신 에디토리얼. 길이 무관 — 페이드/사이드파트/크롭/멀릿 등 어떤 바버샵 시술 형태도 지목할 수 없음(다듬은 흔적 없이 흐트러진 상태). 시술 형태 식별 불가로 FAIL. (v1 레거시·미분석, 현행 passed 오통과.)",
+      "label_status": "draft_confirmed"
+    },
+    {
+      "id": "g26",
+      "blob_url": "https://bybaekstore1.blob.core.windows.net/photos/00000000-0000-0000-0718-3a306722d45c/0a033eb10ced2a832b6d8dbb3a562962.jpg",
+      "original_name": "AACE107E....JPG",
+      "expected_category": "irrelevant",
+      "expected_pass": false,
+      "rationale": "술잔 든 인물 셀카. 길이 무관 — 결/다듬음에 페이드·사이드파트·트림 등 바버샵 시술 형태가 없어 지목 불가. 시술 형태 식별 불가로 FAIL. (v1 레거시·미분석, 현행 passed 오통과.)",
+      "label_status": "draft_confirmed"
+    },
+    {
+      "id": "g27",
+      "blob_url": "https://bybaekstore1.blob.core.windows.net/photos/00000000-0000-0000-0718-3a306722d45c/d2cc05af1901a828a33579b5b783e6ef.jpg",
+      "original_name": "여자.jpg",
+      "expected_category": "other_service",
+      "expected_pass": false,
+      "rationale": "Kiro 육안 확인: 레이어드/C컬 미디엄컷 여성(미용실 스타일), 바버 기법 아님. 현행 other_service 15점 FAIL(정답).",
+      "label_status": "draft_confirmed"
+    },
+    {
+      "id": "g28",
+      "blob_url": "https://bybaekstore1.blob.core.windows.net/photos/00000000-0000-0000-0718-3a306722d45c/4fedf927ee9224fdec1603ba5ef47a10.jpg",
+      "original_name": "남자7.jpg",
+      "expected_category": null,
+      "expected_pass": null,
+      "rationale": "보류: 텍스처드 셰그/멀릿 계열. 원장 목록에 셰그컷 없으나 멀릿(바버 시술)과 인접 계열. '길이/미용실 스타일'은 더 이상 탈락 근거 아님 — 원장 회신(셰그컷이 바버 시술인지) 후 PASS/FAIL 확정. 그 전까지 채점/집계에서 제외.",
+      "label_status": "needs_review_owner_pending"
+    },
+    {
+      "id": "g29",
+      "blob_url": "https://bybaekstore1.blob.core.windows.net/photos/00000000-0000-0000-0718-3a306722d45c/d8787542f489b7b95c76ac7d42bd47db.jpg",
+      "original_name": "여자3.jpg",
+      "expected_category": "irrelevant",
+      "expected_pass": false,
+      "rationale": "Kiro 육안 확인: 양갈래 땋은 머리 전신 화보(AI 생성, 'Cici AI' 워터마크). 땋기는 바버샵 시술 형태가 아니며(길이 무관), 지목 가능한 바버 시술 없음. cat 정정 other_service→irrelevant.",
+      "label_status": "draft_confirmed"
+    },
+    {
+      "id": "g30",
+      "blob_url": "https://bybaekstore1.blob.core.windows.net/photos/00000000-0000-0000-0718-3a306722d45c/07bd3c30d28cbf91b629e3aa9052ef1a.jpg",
+      "original_name": "여자4.jpg",
+      "expected_category": "irrelevant",
+      "expected_pass": false,
+      "rationale": "Kiro 육안 확인: 뷰티/패션 화보(올림머리+시스루뱅, 'PINK LOOK' 매거진 캡션). 지목 가능한 바버샵 시술 형태 없음(길이 무관). cat 정정 other_service→irrelevant.",
+      "label_status": "draft_confirmed"
+    },
+    {
+      "id": "g31",
+      "blob_url": "https://bybaekstore1.blob.core.windows.net/photos/00000000-0000-0000-0718-3a306722d45c/3a943b645c7bb38da0fd60d86222b4e7.png",
+      "original_name": "스크린샷 2026-04-07 오후 6.41.55.png",
+      "expected_category": "irrelevant",
+      "expected_pass": false,
+      "rationale": "Kiro 육안 확인: MS 로그인 브라우저 스크린샷. 명백 irrelevant. 현행 FAIL(정답).",
+      "label_status": "draft_confirmed"
+    },
+    {
+      "id": "g32",
+      "blob_url": "https://bybaekstore1.blob.core.windows.net/photos/00000000-0000-0000-0718-3a306722d45c/59ee900774aa84af649d755271470cb3.png",
+      "original_name": "스크린샷 2026-04-08 오전 1.17.23.png",
+      "expected_category": "irrelevant",
+      "expected_pass": false,
+      "rationale": "Kiro 육안 확인: BYBAEK OneDrive 권한 동의 브라우저 스크린샷(URL·버튼·UI). 헤어 없음 → irrelevant.",
+      "label_status": "draft_confirmed"
+    },
+    {
+      "id": "g33",
+      "blob_url": "https://bybaekstore1.blob.core.windows.net/photos/00000000-0000-0000-0718-3a306722d45c/9f8b3530190ad288ced9de4cb511e871.jpg",
+      "original_name": "IMG_4885.JPG",
+      "expected_category": "irrelevant",
+      "expected_pass": false,
+      "rationale": "Kiro 육안 확인: 야외에서 강아지 안은 스냅, 주제는 반려견. 사람 헤어 프레임 밖, 바버 시술 형태 지목 불가 → irrelevant. cat 정정 null→irrelevant.",
+      "label_status": "draft_confirmed"
+    },
+    {
+      "id": "g34",
+      "blob_url": "https://bybaekstore1.blob.core.windows.net/photos/00000000-0000-0000-0718-3a306722d45c/7c860113c7b34b04fca912b44670a225.png",
+      "original_name": "골든셋_페이드_일상.png",
+      "expected_category": "haircut_result",
+      "expected_pass": true,
+      "rationale": "지현님 확인(2026-09-08): 카페 앞에서 강아지 안은 일상 스냅(비홍보 상황). 측면 투블럭 언더컷+페이드 시술 식별 명확. 상황·포즈 무관하게 시술이 보이면 PASS(결정4). missing_coverage #3.",
+      "label_status": "confirmed_owner"
+    },
+    {
+      "id": "g35",
+      "blob_url": "https://bybaekstore1.blob.core.windows.net/photos/00000000-0000-0000-0718-3a306722d45c/31c704c054ad41e56c841de56655b0a4.png",
+      "original_name": "골든셋_페이드_일상3.png",
+      "expected_category": "haircut_result",
+      "expected_pass": true,
+      "rationale": "지현님 확인(2026-09-08): 차 안 셀카(비홍보 상황). 측면 스킨/하이 페이드 그라데이션+상단 크롭 선명. 시술 식별 명확 → PASS(결정4). missing_coverage #3.",
+      "label_status": "confirmed_owner"
+    }
+  ]
+}
