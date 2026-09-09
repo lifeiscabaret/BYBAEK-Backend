@@ -249,7 +249,7 @@ async def ms_callback(request: Request):
 async def instagram_business_login(code: str, res: Response, fast_req: Request):
 
     access_token = fast_req.headers.get("x-ms-token-aad-access-token")
-    logger.info(f"access token = {access_token}")
+    logger.info(f"instagram token issued: {bool(access_token)}")
 
     if not code:
         raise HTTPException(status_code=401, detail="authorize code doesnt exist")
@@ -298,7 +298,7 @@ async def instagram_business_login(code: str, res: Response, fast_req: Request):
         samesite="none"
     )
 
-    logger.info(fast_req.cookies)
+    logger.info(f"instagram callback: user_id cookie set: {bool(user_id)}")
 
     ms_id = fast_req.headers.get("X-MS-CLIENT-PRINCIPAL-ID")
     if not ms_id:
