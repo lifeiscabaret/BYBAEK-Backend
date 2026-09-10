@@ -7,7 +7,7 @@ import os
 from dotenv import load_dotenv
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
-from routers import auth, onboarding, agent, schedule, instagram, photos, onedrive, custom_chat
+from routers import auth, onboarding, agent, instagram, photos, onedrive, custom_chat
 from workers.photo_queue_worker import start_worker
 
 
@@ -221,7 +221,6 @@ app.add_middleware(
 app.include_router(auth.router,        prefix="/api/auth",        tags=["Auth"])
 app.include_router(onboarding.router,  prefix="/api/onboarding",  tags=["Onboarding"])
 app.include_router(agent.router,       prefix="/api/agent",       tags=["Agent"])
-app.include_router(schedule.router,    prefix="/api/schedule",    tags=["Schedule"])
 app.include_router(instagram.router,   prefix="/api/instagram",   tags=["Instagram"])
 app.include_router(photos.router,      prefix="/api/photos",      tags=["Photos"])
 app.include_router(onedrive.router,    prefix="/api/onedrive",    tags=["Onedrive"])

@@ -567,19 +567,6 @@ def get_shop_info(shop_id: str) -> dict:
         logging.error(f"상점 설정 조회 실패 (shop_id: {shop_id}): {str(e)}")
         return None
  
-def update_schedule_settings(shop_id: str, upload_time: str, timezone: str = "Asia/Seoul") -> bool:
-    container = get_cosmos_container("Shop")
-    try:
-        shop_item = container.read_item(item=shop_id, partition_key=shop_id)
-        shop_item["insta_upload_time"] = upload_time
-        shop_item["insta_upload_time_slot"] = timezone
-        shop_item["updated_at"] = datetime.utcnow().isoformat()
-        container.upsert_item(body=shop_item)
-        return True
-    except Exception as e:
-        logging.error(f"스케줄 설정 저장 실패 (shop_id: {shop_id}): {str(e)}")
-        return False
-
 def get_all_shops() -> list:
     container = get_cosmos_container("Shop")
     query = "SELECT c.id, c.shop_id, c.insta_upload_time, c.insta_upload_time_slot, c.insta_upload_days, c.insta_auto_upload_yn FROM c"
