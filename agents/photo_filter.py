@@ -26,6 +26,7 @@
 import os
 import json
 import asyncio
+import random
 import tempfile
 import urllib.request
 from datetime import datetime, timezone, timedelta
@@ -33,6 +34,13 @@ from datetime import datetime, timezone, timedelta
 import cv2
 import numpy as np
 from openai import AsyncAzureOpenAI
+from openai import (
+    APITimeoutError,
+    APIConnectionError,
+    RateLimitError,
+    InternalServerError,
+    APIStatusError,
+)
 from azure.storage.blob import BlobSasPermissions, generate_blob_sas, BlobServiceClient
 
 # ── 설정값 ────────────────────────────────────────────────────────────────────
@@ -76,6 +84,106 @@ def _get_blob_service_client() -> BlobServiceClient:
     return _blob_service_client
 
 
+# ── 일시적 오류 재시도 / 오류 상태 (task #41) ─────────────────────────────────
+# "판정하지 못한 것"(인프라 장애)과 "판정해서 탈락시킨 것"(콘텐츠)은 다른 상태다.
+# 일시적 오류는 재시도하고, 소진 시에도 failed가 아니라 error 상태로 남긴다.
+
+
+class TransientFilterError(Exception):
+    """일시적 오류가 재시도까지 소진된 경우. 이 예외는 '판정 실패'(error)로 처리되며,
+    콘텐츠 탈락(failed)과 구분된다."""
+    pass
+
+# 호출 단위 재시도: 첫 시도 포함 최대 3회, 지수 백오프 1s→2s→4s + 지터.
+RETRY_MAX_ATTEMPTS   = 3
+RETRY_BASE_DELAY_SEC = 1.0
+
+# 사이클 단위 재시도 상한 (무한 재시도/비용 누수 방지).
+# filter_attempts 가 이 값에 도달하면 더 이상 자동 재시도 대상이 아니다.
+MAX_FILTER_ATTEMPTS = 3
+
+# 일시적으로 취급할 오류 메시지 substring (예외 타입 분류의 보조 수단).
+# 골든셋/프로덕션에서 실제 관측된 문자열 기준.
+_TRANSIENT_SUBSTRINGS = (
+    "failed to download image",   # Azure OpenAI 400: 이미지 다운로드 실패 (일시적)
+    "unable to download",
+    "timed out", "timeout",
+    "connection", "temporarily unavailable", "service unavailable",
+    "rate limit", "too many requests",
+    "다운로드 실패", "이미지 읽기 실패",
+)
+
+# 재시도하면 안 되는(영구적) 오류 메시지 substring — 입력 자체의 문제.
+# 이미지 크기 초과(2000px 등)는 task #30 영역이므로 재시도 대상에서 제외한다.
+_PERMANENT_SUBSTRINGS = (
+    "2000 pixels", "maximum allowed size", "image size", "too large",
+    "invalid image", "unsupported image",
+    "invalid api key", "unauthorized", "permission", "forbidden",
+)
+
+
+def _is_transient_error(exc: Exception) -> bool:
+    """예외를 일시적(재시도 대상)/영구적으로 분류한다.
+
+    분류 우선순위:
+    1) 명백히 영구적인 예외 타입/메시지 → False
+    2) 일시적 예외 타입(타임아웃/연결/레이트리밋/5xx/특정 4xx) → True
+    3) 메시지 substring 보조 판정
+    """
+    msg = str(getattr(exc, "message", "") or exc).lower()
+
+    # 1) 영구적 신호가 메시지에 있으면 재시도 안 함 (다운로드 실패 문구가 우선하지 않도록 먼저 체크)
+    if any(s in msg for s in _PERMANENT_SUBSTRINGS):
+        return False
+
+    # 2) 예외 타입 기반 (신뢰도 높음)
+    if isinstance(exc, (APITimeoutError, APIConnectionError, RateLimitError, InternalServerError)):
+        return True
+    if isinstance(exc, APIStatusError):
+        status_code = getattr(exc, "status_code", None)
+        if status_code in (408, 409, 429, 500, 502, 503, 504):
+            return True
+        # 400 등 기타 status는 메시지로 최종 판단 (다운로드 실패=일시적 vs 형식오류=영구적)
+
+    # 3) 메시지 substring 보조 판정
+    if any(s in msg for s in _TRANSIENT_SUBSTRINGS):
+        return True
+
+    # 4) 네트워크성 표준 예외
+    if isinstance(exc, (TimeoutError, ConnectionError, OSError)):
+        return True
+
+    return False
+
+
+async def _retry_transient(fn, *, what: str, image_id: str = ""):
+    """일시적 오류에 대해서만 지수 백오프(+지터) 재시도.
+
+    fn: 매 시도마다 새로 호출되는 async 콜러블 (SAS URL 등을 시도마다 재생성하도록
+        호출부에서 fn 내부에서 재발급할 것 — task #41 추가 1).
+    영구적 오류는 즉시 raise. 일시적 오류는 소진 시 마지막 예외를 raise.
+    """
+    last_exc = None
+    for attempt in range(1, RETRY_MAX_ATTEMPTS + 1):
+        try:
+            return await fn()
+        except Exception as e:
+            last_exc = e
+            transient = _is_transient_error(e)
+            if not transient or attempt >= RETRY_MAX_ATTEMPTS:
+                if not transient:
+                    print(f"[photo_filter][ERROR] {what} 영구적 오류 → 재시도 안 함 ({image_id}): {e}")
+                else:
+                    print(f"[photo_filter][ERROR] {what} 재시도 {attempt}/{RETRY_MAX_ATTEMPTS} 소진 ({image_id}): {e}")
+                raise
+            delay = RETRY_BASE_DELAY_SEC * (2 ** (attempt - 1)) + random.uniform(0, 0.5)
+            print(f"[photo_filter][ERROR] {what} 일시적 오류 → {delay:.1f}s 후 재시도 {attempt+1}/{RETRY_MAX_ATTEMPTS} ({image_id}): {e}")
+            await asyncio.sleep(delay)
+    # 이론상 도달하지 않음
+    if last_exc:
+        raise last_exc
+
+
 # ── 메인 진입점 ───────────────────────────────────────────────────────────────
 
 async def run_photo_filter(shop_id: str, photo_list: list) -> dict:
@@ -102,20 +210,29 @@ async def run_photo_filter(shop_id: str, photo_list: list) -> dict:
             "total": len(already_passed),
             "stage1_passed": len(already_passed),
             "stage2_passed": len(already_passed),
+            "errored": 0,
             "results": []
         }
 
     # STEP 1: 1차 필터링
     stage1_results   = await run_stage1_filter(photo_list)
     stage1_pass_list = [r for r in stage1_results if r["stage1_pass"]]
-    stage1_fail_list = [r for r in stage1_results if not r["stage1_pass"]]
-    print(f"[photo_filter] 1차 완료 -> PASS {len(stage1_pass_list)} / FAIL {len(stage1_fail_list)}")
+    # [task #41] 다운로드 등 일시적 오류(판정 불가)와 실제 콘텐츠 탈락을 분리
+    stage1_error_list = [r for r in stage1_results if r.get("stage1_error")]
+    stage1_fail_list  = [r for r in stage1_results if not r["stage1_pass"] and not r.get("stage1_error")]
+    print(f"[photo_filter] 1차 완료 -> PASS {len(stage1_pass_list)} / FAIL {len(stage1_fail_list)} / ERROR {len(stage1_error_list)}")
 
     for photo in stage1_fail_list:
         await _save_fail_result(shop_id, photo, photo.get("stage1_reason", "stage1_fail"))
 
+    stage1_errored = 0
+    for photo in stage1_error_list:
+        await _save_error_result(shop_id, photo, photo.get("stage1_reason", "stage1_error"))
+        stage1_errored += 1
+
     if not stage1_pass_list:
-        return {"total": len(photo_list), "stage1_passed": 0, "stage2_passed": 0, "results": []}
+        return {"total": len(photo_list), "stage1_passed": 0, "stage2_passed": 0,
+                "errored": stage1_errored, "results": []}
 
     # STEP 2: 2차 필터링
     stage2_result = await run_stage2_filter(shop_id, stage1_pass_list)
@@ -124,6 +241,7 @@ async def run_photo_filter(shop_id: str, photo_list: list) -> dict:
         "total":         len(photo_list),
         "stage1_passed": len(stage1_pass_list),
         "stage2_passed": stage2_result["passed"],
+        "errored":       stage1_errored + stage2_result.get("errored", 0),
         "results":       [r for r in stage2_result["results"] if r.get("stage2_pass")],
         "failed":        [r for r in stage2_result["results"] if not r.get("stage2_pass")]
     }
@@ -138,13 +256,22 @@ async def run_stage1_filter(photo_list: list) -> list:
         image_id = photo.get("image_id", "")
         blob_url = photo.get("blob_url", "")
 
-        pass_flag, reason = await _analyze_stage1(blob_url)
+        # [task #41] 다운로드 등 일시적 오류로 판정 자체가 불가하면 stage1_fail 이 아니라
+        # error 로 표시한다 ("판정 못한 것" ≠ "판정해서 탈락").
+        try:
+            pass_flag, reason = await _analyze_stage1(blob_url)
+            stage1_error = False
+        except TransientFilterError as e:
+            print(f"[photo_filter][ERROR] Stage1 판정 불가 ({image_id}): {e}")
+            pass_flag, reason = "Fail", str(e)
+            stage1_error = True
 
         results.append({
             "image_id":      image_id,
             "blob_url":      blob_url,
             "stage1_pass":   pass_flag == "Pass",
             "stage1_reason": reason,
+            "stage1_error":  stage1_error,
             **{k: v for k, v in photo.items() if k not in ("image_id", "blob_url")}
         })
 
@@ -183,12 +310,26 @@ async def _analyze_stage1(blob_url: str) -> tuple:
     """
     tmp_path = None
     try:
-        sas_url = _generate_sas_url(blob_url)
         with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
             tmp_path = tmp.name
-        urllib.request.urlretrieve(sas_url, tmp_path)
-    except Exception as e:
-        return "Fail", f"다운로드 실패: {e}"
+
+        async def _download():
+            # [task #41 추가 1] SAS URL을 매 시도마다 재발급 (만료/무효 SAS 대비).
+            sas_url = _generate_sas_url(blob_url)
+            await asyncio.to_thread(urllib.request.urlretrieve, sas_url, tmp_path)
+
+        try:
+            await _retry_transient(_download, what="Stage1 다운로드")
+        except Exception as e:
+            # 다운로드 실패는 일시적 성격 → 판정 불가(error)로 승격. 콘텐츠 탈락 아님.
+            raise TransientFilterError(f"다운로드 실패: {e}") from e
+    except TransientFilterError:
+        if tmp_path:
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
+        raise
 
     try:
         image = cv2.imread(tmp_path)
@@ -250,9 +391,23 @@ async def run_stage2_filter(shop_id: str, stage1_pass_list: list) -> dict:
     tasks   = [evaluate_with_limit(p) for p in stage1_pass_list]
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
-    passed, failed = [], []
+    passed, failed, errored = [], [], []
     for photo, result in zip(stage1_pass_list, results):
+        # [task #41] 일시적 오류(재시도 소진)는 '판정 불가'(error)로 분리.
+        # gather 예외가 TransientFilterError 이거나, _is_transient_error 로 판별되면 error.
+        if isinstance(result, TransientFilterError) or (
+            isinstance(result, Exception) and _is_transient_error(result)
+        ):
+            print(f"[photo_filter][ERROR] 2차 판정 불가 ({photo['image_id']}): {result}")
+            try:
+                await _save_error_result(shop_id, photo, str(result) or "evaluation_error")
+            except Exception as e:
+                print(f"[photo_filter][ERROR] ERROR 저장 실패 (건너뜀): {e}")
+            errored.append(photo["image_id"])
+            continue
+
         if isinstance(result, Exception):
+            # 비일시적(영구) 예외 → 기존 동작 유지: 콘텐츠 탈락과 동일 처리
             print(f"[photo_filter] 평가 오류 ({photo['image_id']}): {result}")
             result = _make_fail_result(photo["image_id"], "evaluation_error")
 
@@ -269,11 +424,12 @@ async def run_stage2_filter(shop_id: str, stage1_pass_list: list) -> dict:
             except Exception as e:
                 print(f"[photo_filter] FAIL 저장 실패 (건너뜀): {e}")
 
-    print(f"[photo_filter] 2차 완료 -> PASS {len(passed)} / FAIL {len(failed)}")
+    print(f"[photo_filter] 2차 완료 -> PASS {len(passed)} / FAIL {len(failed)} / ERROR {len(errored)}")
     return {
         "total":   len(stage1_pass_list),
         "passed":  len(passed),
         "failed":  len(failed),
+        "errored": len(errored),
         "results": passed + failed
     }
 
@@ -294,9 +450,6 @@ async def _evaluate_photo(
     """
     print(f"[photo_filter] 2차 평가 중 -> {image_id}")
 
-    sas_url  = _generate_sas_url(blob_url)
-    messages = _build_vision_prompt(sas_url, good_refs, bad_refs)
-
     api_key     = os.getenv("AZURE_OPENAI_API_KEY") or os.getenv("AZURE_OPENAI_KEY")
     endpoint    = os.getenv("AZURE_OPENAI_ENDPOINT")
     api_version = os.getenv("AZURE_OPENAI_API_VERSION", "2024-02-01")
@@ -311,13 +464,30 @@ async def _evaluate_photo(
         api_version=api_version
     )
 
-    try:
-        response = await client.chat.completions.create(
+    async def _call_vision():
+        # [task #41 추가 1] SAS URL을 매 시도마다 재발급한다.
+        # 다운로드 실패의 원인이 만료/무효 SAS였을 경우 재시도가 무의미해지는 것을 방지.
+        sas_url  = _generate_sas_url(blob_url)
+        messages = _build_vision_prompt(sas_url, good_refs, bad_refs)
+        return await client.chat.completions.create(
             model=deployment,
             messages=messages,
             max_completion_tokens=2000,
         )
 
+    # 1) Vision 호출 — 일시적 오류만 재시도. 소진 시 TransientFilterError 로 승격.
+    try:
+        response = await _retry_transient(_call_vision, what="Vision 호출", image_id=image_id)
+    except Exception as e:
+        if _is_transient_error(e):
+            # 재시도까지 소진된 일시적 오류 → '판정 불가'(error). 콘텐츠 탈락 아님.
+            raise TransientFilterError(str(e)) from e
+        # 영구적 오류(인증/형식/이미지 크기 등) → 기존 동작 유지(콘텐츠 탈락과 동일 처리)
+        print(f"[photo_filter] GPT 평가 실패 ({image_id}): {e}")
+        return _make_fail_result(image_id, str(e))
+
+    # 2) 응답 파싱 + 채점 (파싱 실패는 영구적 → 기존 fail 처리 유지)
+    try:
         raw = response.choices[0].message.content.strip()
         raw = raw.replace("```json", "").replace("```", "").strip()
         gpt_result = json.loads(raw)
@@ -369,6 +539,9 @@ async def _evaluate_photo(
         return result
 
     except Exception as e:
+        # 응답 파싱/채점 단계 오류(모델이 잘못된 JSON 반환 등)는 영구적 성격 →
+        # 기존 동작 유지(콘텐츠 탈락과 동일 처리). 일시적 오류는 위 Vision 호출 단계에서
+        # 이미 TransientFilterError 로 분리되었다.
         print(f"[photo_filter] GPT 평가 실패 ({image_id}): {e}")
         return _make_fail_result(image_id, str(e))
 
@@ -594,6 +767,49 @@ async def _save_fail_result(shop_id: str, photo: dict, reason: str = "stage2_fai
         save_photo_meta(shop_id, doc)
     except Exception as e:
         print(f"[photo_filter] FAIL 저장 오류 (건너뜀): {e}")
+
+
+async def _save_error_result(shop_id: str, photo: dict, error_reason: str = "evaluation_error"):
+    """[task #41] 일시적 오류로 '판정 불가'한 사진을 error 상태로 저장.
+
+    콘텐츠 탈락(_save_fail_result)과 다른 상태:
+    - is_usable = None       (False 아님 → /photos/all 에서 '탈락'으로 낙인되지 않음)
+    - filter_status = "error"
+    - error_reason = 분류된 사유
+    - filter_attempts += 1   (사이클 단위 재시도 상한 MAX_FILTER_ATTEMPTS 용)
+
+    기존 통과 사진은 절대 덮어쓰지 않는다.
+    """
+    from services.cosmos_db import get_photo_by_id
+    prev_attempts = 0
+    try:
+        existing = get_photo_by_id(shop_id, photo["image_id"])
+        if existing:
+            if existing.get("is_usable") is True:
+                print(f"[photo_filter] 통과 사진 보호 → ERROR 저장 건너뜀: {photo['image_id']}")
+                return
+            prev_attempts = int(existing.get("filter_attempts") or 0)
+    except Exception:
+        pass
+
+    from services.cosmos_db import save_photo_meta
+    try:
+        now_kst = datetime.now(KST).isoformat()
+        doc = {
+            "id":              photo["image_id"],
+            "shop_id":         shop_id,
+            "blob_url":        photo["blob_url"].split("?")[0],
+            # is_usable/stage 값은 판정하지 못했으므로 확정하지 않는다(None → 기존값 유지).
+            "is_usable":       None,
+            "filter_status":   "error",
+            "error_reason":    error_reason,
+            "filter_attempts": prev_attempts + 1,
+            "analyzed_at":     now_kst,
+        }
+        save_photo_meta(shop_id, doc)
+        print(f"[photo_filter][ERROR] error 상태 저장 -> {photo['image_id']} (attempts={prev_attempts + 1})")
+    except Exception as e:
+        print(f"[photo_filter][ERROR] ERROR 저장 오류 (건너뜀): {e}")
 
 
 # ── 헬퍼 ──────────────────────────────────────────────────────────────────────

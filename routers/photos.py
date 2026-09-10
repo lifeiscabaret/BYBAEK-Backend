@@ -61,6 +61,7 @@ class FilterStatusResponse(BaseModel):
     passed: int
     failed: int
     pending: int
+    errored: int = 0   # [task #41] 일시적 오류로 판정 불가한 사진 수 (조용히 사라지지 않도록 노출)
     status: str
 
 class AlbumCreateRequest(BaseModel):
@@ -188,7 +189,18 @@ async def trigger_photo_filter(req: FilterTriggerRequest, background_tasks: Back
         if req.force_refilter:
             photo_list = all_photos
         else:
-            photo_list = [p for p in all_photos if p.get("stage1_pass") is None]
+            # [task #41] 신규(미판정) 사진 + 일시적 오류로 판정 불가했던 사진(재시도 상한 내)을
+            # 다음 사이클 재시도 대상으로 포함한다. error 상태가 자동 재시도되지 않으면
+            # 이번 수정의 목적(판정 불가 사진의 복구) 자체가 성립하지 않음.
+            from agents.photo_filter import MAX_FILTER_ATTEMPTS
+            photo_list = [
+                p for p in all_photos
+                if p.get("stage1_pass") is None
+                or (
+                    p.get("filter_status") == "error"
+                    and int(p.get("filter_attempts") or 0) < MAX_FILTER_ATTEMPTS
+                )
+            ]
 
         if not photo_list:
             return FilterTriggerResponse(
@@ -218,16 +230,25 @@ async def get_filter_status(shop_id: str, current_shop: dict = Depends(get_curre
     try:
         all_photos = get_all_photos_by_shop(shop_id)
         if not all_photos:
-            return FilterStatusResponse(shop_id=shop_id, total=0, passed=0, failed=0, pending=0, status="no_photos")
+            return FilterStatusResponse(shop_id=shop_id, total=0, passed=0, failed=0, pending=0, errored=0, status="no_photos")
 
         passed  = sum(1 for p in all_photos if p.get("is_usable") is True)
         failed  = sum(1 for p in all_photos if p.get("is_usable") is False)
-        pending = sum(1 for p in all_photos if p.get("stage1_pass") is None and p.get("is_usable") is None)
-        current_status = "done" if pending == 0 else "in_progress"
+        # [task #41] 일시적 오류로 판정 불가한 사진(error). is_usable is True 가 아니라
+        # /photos/all 에서 안 보이므로, 숫자로라도 드러나게 별도 집계한다.
+        errored = sum(1 for p in all_photos if p.get("filter_status") == "error")
+        # pending 은 '아직 한 번도 판정 안 된 신규 사진'만 — error 는 pending 에서 제외한다.
+        pending = sum(
+            1 for p in all_photos
+            if p.get("stage1_pass") is None
+            and p.get("is_usable") is None
+            and p.get("filter_status") != "error"
+        )
+        current_status = "done" if (pending == 0 and errored == 0) else "in_progress"
 
         return FilterStatusResponse(
             shop_id=shop_id, total=len(all_photos),
-            passed=passed, failed=failed, pending=pending, status=current_status
+            passed=passed, failed=failed, pending=pending, errored=errored, status=current_status
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"상태 조회 실패: {str(e)}")
