@@ -94,6 +94,16 @@ class TransientFilterError(Exception):
     콘텐츠 탈락(failed)과 구분된다."""
     pass
 
+
+class PermanentFilterError(Exception):
+    """[task #4 수정 2] 재시도해도 결과가 같은 영구 오류(이미지 크기 초과·인증·형식·파싱 등).
+    '판정 불가'이므로 error 상태로 저장하되(콘텐츠 탈락 아님), 자동 재시도는 막는다
+    (filter_attempts=MAX). code 에 폐쇄형 reason_code 를 담는다."""
+    def __init__(self, code: str, message: str = ""):
+        super().__init__(message or code)
+        self.code = code
+        self.raw_message = message or code
+
 # 호출 단위 재시도: 첫 시도 포함 최대 3회, 지수 백오프 1s→2s→4s + 지터.
 RETRY_MAX_ATTEMPTS   = 3
 RETRY_BASE_DELAY_SEC = 1.0
@@ -120,6 +130,92 @@ _PERMANENT_SUBSTRINGS = (
     "invalid image", "unsupported image",
     "invalid api key", "unauthorized", "permission", "forbidden",
 )
+
+
+# ── 실패/오류 사유 코드 (task #4) ─────────────────────────────────────────────
+# 폐쇄형 어휘: 값은 반드시 아래 상수 중 하나. 자유 문자열 금지(집계 가능성 보존).
+# 원문(fail_reason/error_reason)은 그대로 유지하고, reason_code는 분류·집계용 추가 필드.
+
+# 오류 계열 (판정 불가 — AI가 사진을 보지 못했거나 인프라/입력 문제) → filter_status="error"
+REASON_DOWNLOAD_FAILED    = "download_failed"     # Blob/SAS 다운로드 실패 (일시적)
+REASON_STAGE1_UNREADABLE  = "stage1_unreadable"   # 파일 손상 등으로 이미지 못 읽음
+REASON_VISION_TRANSIENT   = "vision_transient"    # Vision 타임아웃/429/5xx/연결 (재시도 소진)
+REASON_IMAGE_TOO_LARGE    = "image_too_large"     # 이미지 크기/픽셀 초과 (영구, task #30)
+REASON_AUTH_FAILED        = "auth_failed"         # 401/403 인증 실패 (영구)
+REASON_VISION_BAD_REQUEST = "vision_bad_request"  # 기타 4xx 잘못된 요청 (영구)
+REASON_PARSE_ERROR        = "parse_error"         # 모델 응답 JSON 파싱/채점 실패 (영구)
+REASON_UNKNOWN_ERROR      = "unknown_error"       # 위 어디에도 안 잡힌 예외 (fallback)
+
+# 콘텐츠 탈락 계열 (사진을 보고 내린 판단) → filter_status="failed"
+REASON_STAGE1_BLUR       = "stage1_blur"
+REASON_STAGE1_BRIGHTNESS = "stage1_brightness"
+REASON_LOW_SCORE         = "low_score"
+REASON_CATEGORY_IRRELEVANT    = "category_irrelevant"
+REASON_CATEGORY_OTHER_SERVICE = "category_other_service"
+# instant_fail 은 어떤 항목에서 떨어졌는지까지 세분화 (집계 가치 보존)
+REASON_INSTANT_FAIL_GRADIENT   = "instant_fail_gradient"
+REASON_INSTANT_FAIL_LIGHTING   = "instant_fail_lighting"
+REASON_INSTANT_FAIL_BACKGROUND = "instant_fail_background"
+REASON_INSTANT_FAIL_SHARPNESS  = "instant_fail_sharpness"
+
+# instant_fail 대표 항목 결정 순서 (여러 항목이 동시에 ≤1점이면 최저점, 동점이면 이 순서).
+# model_vibe 는 instant_fail 제외 대상이므로 여기 없음.
+_INSTANT_FAIL_ITEM_ORDER = ("gradient", "lighting", "background", "sharpness")
+_INSTANT_FAIL_ITEM_CODE = {
+    "gradient":   REASON_INSTANT_FAIL_GRADIENT,
+    "lighting":   REASON_INSTANT_FAIL_LIGHTING,
+    "background": REASON_INSTANT_FAIL_BACKGROUND,
+    "sharpness":  REASON_INSTANT_FAIL_SHARPNESS,
+}
+
+# 영구(재시도 무의미)이지만 '판정 불가'이므로 error 상태로 보내되 자동 재시도는 막을 것.
+_PERMANENT_ERROR_CODES = frozenset({
+    REASON_IMAGE_TOO_LARGE, REASON_AUTH_FAILED,
+    REASON_VISION_BAD_REQUEST, REASON_PARSE_ERROR, REASON_UNKNOWN_ERROR,
+})
+
+
+def _stage1_reason_code(reason: str) -> str:
+    """Stage1 사유 원문 → 폐쇄형 코드."""
+    r = reason or ""
+    if "초점 흐림" in r:
+        return REASON_STAGE1_BLUR
+    if "밝기 부적절" in r:
+        return REASON_STAGE1_BRIGHTNESS
+    if "이미지 읽기 실패" in r:
+        return REASON_STAGE1_UNREADABLE
+    if "다운로드 실패" in r:
+        return REASON_DOWNLOAD_FAILED
+    return REASON_UNKNOWN_ERROR
+
+
+def _classify_error_code(exc: Exception) -> str:
+    """예외에 오류 계열 reason_code 를 붙인다(이름 부여).
+
+    주의: _is_transient_error 의 '일시적/영구적 판정 결과를 바꾸지 않는다'.
+    분류 근거(substring/예외 타입)를 _is_transient_error 와 공유하여 두 벌의 기준이
+    어긋나지 않게 하고, 여기서는 그 판정에 '이름'만 부여한다.
+    """
+    msg = str(getattr(exc, "message", "") or exc).lower()
+
+    # 영구 계열 세분화 (permanent 를 먼저 — _is_transient_error 와 동일 순서)
+    if any(s in msg for s in ("image size", "maximum allowed size", "2000 pixels", "too large")):
+        return REASON_IMAGE_TOO_LARGE
+    if any(s in msg for s in ("invalid api key", "unauthorized", "permission", "forbidden")):
+        return REASON_AUTH_FAILED
+    if isinstance(exc, APIStatusError) and getattr(exc, "status_code", None) in (401, 403):
+        return REASON_AUTH_FAILED
+
+    # 일시적 계열 (판정은 _is_transient_error 재사용 → 기준 공유)
+    if _is_transient_error(exc):
+        # 다운로드 실패는 _analyze_stage1 에서 download_failed 로 별도 지정하므로,
+        # 여기 도달하는 일시적 오류는 Vision 호출 계열로 본다.
+        return REASON_VISION_TRANSIENT
+
+    # 영구지만 위에서 안 잡힌 4xx → bad_request, 그 외 → unknown
+    if isinstance(exc, APIStatusError):
+        return REASON_VISION_BAD_REQUEST
+    return REASON_UNKNOWN_ERROR
 
 
 def _is_transient_error(exc: Exception) -> bool:
@@ -222,13 +318,24 @@ async def run_photo_filter(shop_id: str, photo_list: list) -> dict:
     stage1_fail_list  = [r for r in stage1_results if not r["stage1_pass"] and not r.get("stage1_error")]
     print(f"[photo_filter] 1차 완료 -> PASS {len(stage1_pass_list)} / FAIL {len(stage1_fail_list)} / ERROR {len(stage1_error_list)}")
 
+    _stage1_unreadable_errored = []
     for photo in stage1_fail_list:
-        await _save_fail_result(shop_id, photo, photo.get("stage1_reason", "stage1_fail"))
+        reason = photo.get("stage1_reason", "stage1_fail")
+        code = _stage1_reason_code(reason)
+        # [task #4 수정 2] "이미지 읽기 실패"는 판정 불가(파일 손상 등) → error 계열로.
+        #   재시도해도 못 읽으므로 자동 재시도는 막는다(exhaust_retries).
+        if code == REASON_STAGE1_UNREADABLE:
+            await _save_error_result(shop_id, photo, reason, reason_code=code, exhaust_retries=True)
+            _stage1_unreadable_errored.append(photo)
+        else:
+            await _save_fail_result(shop_id, photo, reason, reason_code=code)
 
     stage1_errored = 0
     for photo in stage1_error_list:
-        await _save_error_result(shop_id, photo, photo.get("stage1_reason", "stage1_error"))
+        reason = photo.get("stage1_reason", "stage1_error")
+        await _save_error_result(shop_id, photo, reason, reason_code=_stage1_reason_code(reason))
         stage1_errored += 1
+    stage1_errored += len(_stage1_unreadable_errored)
 
     if not stage1_pass_list:
         return {"total": len(photo_list), "stage1_passed": 0, "stage2_passed": 0,
@@ -393,23 +500,42 @@ async def run_stage2_filter(shop_id: str, stage1_pass_list: list) -> dict:
 
     passed, failed, errored = [], [], []
     for photo, result in zip(stage1_pass_list, results):
-        # [task #41] 일시적 오류(재시도 소진)는 '판정 불가'(error)로 분리.
-        # gather 예외가 TransientFilterError 이거나, _is_transient_error 로 판별되면 error.
+        # [task #41] 일시적 오류(재시도 소진) → '판정 불가'(error). 자동 재시도 대상.
         if isinstance(result, TransientFilterError) or (
-            isinstance(result, Exception) and _is_transient_error(result)
+            isinstance(result, Exception)
+            and not isinstance(result, PermanentFilterError)
+            and _is_transient_error(result)
         ):
-            print(f"[photo_filter][ERROR] 2차 판정 불가 ({photo['image_id']}): {result}")
+            print(f"[photo_filter][ERROR] 2차 판정 불가(일시적) ({photo['image_id']}): {result}")
             try:
-                await _save_error_result(shop_id, photo, str(result) or "evaluation_error")
+                await _save_error_result(
+                    shop_id, photo, str(result) or "evaluation_error",
+                    reason_code=REASON_VISION_TRANSIENT,
+                )
             except Exception as e:
                 print(f"[photo_filter][ERROR] ERROR 저장 실패 (건너뜀): {e}")
             errored.append(photo["image_id"])
             continue
 
-        if isinstance(result, Exception):
-            # 비일시적(영구) 예외 → 기존 동작 유지: 콘텐츠 탈락과 동일 처리
-            print(f"[photo_filter] 평가 오류 ({photo['image_id']}): {result}")
-            result = _make_fail_result(photo["image_id"], "evaluation_error")
+        # [task #4 수정 2] 영구 오류(이미지 크기 초과·인증·형식·파싱·기타)도 '판정 불가'(error).
+        # 사진을 보지 못했으므로 failed 아님. 자동 재시도는 막는다(filter_attempts=MAX).
+        if isinstance(result, (PermanentFilterError, Exception)) and not isinstance(result, dict):
+            if isinstance(result, PermanentFilterError):
+                code = result.code
+                raw = result.raw_message
+            else:
+                # 예외지만 위 분류에 안 잡힌 것 → unknown_error
+                code = REASON_UNKNOWN_ERROR
+                raw = str(result) or "evaluation_error"
+            print(f"[photo_filter][ERROR] 2차 판정 불가(영구, {code}) ({photo['image_id']}): {raw}")
+            try:
+                await _save_error_result(
+                    shop_id, photo, raw, reason_code=code, exhaust_retries=True,
+                )
+            except Exception as e:
+                print(f"[photo_filter][ERROR] ERROR 저장 실패 (건너뜀): {e}")
+            errored.append(photo["image_id"])
+            continue
 
         if result.get("stage2_pass"):
             passed.append(result)
@@ -420,7 +546,11 @@ async def run_stage2_filter(shop_id: str, stage1_pass_list: list) -> dict:
         else:
             failed.append(result)
             try:
-                await _save_fail_result(shop_id, photo, result.get("reason", "stage2_fail"))
+                await _save_fail_result(
+                    shop_id, photo,
+                    result.get("reason", "stage2_fail"),
+                    reason_code=result.get("reason_code"),
+                )
             except Exception as e:
                 print(f"[photo_filter] FAIL 저장 실패 (건너뜀): {e}")
 
@@ -482,11 +612,13 @@ async def _evaluate_photo(
         if _is_transient_error(e):
             # 재시도까지 소진된 일시적 오류 → '판정 불가'(error). 콘텐츠 탈락 아님.
             raise TransientFilterError(str(e)) from e
-        # 영구적 오류(인증/형식/이미지 크기 등) → 기존 동작 유지(콘텐츠 탈락과 동일 처리)
-        print(f"[photo_filter] GPT 평가 실패 ({image_id}): {e}")
-        return _make_fail_result(image_id, str(e))
+        # [task #4 수정 2] 영구 오류(이미지 크기 초과·인증·형식 등)도 '판정 불가'다.
+        # 사진을 보지 못했으므로 콘텐츠 탈락(failed)이 아니라 error 상태로 보낸다.
+        code = _classify_error_code(e)
+        print(f"[photo_filter][ERROR] Vision 영구 오류 ({code}) ({image_id}): {e}")
+        raise PermanentFilterError(code, str(e)) from e
 
-    # 2) 응답 파싱 + 채점 (파싱 실패는 영구적 → 기존 fail 처리 유지)
+    # 2) 응답 파싱 + 채점 (파싱 실패는 영구적 → '판정 불가'(error)로 처리)
     try:
         raw = response.choices[0].message.content.strip()
         raw = raw.replace("```json", "").replace("```", "").strip()
@@ -515,12 +647,37 @@ async def _evaluate_photo(
 
         stage2_pass  = (total_score >= STAGE2_PASS_THRESHOLD) and not instant_fail
 
+        # [task #4] 콘텐츠 탈락 사유 코드 (집계용). 우선순위:
+        # category_irrelevant > category_other_service > instant_fail_<item> > low_score.
+        # 카테고리 무관/미용시술이면 점수가 낮아 instant_fail·low_score 도 함께 참이 되지만,
+        # 정보량이 가장 많은(구체적인) 사유를 대표로 남긴다.
+        content_reason_code = None
+        if not stage2_pass:
+            if photo_category == "irrelevant":
+                content_reason_code = REASON_CATEGORY_IRRELEVANT
+            elif photo_category == "other_service":
+                content_reason_code = REASON_CATEGORY_OTHER_SERVICE
+            elif instant_fail:
+                # 즉시 탈락 유발 항목 중 최저점(동점이면 _INSTANT_FAIL_ITEM_ORDER 순)을 대표로.
+                offenders = [
+                    k for k in _INSTANT_FAIL_ITEM_ORDER
+                    if k not in exclude and scores.get(k, 99) <= STAGE2_INSTANT_FAIL
+                ]
+                if offenders:
+                    rep = min(offenders, key=lambda k: (scores.get(k, 99), _INSTANT_FAIL_ITEM_ORDER.index(k)))
+                    content_reason_code = _INSTANT_FAIL_ITEM_CODE[rep]
+                else:
+                    content_reason_code = REASON_LOW_SCORE
+            else:
+                content_reason_code = REASON_LOW_SCORE
+
         fade_cut_score = round(scores.get("gradient", 0) / 5, 2)
         angle          = _classify_angle(gpt_result.get("detected_angle", "unknown"))
 
         result = {
             "image_id":            image_id,
             "stage2_pass":         stage2_pass,
+            "reason_code":         content_reason_code,
             "stage2_score":        round(total_score / 25, 2),
             "stage2_tags":         gpt_result.get("style_tags", []),
             "promo_effectiveness": round(total_score / 25, 2),
@@ -539,11 +696,10 @@ async def _evaluate_photo(
         return result
 
     except Exception as e:
-        # 응답 파싱/채점 단계 오류(모델이 잘못된 JSON 반환 등)는 영구적 성격 →
-        # 기존 동작 유지(콘텐츠 탈락과 동일 처리). 일시적 오류는 위 Vision 호출 단계에서
-        # 이미 TransientFilterError 로 분리되었다.
-        print(f"[photo_filter] GPT 평가 실패 ({image_id}): {e}")
-        return _make_fail_result(image_id, str(e))
+        # 응답 파싱/채점 단계 오류(모델이 잘못된 JSON 반환 등)는 '판정 불가'다.
+        # [task #4 수정 2] 사진을 채점하지 못했으므로 콘텐츠 탈락(failed)이 아니라 error 상태로.
+        print(f"[photo_filter][ERROR] 응답 파싱/채점 실패 (parse_error) ({image_id}): {e}")
+        raise PermanentFilterError(REASON_PARSE_ERROR, str(e)) from e
 
 
 # ── SAS URL 생성 ──────────────────────────────────────────────────────────────
@@ -738,8 +894,12 @@ async def _save_pass_result(shop_id: str, photo: dict, result: dict):
         print(f"[photo_filter] DB 저장 오류: {e}")
 
 
-async def _save_fail_result(shop_id: str, photo: dict, reason: str = "stage2_fail"):
-    """2차 FAIL 결과 CosmosDB 저장 (is_usable=False)."""
+async def _save_fail_result(shop_id: str, photo: dict, reason: str = "stage2_fail", reason_code: str = None):
+    """2차 FAIL 결과 CosmosDB 저장 (is_usable=False).
+
+    reason      : 원문 사유(자유 문자열) — 상세 진단용, 그대로 보존.
+    reason_code : 폐쇄형 분류 코드(집계용) — 없으면 저장 시 기존값 유지.
+    """
     # [FIX] 이미 통과한 사진은 FAIL로 덮어쓰지 않음
     try:
         from services.cosmos_db import get_photo_by_id
@@ -764,19 +924,28 @@ async def _save_fail_result(shop_id: str, photo: dict, reason: str = "stage2_fai
             "analyzed_at":   now_kst,
             "fail_reason":   reason
         }
+        if reason_code:
+            doc["reason_code"] = reason_code
         save_photo_meta(shop_id, doc)
     except Exception as e:
         print(f"[photo_filter] FAIL 저장 오류 (건너뜀): {e}")
 
 
-async def _save_error_result(shop_id: str, photo: dict, error_reason: str = "evaluation_error"):
+async def _save_error_result(shop_id: str, photo: dict, error_reason: str = "evaluation_error",
+                             reason_code: str = None, exhaust_retries: bool = False):
     """[task #41] 일시적 오류로 '판정 불가'한 사진을 error 상태로 저장.
 
     콘텐츠 탈락(_save_fail_result)과 다른 상태:
     - is_usable = None       (False 아님 → /photos/all 에서 '탈락'으로 낙인되지 않음)
     - filter_status = "error"
-    - error_reason = 분류된 사유
+    - error_reason = 분류된 사유 원문 (그대로 보존)
+    - reason_code  = 폐쇄형 분류 코드 (집계용, 없으면 기존값 유지)
     - filter_attempts += 1   (사이클 단위 재시도 상한 MAX_FILTER_ATTEMPTS 용)
+
+    [task #4 수정 2] exhaust_retries=True 면 filter_attempts 를 즉시 MAX_FILTER_ATTEMPTS 로
+    세팅한다. 재시도해도 결과가 같은 영구 오류(image_too_large/auth/parse 등)를 '판정 불가'로
+    남기되(조용히 사라지지 않게 error 상태 유지 + errored 집계 노출), 자동 재시도 루프는
+    돌지 않게 한다(비용 누수 방지). 조건이 바뀌면 filter_attempts=0 으로 되돌려 복구 가능.
 
     기존 통과 사진은 절대 덮어쓰지 않는다.
     """
@@ -792,6 +961,8 @@ async def _save_error_result(shop_id: str, photo: dict, error_reason: str = "eva
     except Exception:
         pass
 
+    attempts = MAX_FILTER_ATTEMPTS if exhaust_retries else prev_attempts + 1
+
     from services.cosmos_db import save_photo_meta
     try:
         now_kst = datetime.now(KST).isoformat()
@@ -803,11 +974,14 @@ async def _save_error_result(shop_id: str, photo: dict, error_reason: str = "eva
             "is_usable":       None,
             "filter_status":   "error",
             "error_reason":    error_reason,
-            "filter_attempts": prev_attempts + 1,
+            "filter_attempts": attempts,
             "analyzed_at":     now_kst,
         }
+        if reason_code:
+            doc["reason_code"] = reason_code
         save_photo_meta(shop_id, doc)
-        print(f"[photo_filter][ERROR] error 상태 저장 -> {photo['image_id']} (attempts={prev_attempts + 1})")
+        print(f"[photo_filter][ERROR] error 상태 저장 -> {photo['image_id']} "
+              f"(code={reason_code}, attempts={attempts}{', retries exhausted' if exhaust_retries else ''})")
     except Exception as e:
         print(f"[photo_filter][ERROR] ERROR 저장 오류 (건너뜀): {e}")
 
