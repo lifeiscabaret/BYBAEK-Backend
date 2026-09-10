@@ -7,21 +7,16 @@
 - POST /api/photos/albums
 - POST /api/photos/filter
 - GET  /api/photos/status/{shop_id}
-- GET|HEAD /api/photos/proxy/{photo_id}/image.jpg  Instagram 업로드용 이미지 프록시
 - POST /api/photos/filter/test/{shop_id}
 - DELETE /api/photos/albums/{shop_id}/{album_id}
 - DELETE /api/photos/{shop_id}/{photo_id}
 
 [수정 이력]
 - FILTER_CHUNK_SIZE: 10장씩 청크 분할
-- proxy 엔드포인트: Instagram SAS URL 차단 문제 해결
-- proxy HEAD 메서드 추가: Instagram URL 유효성 검사 통과
 """
 
 import os
-import httpx
-from fastapi import APIRouter, HTTPException, BackgroundTasks, Request, Depends
-from fastapi.responses import StreamingResponse, Response
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
 from pydantic import BaseModel
 import uuid
 from typing import List
@@ -39,10 +34,6 @@ from utils.logging import logger
 router = APIRouter()
 
 FILTER_CHUNK_SIZE = 10
-BACKEND_URL = os.getenv(
-    "BACKEND_URL",
-    "https://bybaek-b-bzhhgzh8d2gthpb3.koreacentral-01.azurewebsites.net"
-)
 
 
 class FilterTriggerRequest(BaseModel):
@@ -100,10 +91,6 @@ def _to_sas_url(blob_url: str, hours: int = 2) -> str:
     except Exception as e:
         logger.warning(f"[photos] SAS 생성 실패 → bare URL 반환 ({blob_url}): {e}")
         return blob_url
-
-
-def get_proxy_url(photo_id: str, shop_id: str) -> str:
-    return f"{BACKEND_URL}/api/photos/proxy/{shop_id}/{photo_id}/image.jpg"
 
 
 @router.get("/all/{shop_id}")
@@ -252,46 +239,6 @@ async def get_filter_status(shop_id: str, current_shop: dict = Depends(get_curre
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"상태 조회 실패: {str(e)}")
-
-
-@router.api_route("/proxy/{shop_id}/{photo_id}/image.jpg", methods=["GET", "HEAD"])
-async def proxy_photo(shop_id: str, photo_id: str, request: Request):
-    """
-    Instagram 업로드용 이미지 프록시.
-    GET: 이미지 스트리밍 반환
-    HEAD: Instagram URL 유효성 검사 통과용 (이미지 다운로드 없이 헤더만 반환)
-    """
-    from services.cosmos_db import get_photo_by_id
-    photo = get_photo_by_id(shop_id, photo_id)
-    if not photo or not photo.get("blob_url"):
-        raise HTTPException(status_code=404, detail="사진을 찾을 수 없습니다.")
-
-    # Instagram이 HEAD 요청으로 URL 유효성 검사 → 헤더만 반환
-    if request.method == "HEAD":
-        return Response(
-            headers={
-                "content-type": "image/jpeg",
-                "content-length": "1000000",
-                "accept-ranges": "bytes"
-            }
-        )
-
-    sas_url = _to_sas_url(photo["blob_url"], hours=1)
-    async with httpx.AsyncClient() as client:
-        resp = await client.get(sas_url)
-        if resp.status_code != 200:
-            raise HTTPException(status_code=502, detail="이미지 다운로드 실패")
-
-    content_type = resp.headers.get("content-type", "image/jpeg")
-    return Response(
-        content=resp.content,
-        media_type=content_type,
-        headers={
-            "content-length": str(len(resp.content)),
-            "accept-ranges": "bytes",
-            "cache-control": "public, max-age=3600"
-        }
-    )
 
 
 @router.delete("/albums/{shop_id}/{album_id}")
