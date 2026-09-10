@@ -5,12 +5,10 @@ import uuid
 from typing import Optional
 
 import httpx
-from fastapi import APIRouter, HTTPException, status, Depends
+from fastapi import APIRouter, HTTPException, status
 from PIL import Image
-from pydantic import BaseModel, HttpUrl
 from azure.storage.blob import BlobServiceClient, ContentSettings
 from utils.logging import logger
-from auth.token_verify import get_current_shop
 
 router = APIRouter()
 
@@ -22,16 +20,6 @@ publish_check_interval_sec: float = 2.0
 # Instagram Graph API 허용 비율 범위
 INSTA_MIN_RATIO = 0.8        # 4:5 세로 (최대 세로)
 INSTA_MAX_RATIO = 1.9099     # 1.91:1 가로 (최대 가로)
-
-
-class InstagramPhotoPublishRequest(BaseModel):
-    user_id: str
-    access_token: str
-    image_urls: list[HttpUrl]
-    caption: str
-
-class InstagramPhotoPublishResponse(BaseModel):
-    media_id: str
 
 
 # ── 비율 정규화 ───────────────────────────────────────────────────────────────
@@ -282,21 +270,3 @@ async def publish_photos(ig_user_id: str, access_token: str,
             _cleanup_temp_blobs(temp_urls)
 
     return media_id
-
-
-@router.post("/upload", response_model=InstagramPhotoPublishResponse,
-             status_code=status.HTTP_201_CREATED)
-async def upload(req: InstagramPhotoPublishRequest, current_shop: dict = Depends(get_current_shop)):
-    # 이 엔드포인트 바디에는 shop_id가 없어 소유권 대조는 불가하나,
-    # 로그인(유효 토큰)은 필수로 요구해 익명 호출을 차단한다.
-    # SAS URL 변환 제거 - _normalize_aspect_ratio 내부에서 처리
-    media_id = await publish_photos(
-        ig_user_id=req.user_id,
-        access_token=req.access_token,
-        image_urls=[str(url) for url in req.image_urls],  # 원본 URL 그대로
-        caption=req.caption,
-    )
-    if not media_id:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"message": "media_id not returned from Instagram publish"})
-    return {"media_id": media_id}
