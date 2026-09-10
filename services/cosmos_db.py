@@ -454,6 +454,9 @@ def save_photo_meta(shop_id: str, doc: dict) -> bool:
             "stage2_pass": doc.get("stage2_pass") if doc.get("stage2_pass") is not None else existing_item.get("stage2_pass"),
             "fail_reason": doc.get("fail_reason", existing_item.get("fail_reason")),
             "filter_status": doc.get("filter_status", existing_item.get("filter_status")),
+            # [task #41] 일시적 오류(error) 상태 추적 필드. 화이트리스트에 없으면 저장 시 버려짐.
+            "error_reason": doc.get("error_reason", existing_item.get("error_reason")),
+            "filter_attempts": doc.get("filter_attempts", existing_item.get("filter_attempts")),
             "used_at": doc.get("used_at", existing_item.get("used_at")),
             # [FIX] Stage2 분류/점수 결과를 실제 저장 (다운스트림 photo_select 등에서 참조).
             #       기존엔 화이트리스트에 없어 doc에 담겨도 버려졌음 → photo_category 등이 비어있던 근본 원인.
