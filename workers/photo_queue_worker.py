@@ -61,9 +61,17 @@ POLL_INTERVAL_SECONDS = 30
 MAX_MESSAGES_PER_POLL = 10
 VISIBILITY_TIMEOUT = 300
 
-# [NEW] 리사이즈 설정 — Vision API 이미지 크기 초과 방지
-MAX_LONG_EDGE = 2048
-RESIZE_JPEG_QUALITY = 85
+# [NEW] 리사이즈 설정 — Vision API(≤20MB) + Instagram(≤8MB, 폭≤1440px) 크기 초과 방지
+# 장변 1440px = IG 최대 폭과 일치 → IG의 재축소 단계가 사라진다.
+# Vision은 내부적으로 512px 타일로 보고 Stage1도 1024px로 정규화하므로 1440이면 충분.
+MAX_LONG_EDGE = 1440
+RESIZE_JPEG_QUALITY = 85          # 재압축 시작 품질
+# [task #30] 바이트 상한 — IG 8MB 한도 대비 여유를 둔 목표치.
+MAX_RESIZE_BYTES = 4 * 1024 * 1024  # 4MB
+MIN_JPEG_QUALITY = 70             # 품질 하한 (이 아래로는 안 내림 — 뭉개짐 방지)
+RESIZE_QUALITY_STEP = 5           # 품질 하향 단계
+RESIZE_EDGE_STEP = 0.85           # 품질 하한에서도 초과 시 장변을 이 비율로 한 단계 축소
+MIN_LONG_EDGE = 640               # 장변 축소 하한 (안전장치 — 이 이하로는 안 줄임)
 
 
 # SAS URL 생성 (프라이빗 Blob 접근용)
@@ -126,8 +134,19 @@ def _convert_heic_to_jpg(raw_bytes: bytes) -> bytes:
 # [NEW] 리사이즈 (Vision API 이미지 크기 초과 방지)
 def _resize_for_pipeline(image_bytes: bytes) -> bytes:
     """
-    jpg/jpeg/png 바이트 → 장변 MAX_LONG_EDGE(2048px) 이하로 다운스케일 + 재압축.
-    이미 그 이하 크기면 원본을 그대로 반환(불필요한 재인코딩 방지).
+    jpg/jpeg/png 바이트 → 장변 ≤ MAX_LONG_EDGE(1440px) AND 용량 ≤ MAX_RESIZE_BYTES(4MB)
+    가 되도록 다운스케일 + 재압축.
+
+    [task #30] 두 한도를 함께 만족시킨다:
+    - Vision API(≤20MB) + Instagram(≤8MB 파일, ≤1440px 폭) 모두 통과.
+    - 이미 장변 ≤1440 이고 용량 ≤4MB 면 원본 그대로 반환(불필요한 재인코딩·화질 손실 방지).
+
+    용량 상한 루프(안전장치 포함):
+    1) 장변을 1440px 이하로 축소.
+    2) quality를 RESIZE_JPEG_QUALITY(85)부터 인코딩. 4MB 초과면 RESIZE_QUALITY_STEP씩
+       낮추되 MIN_JPEG_QUALITY(70) 아래로는 내리지 않는다(뭉개짐 방지).
+    3) 품질 하한에서도 4MB 초과면, 화질을 더 뭉개는 대신 장변을 RESIZE_EDGE_STEP(0.85)배로
+       한 단계 더 줄여 다시 인코딩. MIN_LONG_EDGE(640px)까지만 축소.
     HEIC 변환 직후, 또는 원본이 이미 jpg/png인 경우 모두 이 함수를 거침.
     """
     from PIL import Image, ImageOps
@@ -140,20 +159,50 @@ def _resize_for_pipeline(image_bytes: bytes) -> bytes:
     w, h = img.size
     long_edge = max(w, h)
 
-    if long_edge <= MAX_LONG_EDGE:
-        # 이미 충분히 작으면 원본 그대로 반환 (화질 손실/처리비용 최소화)
+    # 이미 장변·용량 모두 한도 이하면 재인코딩 없이 원본 유지 (화질 손실/비용 최소화)
+    if long_edge <= MAX_LONG_EDGE and len(image_bytes) <= MAX_RESIZE_BYTES:
         return image_bytes
-
-    scale = MAX_LONG_EDGE / long_edge
-    new_size = (round(w * scale), round(h * scale))
-    img = img.resize(new_size, Image.LANCZOS)
 
     if img.mode in ("RGBA", "P"):
         img = img.convert("RGB")
 
-    output = io.BytesIO()
-    img.save(output, format="JPEG", quality=RESIZE_JPEG_QUALITY, optimize=True)
-    return output.getvalue()
+    # 1) 장변을 1440px 이하로 축소 (이미 작으면 그대로)
+    target_long = min(long_edge, MAX_LONG_EDGE)
+
+    def _encode(image, quality: int) -> bytes:
+        buf = io.BytesIO()
+        image.save(buf, format="JPEG", quality=quality, optimize=True)
+        return buf.getvalue()
+
+    def _scaled(image, long_target: int):
+        cw, ch = image.size
+        cur_long = max(cw, ch)
+        if cur_long <= long_target:
+            return image
+        scale = long_target / cur_long
+        return image.resize((max(1, round(cw * scale)), max(1, round(ch * scale))), Image.LANCZOS)
+
+    work = _scaled(img, target_long)
+    out = _encode(work, RESIZE_JPEG_QUALITY)
+
+    # 2) 품질 하향으로 4MB 목표 시도 (하한 70까지)
+    quality = RESIZE_JPEG_QUALITY
+    while len(out) > MAX_RESIZE_BYTES and quality - RESIZE_QUALITY_STEP >= MIN_JPEG_QUALITY:
+        quality -= RESIZE_QUALITY_STEP
+        out = _encode(work, quality)
+
+    # 3) 품질 하한에서도 초과면 장변을 단계적으로 축소 (화질 뭉갬보다 해상도 하향 우선)
+    while len(out) > MAX_RESIZE_BYTES and target_long > MIN_LONG_EDGE:
+        target_long = max(MIN_LONG_EDGE, int(target_long * RESIZE_EDGE_STEP))
+        work = _scaled(img, target_long)
+        # 장변을 줄인 뒤에는 다시 시작 품질부터 (해상도가 줄면 같은 품질로도 용량이 크게 감소)
+        quality = RESIZE_JPEG_QUALITY
+        out = _encode(work, quality)
+        while len(out) > MAX_RESIZE_BYTES and quality - RESIZE_QUALITY_STEP >= MIN_JPEG_QUALITY:
+            quality -= RESIZE_QUALITY_STEP
+            out = _encode(work, quality)
+
+    return out
 
 
 # ──────────────────────────────────────────
