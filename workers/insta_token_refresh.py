@@ -106,7 +106,10 @@ async def _refresh_one(shop: dict, client: httpx.AsyncClient, now: datetime) -> 
         return "error"
 
     if resp.status_code != 200 or "access_token" not in body:
-        print(f"[insta_token] {shop_id} 갱신 거부 (status={resp.status_code}): {body}")
+        # 응답 body 전체를 찍으면 토큰류 필드가 로그에 남을 수 있어, 에러 식별 정보만 남긴다.
+        err = body.get("error") if isinstance(body, dict) else None
+        err_code = (err or {}).get("code") if isinstance(err, dict) else err
+        print(f"[insta_token] {shop_id} 갱신 거부 (status={resp.status_code}, error={err_code})")
         return "error"
 
     new_token = body["access_token"]
