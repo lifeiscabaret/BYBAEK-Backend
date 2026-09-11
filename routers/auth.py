@@ -142,6 +142,20 @@ def _popup_message_html(payload: dict, target_origin: str, status_msg: str) -> s
 </body></html>"""
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# [미사용·보존] 자체 호스팅 OAuth 엔드포인트: GET /api/auth/login, GET /api/auth/callback
+#
+# 1) 현재 사용되지 않음: 프론트 로그인 플로우는 이 두 경로를 호출하지 않는다.
+# 2) 미사용 사유: 자체 OAuth 로그인 페이지가 Chrome Safe Browsing 에 "Deceptive
+#    pages"(가짜/기만 페이지)로 차단되어, 프론트가 Azure Easy Auth 경로
+#    (/.auth/login/aad → /ms/callback)로 되돌아갔다.
+# 3) 삭제하지 않는 이유: 현재 로그인은 레거시 Easy Auth 헤더에 의존한다(감사 #39 ③).
+#    Easy Auth 에서 이탈해야 할 상황이 오면 이 자체 OAuth 코드가 복귀 경로가 되므로 보존.
+# 4) 관련 프론트 코드: bybaek-frontend/src/app/login/page.tsx:128-131
+#    (Easy Auth 경로로 되돌린 지점)
+#
+# → 안 쓰인다는 이유로 삭제하지 말 것. 정체 파악에 상당한 조사 시간이 들었던 코드다.
+# ─────────────────────────────────────────────────────────────────────────────
 @router.get("/login")
 async def ms_login():
     """자체 OAuth 로그인 개시. 팝업이 이 경로를 열면 Microsoft 인증 페이지로 리다이렉트.
@@ -178,6 +192,8 @@ async def ms_login():
     return resp
 
 
+# [미사용·보존] /login 과 한 쌍인 콜백. 위 /login 상단 주석 블록의 4가지 사유 참조.
+# (Chrome Safe Browsing 차단으로 미사용 / Easy Auth 이탈 시 복귀 경로 / 삭제 금지)
 @router.get("/callback")
 async def ms_login_callback(request: Request):
     """Microsoft 인증 후 착지하는 same-origin(api2...) 콜백.
