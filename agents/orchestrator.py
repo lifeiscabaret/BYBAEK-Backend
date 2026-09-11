@@ -8,6 +8,7 @@ from agents.web_search import web_search_agent
 from agents.photo_select import photo_select_agent
 from agents.post_writer import post_writer_agent
 from agents.rag_tool import search_rag_context
+from utils.email_utils import mask_email
 
 # [환경변수 검증]
 def _get_deployment_name(tier: str) -> str:
@@ -603,9 +604,9 @@ async def _send_push_notification(shop_id: str, post_id: str, post_draft: dict):
         success = await send_draft_notification(owner_email, post_id, caption, shop_id=shop_id)
 
         if success:
-            print(f"[orchestrator] 알림 메일 발송 완료 → {owner_email}")
+            print(f"[orchestrator] 알림 메일 발송 완료 → {mask_email(owner_email)}")
         else:
-            print(f"[orchestrator] 알림 메일 발송 실패 → {owner_email}")
+            print(f"[orchestrator] 알림 메일 발송 실패 → {mask_email(owner_email)}")
 
     except Exception as e:
         print(f"[orchestrator] 푸시 알림 에러 (무시): {e}")
