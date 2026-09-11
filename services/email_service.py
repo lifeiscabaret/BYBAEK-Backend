@@ -14,7 +14,7 @@ from googleapiclient.discovery import build
 # 주소 판별은 google 의존성이 없는 utils 쪽에 있다 (분리 이유는 해당 모듈 참고).
 # 여기서 re-export 해서 기존 `from services.email_service import looks_like_email`
 # 호출부가 깨지지 않게 한다.
-from utils.email_utils import looks_like_email  # noqa: F401
+from utils.email_utils import looks_like_email, mask_email  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +70,7 @@ def _send_email_sync(to_email: str, subject: str, body: str) -> bool:
         raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
         service.users().messages().send(userId="me", body={'raw': raw}).execute()
 
-        logger.info(f"[email_service] 메일 발송 성공 → {to_email}")
+        logger.info(f"[email_service] 메일 발송 성공 → {mask_email(to_email)}")
         return True
 
     except Exception as e:

@@ -21,3 +21,20 @@ _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 def looks_like_email(value) -> bool:
     return bool(value and _EMAIL_RE.match(str(value).strip()))
+
+
+def mask_email(value) -> str:
+    """로그용 이메일 마스킹. PII 를 로그에 평문으로 남기지 않기 위함.
+
+    예) "hyunji.lee@gmail.com" -> "h********e@gmail.com"
+        "ab@x.com"            -> "**@x.com"   (로컬파트 2자 이하는 전체 가림)
+    이메일 형식이 아니면 "<no-email>" 로 대체(원문 노출 금지).
+    """
+    if not looks_like_email(value):
+        return "<no-email>"
+    local, _, domain = str(value).strip().partition("@")
+    if len(local) <= 2:
+        masked_local = "*" * len(local)
+    else:
+        masked_local = f"{local[0]}{'*' * (len(local) - 2)}{local[-1]}"
+    return f"{masked_local}@{domain}"
